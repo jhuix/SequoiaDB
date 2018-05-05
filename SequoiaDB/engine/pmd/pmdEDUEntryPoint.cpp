@@ -36,7 +36,6 @@
 
 *******************************************************************************/
 
-#include "pmdEDUEntryPoint.hpp"
 #include "pmd.hpp"
 
 #if defined (_LINUX)
@@ -45,117 +44,6 @@
 
 namespace engine
 {
-
-   pmdEntryPoint getEntryFuncByType ( EDU_TYPES type )
-   {
-      pmdEntryPoint rt = NULL ;
-      static const _eduEntryInfo entry[] = {
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_SHARDAGENT, FALSE,
-                                pmdAsyncSessionAgentEntryPoint,
-                                "ShardAgent" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_AGENT, FALSE,
-                                pmdLocalAgentEntryPoint,
-                                "Agent" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_REPLAGENT, FALSE,
-                                pmdAsyncSessionAgentEntryPoint,
-                                "ReplAgent" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_RESTAGENT, FALSE,
-                                pmdRestAgentEntryPoint,
-                                "RestAgent" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_FAPAGENT, FALSE,
-                                pmdFapAgentEntryPoint,
-                                "FAPAgent" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_TCPLISTENER, TRUE,
-                                pmdTcpListenerEntryPoint,
-                                "TCPListener" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_RESTLISTENER, TRUE,
-                                pmdRestSvcEntryPoint,
-                                "RestListener" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_CLUSTER, TRUE,
-                                pmdCBMgrEntryPoint,
-                                "Cluster" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_CLUSTERSHARD, TRUE,
-                                pmdCBMgrEntryPoint,
-                                "ClusterShard" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_CLSLOGNTY, TRUE,
-                                pmdClsNtyEntryPoint,
-                                "ClusterLogNotify" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_REPR, TRUE,
-                                pmdAsyncNetEntryPoint,
-                                "ReplReader" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_LOGGW, TRUE,
-                                pmdLoggWEntryPoint,
-                                "LogWriter" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_SHARDR, TRUE,
-                                pmdAsyncNetEntryPoint,
-                                "ShardReader" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_PIPESLISTENER, TRUE,
-                                pmdPipeListenerEntryPoint,
-                                "PipeListener" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_BACKGROUND_JOB, FALSE,
-                                pmdBackgroundJobEntryPoint,
-                                "Task" ),
-
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_CATMGR, TRUE,
-                                pmdCBMgrEntryPoint,
-                                "CatalogMgr" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_CATNETWORK, TRUE,
-                                pmdAsyncNetEntryPoint,
-                                "CatalogNetwork" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_COORDNETWORK, TRUE,
-                                pmdCoordNetWorkEntryPoint,
-                                "CoordNetwork" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_DPSROLLBACK, TRUE,
-                                pmdDpsTransRollbackEntryPoint,
-                                "DpsRollback"),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_LOADWORKER, FALSE,
-                                pmdLoadWorkerEntryPoint,
-                                "MigLoadWork" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_PREFETCHER, FALSE,
-                                pmdPreLoaderEntryPoint,
-                                "PreLoader" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_OMMGR, TRUE,
-                                pmdCBMgrEntryPoint,
-                                "OMManager" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_OMNET, TRUE,
-                                pmdAsyncNetEntryPoint,
-                                "OMNet" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_SYNCCLOCK, TRUE,
-                                pmdSyncClockEntryPoint,
-                                "SyncClockWorker" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_FAPLISTENER, TRUE,
-                                pmdFapListenerEntryPoint,
-                                "FAPListener" ),
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_DBMONITOR, TRUE,
-                                pmdDBMonitorEntryPoint,
-                                "DBMonitor" ),
-#if defined (_LINUX)
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_SIGNALTEST, TRUE,
-                                pmdSignalTestEntryPoint,
-                                "SignalTest" ),
-#endif // _LINUX
-
-         // For the end
-         ON_EDUTYPE_TO_ENTRY1 ( EDU_TYPE_MAXIMUM, FALSE,
-                                NULL,
-                                "Unknow" )
-      };
-
-      static const UINT32 number = sizeof ( entry ) / sizeof ( _eduEntryInfo ) ;
-
-      UINT32 index = 0 ;
-      for ( ; index < number ; index ++ )
-      {
-         if ( entry[index].type == type )
-         {
-            rt = entry[index].entryFunc ;
-            goto done ;
-         }
-      }
-
-   done :
-      return rt ;
-   }
 
    /*
       ENTRY POINTER FUNCTIONS
@@ -176,6 +64,10 @@ namespace engine
       return SDB_OK ;
    }
 
+   PMD_DEFINE_ENTRYPOINT( EDU_TYPE_SYNCCLOCK, TRUE,
+                          pmdSyncClockEntryPoint,
+                          "SyncClockWorker" ) ;
+
 #if defined (_LINUX)
    INT32 pmdSignalTestEntryPoint( pmdEDUCB *cb, void *arg )
    {
@@ -187,8 +79,9 @@ namespace engine
       {
          ossSleep( OSS_ONE_SEC ) ;
          ++timeCounter ;
+         interval = pmdGetOptionCB()->getSignalInterval() ;
 
-         if ( interval > 0 && timeCounter >= (UINT32)interval )
+         if ( interval > 0 && timeCounter > (UINT32)interval )
          {
             ossPThreadKill( mainCB->getThreadID(), OSS_TEST_SIGNAL ) ;
             timeCounter = 0 ;
@@ -197,7 +90,12 @@ namespace engine
 
       return SDB_OK ;
    }
-#endif
+
+   PMD_DEFINE_ENTRYPOINT( EDU_TYPE_SIGNALTEST, TRUE,
+                          pmdSignalTestEntryPoint,
+                          "SignalTest" ) ;
+
+#endif //_LINUX
 
 }
 

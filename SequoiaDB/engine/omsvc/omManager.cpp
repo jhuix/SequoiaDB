@@ -37,13 +37,13 @@
 #include "pmd.hpp"
 #include "../bson/bsonobj.h"
 #include "../util/fromjson.hpp"
-#include "catCommon.hpp"
 #include "ossProc.hpp"
 #include "rtn.hpp"
 #include "rtnBackgroundJob.hpp"
 #include "pmdController.hpp"
 #include "omManagerJob.hpp"
-#include "../omsvc/omGetFileCommand.hpp"
+#include "omCommand.hpp"
+#include "omCommandTool.hpp"
 #include "ossVer.h"
 #include "omStrategyMgr.hpp"
 
@@ -52,6 +52,7 @@ using namespace bson ;
 namespace engine
 {
 
+   #define OM_UPDATE_PLUGIN_PASSWD_TIMEOUT         (86400)
    #define OM_WAIT_CB_ATTACH_TIMEOUT               ( 300 * OSS_ONE_SEC )
 
    /*
@@ -75,12 +76,14 @@ namespace engine
       _hwRouteID.columns.nodeID    = 0 ;
       _hwRouteID.columns.serviceID = MSG_ROUTE_LOCAL_SERVICE ;
 
+      _isInitTable         = FALSE ;
+
       _pKrcb               = NULL ;
       _pDmsCB              = NULL ;
       _hostVersion         = SDB_OSS_NEW omHostVersion() ;
       _taskManager         = SDB_OSS_NEW omTaskManager() ;
-
-      _ssqlCheckTimer      = NET_INVALID_TIMER_ID ;
+      _updatePluinUsrTimer = NET_INVALID_TIMER_ID ;
+      _updateTimestamp     = 0 ;
    }
 
    _omManager::~_omManager()
@@ -102,38 +105,23 @@ namespace engine
    {
       INT32 rc           = SDB_OK ;
 
-      // create collection space and collection
+      BSONObj::setJSCompatibility( TRUE ) ;
+
       _pKrcb  = pmdGetKRCB() ;
       _pDmsCB = _pKrcb->getDMSCB() ;
       _pRtnCB = _pKrcb->getRTNCB() ;
 
+      _pKrcb->regEventHandler( this ) ;
+
       _pmdOptionsMgr *pOptMgr = _pKrcb->getOptionCB() ;
 
-      // get options
       _wwwRootPath = pmdGetOptionCB()->getWWWPath() ;
 
-      // set remote session manager to pmdController
       sdbGetPMDController()->setRSManager( &_rsManager ) ;
 
       rc = _rsManager.init( getRouteAgent() ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to init remote session manager, rc: %d",
                    rc ) ;
-
-      rc = _initOmTables();
-      PD_RC_CHECK ( rc, PDERROR, "Failed to initial the om tables rc = %d", 
-                    rc ) ;
-
-      rc = omStrategyMgrInst.init( pmdGetThreadEDUCB() ) ;
-      PD_RC_CHECK ( rc, PDERROR, "Failed to init strategy manager, rc:%d",
-                    rc) ;
-
-      rc = _createJobs() ;
-      PD_RC_CHECK ( rc, PDERROR, "Failed to create jobs:rc=%d", 
-                    rc ) ;
-
-      rc = refreshVersions() ;
-      PD_RC_CHECK ( rc, PDERROR, "Failed to update cluster version:rc=%d", 
-                    rc ) ;
 
       _readAgentPort() ;
       _createVersionFile() ;
@@ -204,7 +192,8 @@ namespace engine
       _SDB_RTNCB *pRTNCB = pKrcb->getRTNCB() ;
       _pmdEDUCB *pEDUCB  = pmdGetThreadEDUCB() ;
 
-      selector = BSON( OM_CLUSTER_FIELD_NAME << "" ) ;
+      selector = BSON( OM_CLUSTER_FIELD_NAME << "" <<
+                       OM_CLUSTER_FIELD_GRANTCONF << "" ) ;
       rc = rtnQuery( OM_CS_DEPLOY_CL_CLUSTER, selector, matcher, order, hint, 0, 
                      pEDUCB, 0, -1, pDMSCB, pRTNCB, contextID );
       if ( rc )
@@ -217,6 +206,7 @@ namespace engine
       while ( TRUE )
       {
          rtnContextBuf buffObj ;
+
          rc = rtnGetMore( contextID, 1, buffObj, pEDUCB, pRTNCB ) ;
          if ( rc )
          {
@@ -232,9 +222,31 @@ namespace engine
             goto error ;
          }
 
-         BSONObj record( buffObj.data() ) ;
-         string clusterName = record.getStringField( OM_CLUSTER_FIELD_NAME ) ;
-         _hostVersion->incVersion( clusterName ) ;
+         {
+            BOOLEAN privilege = TRUE ;
+            BSONObj record( buffObj.data() ) ;
+            BSONObj grantConf = record.getObjectField(
+                                                OM_CLUSTER_FIELD_GRANTCONF ) ;
+            string clusterName = record.getStringField(
+                                                OM_CLUSTER_FIELD_NAME ) ;
+            BSONObjIterator iter( grantConf ) ;
+            while ( iter.more() )
+            {
+               BSONElement ele = iter.next() ;
+               BSONObj grantInfo = ele.embeddedObject() ;
+               string tmpName = grantInfo.getStringField(
+                                                OM_CLUSTER_FIELD_GRANTNAME ) ;
+
+               if ( OM_CLUSTER_FIELD_HOSTFILE == tmpName )
+               {
+                  privilege = grantInfo.getBoolField(
+                                                OM_CLUSTER_FIELD_PRIVILEGE ) ;
+               }
+            }
+
+            _hostVersion->incVersion( clusterName ) ;
+            _hostVersion->setPrivilege( clusterName, privilege ) ;
+         }
       }
    done:
       return rc ;
@@ -256,137 +268,818 @@ namespace engine
       _hostVersion->removeVersion( cluster ) ;
    }
 
+   void _omManager::updateClusterHostFilePrivilege( string clusterName,
+                                                    BOOLEAN privilege )
+   {
+      _hostVersion->setPrivilege( clusterName, privilege ) ;
+      _hostVersion->incVersion( clusterName ) ;
+   }
+
    omTaskManager *_omManager::getTaskManager()
    {
       return _taskManager ;
    }
 
+   void _omManager::onRegistered( const MsgRouteID &nodeID )
+   {
+   }
+
+   void _omManager::onPrimaryChange( BOOLEAN primary,
+                                     SDB_EVENT_OCCUR_TYPE occurType )
+   {
+      INT32 rc = SDB_OK ;
+
+      PD_LOG( PDDEBUG, "#########onPrimaryChange, primary=%d,occurType=%d",
+              primary, occurType ) ;
+      if ( !_isInitTable )
+      {
+         if ( SDB_EVT_OCCUR_AFTER == occurType )
+         {
+            PD_LOG( PDDEBUG, "#########onPrimaryChange---occurType=%d", 
+                    occurType ) ;
+            rc = _initOmTables();
+            PD_RC_CHECK ( rc, PDERROR, "Failed to initial the om tables rc = %d", 
+                          rc ) ;
+
+            rc = _updateTable() ;
+            PD_RC_CHECK ( rc, PDERROR, "Failed to update om tables rc = %d", 
+                          rc ) ;
+
+            rc = omStrategyMgrInst.init( pmdGetThreadEDUCB() ) ;
+            PD_RC_CHECK ( rc, PDERROR, "Failed to init strategy manager, rc:%d",
+                          rc) ;
+ 
+            rc = _createJobs() ;
+            PD_RC_CHECK ( rc, PDERROR, "Failed to create jobs:rc=%d", 
+                          rc ) ;
+
+            rc = refreshVersions() ;
+            PD_RC_CHECK ( rc, PDERROR, "Failed to update cluster version:rc=%d", 
+                          rc ) ;
+
+            _isInitTable = TRUE ;
+         }
+      }
+
+   done:
+      return ;
+   error:
+      PMD_RESTART_DB( rc ) ;
+      goto done ;
+   }
+
+   #define OM_DEFAULT_PLUGIN_PASSWD_SIZE 17
+   #define OM_DEFAULT_PLUGIN_PASSWD_LEN (OM_DEFAULT_PLUGIN_PASSWD_SIZE-1)
    INT32 _omManager::_initOmTables() 
    {
-      _pmdEDUCB *cb       = NULL ;
-      INT32 rc            = SDB_OK ;
-      BSONObjBuilder bsonBuilder ;
-      SDB_AUTHCB *pAuthCB = NULL ;
-      BOOLEAN need = TRUE ;
+      INT32 rc = SDB_OK ;
+      _pmdEDUCB *cb = pmdGetThreadEDUCB() ;
+      SDB_AUTHCB *pAuthCB = pmdGetKRCB()->getAuthCB() ;
+      omDatabaseTool dbTool( cb ) ;
+      omAuthTool authTool( cb, pAuthCB ) ;
 
-      cb = pmdGetThreadEDUCB() ;
-
-      // SYSDEPLOY.SYSCLUSTER
-      rc = _createCollection ( OM_CS_DEPLOY_CL_CLUSTER, cb ) ;
-      if ( rc )
-      {
-         goto error ;
-      }
-      rc = _createCollectionIndex ( OM_CS_DEPLOY_CL_CLUSTER,
-                                    OM_CS_DEPLOY_CL_CLUSTERIDX1, cb ) ;
+      rc = dbTool.createCollection( OM_CS_DEPLOY_CL_CLUSTER ) ;
       if ( rc )
       {
          goto error ;
       }
 
-      // SYSDEPLOY.SYSHOST
-      rc = _createCollection ( OM_CS_DEPLOY_CL_HOST, cb ) ;
-      if ( rc )
-      {
-         goto error ;
-      }
-      rc = _createCollectionIndex ( OM_CS_DEPLOY_CL_HOST,
-                                    OM_CS_DEPLOY_CL_HOSTIDX1, cb ) ;
-      if ( rc )
-      {
-         goto error ;
-      }
-      rc = _createCollectionIndex ( OM_CS_DEPLOY_CL_HOST,
-                                    OM_CS_DEPLOY_CL_HOSTIDX2, cb ) ;
+      rc = dbTool.createCollectionIndex( OM_CS_DEPLOY_CL_CLUSTER,
+                                         OM_CS_DEPLOY_CL_CLUSTERIDX1 ) ;
       if ( rc )
       {
          goto error ;
       }
 
-      // SYSDEPLOY.SYSBUSINESS
-      rc = _createCollection ( OM_CS_DEPLOY_CL_BUSINESS, cb ) ;
-      if ( rc )
-      {
-         goto error ;
-      }
-      rc = _createCollectionIndex ( OM_CS_DEPLOY_CL_BUSINESS,
-                                    OM_CS_DEPLOY_CL_BUSINESSIDX1, cb ) ;
+      rc = dbTool.createCollection( OM_CS_DEPLOY_CL_HOST ) ;
       if ( rc )
       {
          goto error ;
       }
 
-      // SYSDEPLOY.SYSCONFIGURE
-      rc = _createCollection ( OM_CS_DEPLOY_CL_CONFIGURE, cb ) ;
+      rc = dbTool.createCollectionIndex( OM_CS_DEPLOY_CL_HOST,
+                                         OM_CS_DEPLOY_CL_HOSTIDX1 ) ;
       if ( rc )
       {
          goto error ;
       }
 
-      // SYSDEPLOY.SYSTASKINFO
-      rc = _createCollection ( OM_CS_DEPLOY_CL_TASKINFO, cb ) ;
-      if ( rc )
-      {
-         goto error ;
-      }
-      rc = _createCollectionIndex ( OM_CS_DEPLOY_CL_TASKINFO,
-                                    OM_CS_DEPLOY_CL_TASKINFOIDX1, cb ) ;
+      rc = dbTool.createCollectionIndex( OM_CS_DEPLOY_CL_HOST,
+                                         OM_CS_DEPLOY_CL_HOSTIDX2 ) ;
       if ( rc )
       {
          goto error ;
       }
 
-      // SYSDEPLOY.SYSBUSINESSAUTH
-      rc = _createCollection ( OM_CS_DEPLOY_CL_BUSINESS_AUTH, cb ) ;
+      rc = dbTool.createCollection( OM_CS_DEPLOY_CL_BUSINESS ) ;
       if ( rc )
       {
          goto error ;
       }
-      rc = _createCollectionIndex ( OM_CS_DEPLOY_CL_BUSINESS_AUTH,
-                                    OM_CS_DEPLOY_CL_BUSINESSAUTHIDX1, cb ) ;
+      rc = dbTool.createCollectionIndex( OM_CS_DEPLOY_CL_BUSINESS,
+                                         OM_CS_DEPLOY_CL_BUSINESSIDX1 ) ;
       if ( rc )
       {
          goto error ;
       }
 
-      pAuthCB = pmdGetKRCB()->getAuthCB() ;
-      rc = pAuthCB->needAuthenticate( cb, need ) ;
-      if ( SDB_OK != rc )
+      rc = dbTool.createCollection( OM_CS_DEPLOY_CL_CONFIGURE ) ;
+      if ( rc )
       {
-         PD_LOG( PDERROR, "failed to check if need to authenticate:%d", rc ) ;
          goto error ;
       }
 
-      if ( !need && pAuthCB->authEnabled() )
+      rc = dbTool.createCollection( OM_CS_DEPLOY_CL_TASKINFO ) ;
+      if ( rc )
       {
-         md5::md5digest digest ;
-         BSONObj obj ;
-         bsonBuilder.append( SDB_AUTH_USER, OM_DEFAULT_LOGIN_USER ) ;
-         md5::md5( ( const void * )OM_DEFAULT_LOGIN_PASSWD, 
-                   ossStrlen( OM_DEFAULT_LOGIN_PASSWD ), digest) ;
-         bsonBuilder.append( SDB_AUTH_PASSWD, md5::digestToString( digest ) ) ;
-         obj = bsonBuilder.obj() ;
-         rc = pAuthCB->createUsr( obj, cb ) ;
-         if ( SDB_IXM_DUP_KEY == rc || SDB_AUTH_USER_ALREADY_EXIST == rc )
+         goto error ;
+      }
+
+      rc = dbTool.createCollectionIndex( OM_CS_DEPLOY_CL_TASKINFO,
+                                         OM_CS_DEPLOY_CL_TASKINFOIDX1 ) ;
+      if ( rc )
+      {
+         goto error ;
+      }
+
+      rc = dbTool.createCollection( OM_CS_DEPLOY_CL_BUSINESS_AUTH ) ;
+      if ( rc )
+      {
+         goto error ;
+      }
+
+      rc = dbTool.createCollectionIndex( OM_CS_DEPLOY_CL_BUSINESS_AUTH,
+                                         OM_CS_DEPLOY_CL_BUSINESSAUTHIDX1 ) ;
+      if ( rc )
+      {
+         goto error ;
+      }
+
+      rc = dbTool.createCollection( OM_CS_DEPLOY_CL_RELATIONSHIP ) ;
+      if ( rc )
+      {
+         goto error ;
+      }
+
+      rc = dbTool.createCollectionIndex( OM_CS_DEPLOY_CL_RELATIONSHIP,
+                                         OM_CS_DEPLOY_CL_RELATIONSHIPIDX1 ) ;
+      if ( rc )
+      {
+         goto error ;
+      }
+
+      rc = dbTool.createCollection( OM_CS_DEPLOY_CL_PLUGINS ) ;
+      if ( rc )
+      {
+         goto error ;
+      }
+
+      rc = dbTool.createCollectionIndex( OM_CS_DEPLOY_CL_PLUGINS,
+                                         OM_CS_DEPLOY_CL_PLUGINSIDX1 ) ;
+      if ( rc )
+      {
+         goto error ;
+      }
+
+      rc = dbTool.createCollectionIndex( OM_CS_DEPLOY_CL_PLUGINS,
+                                         OM_CS_DEPLOY_CL_PLUGINSIDX2 ) ;
+      if ( rc )
+      {
+         goto error ;
+      }
+
+      {
+         CHAR passwd[OM_DEFAULT_PLUGIN_PASSWD_SIZE] ;
+
+         ossMemset( passwd, 0, OM_DEFAULT_PLUGIN_PASSWD_SIZE ) ;
+         authTool.generateRandomVisualString( passwd,
+                                              OM_DEFAULT_PLUGIN_PASSWD_LEN ) ;
+
+         rc = authTool.createOmsvcDefaultUsr( passwd,
+                                              OM_DEFAULT_PLUGIN_PASSWD_LEN ) ;
+         if ( rc )
+         {
+            PD_LOG( PDERROR, "failed to create om user: rc=%d", rc ) ;
+            goto error ;
+         }
+
+         _usrPluginPasswd = passwd ;
+      }
+
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _omManager::_getBussinessInfo( const string &businessName, 
+                                        string &businessType, 
+                                        string &clusterName,
+                                        string &deployMode )
+   {
+      INT32 rc = SDB_OK ;
+      BSONObj empty ;
+      BSONObj matcher ;
+      pmdEDUCB *cb       = pmdGetThreadEDUCB() ;
+      pmdKRCB *pKRCB     = pmdGetKRCB() ;
+      _SDB_DMSCB *pdmsCB = pKRCB->getDMSCB() ;
+      _SDB_RTNCB *pRtnCB = pKRCB->getRTNCB() ;
+      SINT64 contextID   = -1 ;
+
+      matcher = BSON( OM_BUSINESS_FIELD_NAME << businessName ) ;
+      rc = rtnQuery( OM_CS_DEPLOY_CL_BUSINESS, empty, matcher, empty, 
+                     empty, 0, cb, 0, 1, pdmsCB, pRtnCB, contextID ) ;
+      PD_RC_CHECK( rc, PDERROR, "query table failed:table=%s,rc=%d",
+                   OM_CS_DEPLOY_CL_BUSINESS, rc ) ;
+      {
+         rtnContextBuf buffObj ;
+         rc = rtnGetMore( contextID, 1, buffObj, cb, pRtnCB ) ;
+         PD_RC_CHECK( rc, PDERROR, "get record failed:table=%s,rc=%d",
+                      OM_CS_DEPLOY_CL_BUSINESS, rc ) ;
+
+         BSONObj result( buffObj.data() ) ;
+         businessType = result.getStringField( OM_BUSINESS_FIELD_TYPE ) ;
+         clusterName  = result.getStringField( OM_BUSINESS_FIELD_CLUSTERNAME ) ;
+         deployMode   = result.getStringField( OM_BUSINESS_FIELD_DEPLOYMOD ) ;
+      }
+
+      if ( "" == businessType || "" == clusterName || "" == deployMode )
+      {
+         rc = SDB_INVALIDARG ;
+         PD_LOG( PDERROR, "business info is invalid:name=%s,type=%s,cluster=%s,"
+                 "deployMode=%s",
+                 businessName.c_str(), businessType.c_str(), 
+                 clusterName.c_str(), deployMode.c_str() ) ;
+         goto error ;
+      }
+   done:
+      if ( -1 != contextID )
+      {
+         pRtnCB->contextDelete( contextID, cb ) ;
+         contextID = -1 ;
+      }
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _omManager::getBizHostInfo( const string &businessName, 
+                                     list <string> &hostsList )
+   {
+      INT32 rc = SDB_OK ;
+      BSONObj empty ;
+      BSONObj matcher ;
+      pmdEDUCB *cb       = pmdGetThreadEDUCB() ;
+      pmdKRCB *pKRCB     = pmdGetKRCB() ;
+      _SDB_DMSCB *pdmsCB = pKRCB->getDMSCB() ;
+      _SDB_RTNCB *pRtnCB = pKRCB->getRTNCB() ;
+      SINT64 contextID   = -1 ;
+
+      matcher = BSON( OM_CONFIGURE_FIELD_BUSINESSNAME << businessName ) ;
+      rc = rtnQuery( OM_CS_DEPLOY_CL_CONFIGURE, empty, matcher, empty, 
+                     empty, 0, cb, 0, -1, pdmsCB, pRtnCB, contextID ) ;
+      PD_RC_CHECK( rc, PDERROR, "query table failed:table=%s,rc=%d",
+                   OM_CS_DEPLOY_CL_CONFIGURE, rc ) ;
+      while( TRUE )
+      {
+         rtnContextBuf buffObj ;
+         rc = rtnGetMore( contextID, 1, buffObj, cb, pRtnCB ) ;
+         if ( SDB_DMS_EOC == rc )
          {
             rc = SDB_OK ;
+            break ;
          }
-         PD_RC_CHECK ( rc, PDERROR, "Failed to create default user:rc = %d",
-                       rc ) ;
+
+         PD_RC_CHECK( rc, PDERROR, "get record failed:table=%s,rc=%d",
+                      OM_CS_DEPLOY_CL_CONFIGURE, rc ) ;
+
+         BSONObj result( buffObj.data() ) ;
+         hostsList.push_back( result.getStringField( 
+                                             OM_CONFIGURE_FIELD_HOSTNAME ) ) ;
       }
 
-      rc = pAuthCB->needAuthenticate( cb, need ) ;
-      if ( SDB_OK != rc )
+      if ( hostsList.size() == 0 )
       {
-         PD_LOG( PDERROR, "failed to check if need to authenticate:%d", rc ) ;
+         rc = SDB_INVALIDARG ;
+         PD_LOG( PDERROR, "business have not host info:business=%s",
+                 businessName.c_str() ) ;
          goto error ;
       }
-      if ( !need && pAuthCB->authEnabled() )
+   done:
+      if ( -1 != contextID )
       {
-         PD_LOG( PDERROR, "can not start auth after adding user" ) ;
-         rc = SDB_SYS ;
+         pRtnCB->contextDelete( contextID, cb ) ;
+         contextID = -1 ;
+      }
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _omManager::_appendBusinessInfo( const string &businessName, 
+                                          const string &businessType, 
+                                          const string &clusterName,
+                                          const string &deployMode )
+   {
+      pmdEDUCB *cb = pmdGetThreadEDUCB() ;
+      INT32 rc     = SDB_OK ;
+      BSONObj matcher ;
+      BSONObj tmp ;
+      BSONObj updator ;
+      BSONObj hint ;
+      matcher = BSON( OM_CONFIGURE_FIELD_BUSINESSNAME << businessName ) ;
+      tmp     = BSON( OM_CONFIGURE_FIELD_BUSINESSTYPE << businessType
+                      << OM_CONFIGURE_FIELD_CLUSTERNAME << clusterName
+                      << OM_CONFIGURE_FIELD_DEPLOYMODE << deployMode ) ;
+      updator = BSON( "$set" << tmp ) ;
+      rc = rtnUpdate( OM_CS_DEPLOY_CL_CONFIGURE, matcher, updator, hint,
+                      0, cb ) ;
+      PD_RC_CHECK( rc, PDERROR, "update table failed:table=%s,business=%s,"
+                   "rc=%d", OM_CS_DEPLOY_CL_CONFIGURE, businessName.c_str(),
+                   rc ) ;
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _omManager::appendBizHostInfo( const string &businessName, 
+                                        list <string> &hostsList )
+   {
+      pmdEDUCB *cb = pmdGetThreadEDUCB() ;
+      INT32 rc     = SDB_OK ;
+      BSONObj matcher ;
+      BSONObj tmp ;
+      BSONObj updator ;
+      BSONObj hint ;
+      BSONArrayBuilder arrayBuilder ;
+      list <string>::iterator iter ;
+      matcher = BSON( OM_BUSINESS_FIELD_NAME << businessName ) ;
+
+      iter = hostsList.begin() ;
+      while ( iter != hostsList.end() )
+      {
+         BSONObj oneHost = BSON( OM_CONFIGURE_FIELD_HOSTNAME << *iter ) ;
+         arrayBuilder.append( oneHost ) ;
+         iter++ ;
+      }
+
+      tmp     = BSON( OM_BUSINESS_FIELD_LOCATION << arrayBuilder.arr() ) ;
+      updator = BSON( "$set" << tmp ) ;
+      rc = rtnUpdate( OM_CS_DEPLOY_CL_BUSINESS, matcher, updator, hint,
+                      0, cb ) ;
+      PD_RC_CHECK( rc, PDERROR, "update table failed:table=%s,business=%s,"
+                   "updator=%s,rc=%d", OM_CS_DEPLOY_CL_BUSINESS, 
+                   businessName.c_str(), updator.toString().c_str(), rc ) ;
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _omManager::_updateConfTable()
+   {
+      INT32 rc = SDB_OK ;
+      BSONObj empty ;
+      BSONObj isNull ;
+      BSONObj matcher ;
+      pmdEDUCB *cb       = pmdGetThreadEDUCB() ;
+      pmdKRCB *pKRCB     = pmdGetKRCB() ;
+      _SDB_DMSCB *pdmsCB = pKRCB->getDMSCB() ;
+      _SDB_RTNCB *pRtnCB = pKRCB->getRTNCB() ;
+      SINT64 contextID   = -1 ;
+      
+      isNull  = BSON( "$isnull" << 1 ) ;
+      matcher = BSON( OM_CONFIGURE_FIELD_BUSINESSTYPE << isNull ) ;
+      rc = rtnQuery( OM_CS_DEPLOY_CL_CONFIGURE, empty, matcher, empty, 
+                     empty, 0, cb, 0, 1, pdmsCB, pRtnCB, contextID ) ;
+      PD_RC_CHECK( rc, PDERROR, "query table failed:table=%s,rc=%d",
+                   OM_CS_DEPLOY_CL_CONFIGURE, rc ) ;
+      while ( TRUE )
+      {
+         string businessName ;
+         string businessType ;
+         string clusterName ;
+         string deployMode ;
+         rtnContextBuf buffObj ;
+         rc = rtnGetMore( contextID, 1, buffObj, cb, pRtnCB ) ;
+         if ( rc )
+         {
+            if ( SDB_DMS_EOC == rc )
+            {
+               rc = SDB_OK ;
+               break ;
+            }
+
+            PD_RC_CHECK( rc, PDERROR, "get record failed:table=%s,rc=%d",
+                         OM_CS_DEPLOY_CL_CONFIGURE, rc ) ;
+         }
+
+         BSONObj result( buffObj.data() ) ;
+         businessName = result.getStringField(OM_CONFIGURE_FIELD_BUSINESSNAME) ;
+         rc = _getBussinessInfo( businessName, businessType, clusterName, deployMode ) ;
+         PD_RC_CHECK( rc, PDERROR, "get business info failed:business=%s,rc=%d",
+                      businessName.c_str(), rc ) ;
+         rc = _appendBusinessInfo( businessName, businessType, clusterName, deployMode ) ;
+         PD_RC_CHECK( rc, PDERROR, "append business info failed:business=%s,"
+                      "rc=%d", businessName.c_str(), rc ) ;
+      }
+
+   done:
+      if ( -1 != contextID )
+      {
+         pRtnCB->contextDelete ( contextID, cb ) ;
+      }
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _omManager::_updateBusinessTable()
+   {
+      INT32 rc = SDB_OK ;
+      BSONArrayBuilder arrayBuilder ;
+      BSONObj empty ;
+      BSONObj isNull ;
+      BSONObj discover ;
+      BSONObj matcher ;
+      pmdEDUCB *cb       = pmdGetThreadEDUCB() ;
+      pmdKRCB *pKRCB     = pmdGetKRCB() ;
+      _SDB_DMSCB *pdmsCB = pKRCB->getDMSCB() ;
+      _SDB_RTNCB *pRtnCB = pKRCB->getRTNCB() ;
+      SINT64 contextID   = -1 ;
+      list <string> hostsList ;
+      
+      isNull   = BSON( "$isnull" << 1 ) ;
+      discover = BSON( OM_BUSINESS_FIELD_ADDTYPE
+                       << OM_BUSINESS_ADDTYPE_DISCOVERY ) ;
+      arrayBuilder.append( discover ) ;
+      matcher  = BSON( OM_BUSINESS_FIELD_LOCATION << isNull
+                       << "$not" << arrayBuilder.arr() ) ;
+      rc = rtnQuery( OM_CS_DEPLOY_CL_BUSINESS, empty, matcher, empty, 
+                     empty, 0, cb, 0, 1, pdmsCB, pRtnCB, contextID ) ;
+      PD_RC_CHECK( rc, PDERROR, "query table failed:table=%s,rc=%d",
+                   OM_CS_DEPLOY_CL_BUSINESS, rc ) ;
+      while ( TRUE )
+      {
+         string businessName ;
+         string businessType ;
+         string clusterName ;
+         rtnContextBuf buffObj ;
+         rc = rtnGetMore( contextID, 1, buffObj, cb, pRtnCB ) ;
+         if ( rc )
+         {
+            if ( SDB_DMS_EOC == rc )
+            {
+               rc = SDB_OK ;
+               break ;
+            }
+
+            PD_RC_CHECK( rc, PDERROR, "get record failed:table=%s,rc=%d",
+                         OM_CS_DEPLOY_CL_BUSINESS, rc ) ;
+         }
+
+         BSONObj result( buffObj.data() ) ;
+         businessName = result.getStringField( OM_BUSINESS_FIELD_NAME ) ;
+         rc = getBizHostInfo( businessName, hostsList ) ;
+         PD_RC_CHECK( rc, PDERROR, "get business host info failed:business=%s,"
+                      "rc=%d", businessName.c_str(), rc ) ;
+         rc = appendBizHostInfo( businessName, hostsList ) ;
+         PD_RC_CHECK( rc, PDERROR, "append business host info failed:"
+                      "business=%s,rc=%d", businessName.c_str(), rc ) ;
+      }
+
+   done:
+      if ( -1 != contextID )
+      {
+         pRtnCB->contextDelete ( contextID, cb ) ;
+      }
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _omManager::_appendClusterGrant( const string& clusertName,
+                                          const string& grantName,
+                                          BOOLEAN privilege )
+   {
+      INT32 rc = SDB_OK ;
+      SINT64 contextID   = -1 ;
+      BOOLEAN isFind     = FALSE ;
+      pmdEDUCB *cb       = pmdGetThreadEDUCB() ;
+      pmdKRCB *pKRCB     = pmdGetKRCB() ;
+      _SDB_DMSCB *pdmsCB = pKRCB->getDMSCB() ;
+      _SDB_RTNCB *pRtnCB = pKRCB->getRTNCB() ;
+      BSONObj sort ;
+      BSONObj hint ;
+
+      {
+         BSONObj selector ;
+         BSONObj matcher = BSON( OM_CLUSTER_FIELD_NAME << clusertName <<
+               OM_CLUSTER_FIELD_GRANTCONF"."OM_CLUSTER_FIELD_GRANTNAME <<
+               grantName ) ;
+
+         rc = rtnQuery( OM_CS_DEPLOY_CL_CLUSTER, selector, matcher, sort, 
+                        hint, 0, cb, 0, 1, pdmsCB, pRtnCB, contextID ) ;
+         if ( rc )
+         {
+            PD_LOG( PDERROR, "query table failed:table=%s,rc=%d",
+                    OM_CS_DEPLOY_CL_CLUSTER, rc ) ;
+            goto error ;
+         }
+
+         while ( TRUE )
+         {
+            rtnContextBuf buffObj ;
+
+            rc = rtnGetMore( contextID, 1, buffObj, cb, pRtnCB ) ;
+            if ( rc )
+            {
+               if ( SDB_DMS_EOC == rc )
+               {
+                  rc = SDB_OK ;
+                  break ;
+               }
+
+               PD_LOG( PDERROR, "get record failed:table=%s,rc=%d",
+                       OM_CS_DEPLOY_CL_CLUSTER, rc ) ;
+               goto error ;
+            }
+            isFind = TRUE ;
+         }
+      }
+
+      if ( FALSE == isFind )
+      {
+         BSONObj updator ;
+         BSONObj matcher = BSON( OM_CLUSTER_FIELD_NAME << clusertName ) ;
+         BSONObjBuilder grantInfoBuilder ;
+         
+         grantInfoBuilder.append( OM_CLUSTER_FIELD_GRANTNAME, grantName ) ;
+         grantInfoBuilder.appendBool( OM_CLUSTER_FIELD_PRIVILEGE, privilege ) ;
+
+         updator = BSON( "$push" <<
+              BSON( OM_CLUSTER_FIELD_GRANTCONF << grantInfoBuilder.obj() ) ) ;
+
+         rc = rtnUpdate( OM_CS_DEPLOY_CL_CLUSTER, matcher, updator, hint,
+                      0, cb ) ;
+         if ( rc )
+         {
+            PD_LOG( PDERROR, "update table failed:table=%s,updator=%s,rc=%d",
+                    OM_CS_DEPLOY_CL_CLUSTER, updator.toString().c_str(), rc ) ;
+            goto error ;
+         }
+      }
+
+   done:
+      if ( -1 != contextID )
+      {
+         pRtnCB->contextDelete ( contextID, cb ) ;
+      }
+      return rc ;
+   error:
+      goto done ;
+
+   }
+
+   INT32 _omManager::_updateClusterTable()
+   {
+      INT32 rc = SDB_OK ;
+      SINT64 contextID   = -1 ;
+      pmdEDUCB *cb       = pmdGetThreadEDUCB() ;
+      pmdKRCB *pKRCB     = pmdGetKRCB() ;
+      _SDB_DMSCB *pdmsCB = pKRCB->getDMSCB() ;
+      _SDB_RTNCB *pRtnCB = pKRCB->getRTNCB() ;
+      BSONObj sort ;
+      BSONObj hint ;
+      BSONObj selector ;
+      BSONObj matcher ;
+      set<string> clusterList ;
+
+      rc = rtnQuery( OM_CS_DEPLOY_CL_CLUSTER, selector, matcher, sort, 
+                     hint, 0, cb, 0, -1, pdmsCB, pRtnCB, contextID ) ;
+      if ( rc )
+      {
+         PD_LOG( PDERROR, "query table failed:table=%s,rc=%d",
+                 OM_CS_DEPLOY_CL_CLUSTER, rc ) ;
          goto error ;
       }
+
+      while ( TRUE )
+      {
+         rtnContextBuf buffObj ;
+
+         rc = rtnGetMore( contextID, 1, buffObj, cb, pRtnCB ) ;
+         if ( rc )
+         {
+            if ( SDB_DMS_EOC == rc )
+            {
+               rc = SDB_OK ;
+               break ;
+            }
+
+            PD_LOG( PDERROR, "get record failed:table=%s,rc=%d",
+                    OM_CS_DEPLOY_CL_CLUSTER, rc ) ;
+            goto error ;
+         }
+
+         {
+            BSONObj result( buffObj.data() ) ;
+            string clusterName ;
+
+            clusterName = result.getStringField( OM_CLUSTER_FIELD_NAME ) ;
+            clusterList.insert( clusterName ) ;
+         }
+      }
+
+      for ( set<string>::iterator iter = clusterList.begin();
+               iter != clusterList.end(); ++iter )
+      {
+         string clusterName = *iter ;
+
+         rc = _appendClusterGrant( clusterName,
+                                   OM_CLUSTER_FIELD_HOSTFILE, TRUE ) ;
+         if ( rc )
+         {
+            PD_LOG( PDERROR, "failed to add cluster grant config %s, rc=%d",
+                    OM_CLUSTER_FIELD_HOSTFILE, rc ) ;
+            goto error ;
+         }
+
+         rc = _appendClusterGrant( clusterName,
+                                   OM_CLUSTER_FIELD_ROOTUSER, TRUE ) ;
+         if ( rc )
+         {
+            PD_LOG( PDERROR, "failed to add cluster grant config %s, rc=%d",
+                    OM_CLUSTER_FIELD_ROOTUSER, rc ) ;
+            goto error ;
+         }
+      }
+
+   done:
+      if ( -1 != contextID )
+      {
+         pRtnCB->contextDelete ( contextID, cb ) ;
+      }
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _omManager::_appendHostPackage( const string &hostName,
+                                         const BSONObj &packageInfo )
+   {
+      INT32 rc = SDB_OK ;
+      pmdEDUCB *cb = pmdGetThreadEDUCB() ;
+      BSONObj matcher ;
+      BSONObj updator ;
+      BSONObj hint ;
+
+      matcher = BSON( OM_HOST_FIELD_NAME << hostName ) ;
+
+      updator = BSON( "$push" <<
+                           BSON( OM_HOST_FIELD_PACKAGES << packageInfo ) ) ;
+
+      rc = rtnUpdate( OM_CS_DEPLOY_CL_HOST, matcher, updator, hint,
+                      0, cb ) ;
+      if ( rc )
+      {
+         PD_LOG( PDERROR, "update table failed:table=%s,updator=%s,rc=%d",
+                 OM_CS_DEPLOY_CL_HOST, updator.toString().c_str(), rc ) ;
+         goto error ;
+      }
+
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   void _omManager::_getOMVersion( string &version )
+   {
+      INT32 major        = 0 ;
+      INT32 minor        = 0 ;
+      INT32 fix          = 0 ;
+      INT32 release      = 0 ;
+      const CHAR *pBuild = NULL ;
+      stringstream stream ;
+
+      ossGetVersion ( &major, &minor, &fix, &release, &pBuild ) ;
+      stream << major << "." << minor ;
+      version = stream.str() ;
+   }
+
+   INT32 _omManager::_updateHostTable()
+   {
+      INT32 rc = SDB_OK ;
+      SINT64 contextID   = -1 ;
+      pmdEDUCB *cb       = pmdGetThreadEDUCB() ;
+      pmdKRCB *pKRCB     = pmdGetKRCB() ;
+      _SDB_DMSCB *pdmsCB = pKRCB->getDMSCB() ;
+      _SDB_RTNCB *pRtnCB = pKRCB->getRTNCB() ;
+      BSONObj sort ;
+      BSONObj hint ;
+      BSONObj selector ;
+      BSONObj matcher ;
+      string omVersion ;
+
+      _getOMVersion( omVersion ) ;
+
+      matcher = BSON( OM_HOST_FIELD_PACKAGES << BSON( "$exists" << 0 ) ) ;
+
+      rc = rtnQuery( OM_CS_DEPLOY_CL_HOST, selector, matcher, sort, 
+                     hint, 0, cb, 0, -1, pdmsCB, pRtnCB, contextID ) ;
+      if ( rc )
+      {
+         PD_LOG( PDERROR, "query table failed:table=%s,rc=%d",
+                 OM_CS_DEPLOY_CL_HOST, rc ) ;
+         goto error ;
+      }
+
+      while ( TRUE )
+      {
+         rtnContextBuf buffObj ;
+
+         rc = rtnGetMore( contextID, 1, buffObj, cb, pRtnCB ) ;
+         if ( rc )
+         {
+            if ( SDB_DMS_EOC == rc )
+            {
+               rc = SDB_OK ;
+               break ;
+            }
+
+            PD_LOG( PDERROR, "get record failed:table=%s,rc=%d",
+                    OM_CS_DEPLOY_CL_CLUSTER, rc ) ;
+            goto error ;
+         }
+
+         {
+            BSONObj package ;
+            BSONObj hostInfo( buffObj.data() ) ;
+            BSONObj oma = hostInfo.getObjectField( OM_HOST_FIELD_OMA ) ;
+            string version = oma.getStringField( OM_HOST_FIELD_OM_VERSION ) ;
+            string hostName = hostInfo.getStringField( OM_HOST_FIELD_NAME ) ;
+            string installPath = hostInfo.getStringField(
+                                                   OM_HOST_FIELD_INSTALLPATH ) ;
+
+            if ( version.empty() )
+            {
+               version = omVersion ;
+            }
+
+            package = BSON(
+                           OM_HOST_FIELD_PACKAGENAME << OM_BUSINESS_SEQUOIADB <<
+                           OM_HOST_FIELD_INSTALLPATH << installPath <<
+                           OM_HOST_FIELD_VERSION << version ) ;
+
+            rc = _appendHostPackage( hostName, package ) ;
+            if ( rc )
+            {
+               PD_LOG( PDERROR, "failed to append host applications: rc=%d",
+                       rc ) ;
+               goto error ;
+            }
+         }
+      }
+
+   done:
+      if ( -1 != contextID )
+      {
+         pRtnCB->contextDelete ( contextID, cb ) ;
+      }
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _omManager::_updateTable()
+   {
+      INT32 rc = SDB_OK ;
+      rc = _updateConfTable() ;
+      PD_RC_CHECK( rc, PDERROR, "update table failed:table=%s,rc=%d", 
+                   OM_CS_DEPLOY_CL_CONFIGURE, rc ) ;
+
+      rc = _updateBusinessTable() ;
+      PD_RC_CHECK( rc, PDERROR, "update table failed:table=%s,rc=%d", 
+                   OM_CS_DEPLOY_CL_BUSINESS, rc ) ;
+
+      rc = _updateClusterTable() ;
+      if ( rc )
+      {
+         PD_LOG( PDERROR, "update table failed:table=%s,rc=%d", 
+                 OM_CS_DEPLOY_CL_CLUSTER, rc ) ;
+         goto error ;
+      }
+
+      rc = _updateHostTable() ;
+      if ( rc )
+      {
+         PD_LOG( PDERROR, "update table failed:table=%s,rc=%d", 
+                 OM_CS_DEPLOY_CL_HOST, rc ) ;
+         goto error ;
+      }
+
    done:
       return rc ;
    error:
@@ -404,7 +1097,7 @@ namespace engine
       PD_RC_CHECK ( rc, PDERROR, "Failed to build index object, rc = %d",
                     rc ) ;
 
-      rc = catTestAndCreateIndex( pCollection, indexDef, cb, _pDmsCB,
+      rc = rtnTestAndCreateIndex( pCollection, indexDef, cb, _pDmsCB,
                                   NULL, TRUE ) ;
       if ( rc )
       {
@@ -419,7 +1112,7 @@ namespace engine
 
    INT32 _omManager::_createCollection ( const CHAR *pCollection, pmdEDUCB *cb )
    {
-      return catTestAndCreateCL( pCollection, cb, _pDmsCB, NULL, TRUE ) ;
+      return rtnTestAndCreateCL( pCollection, cb, _pDmsCB, NULL, TRUE ) ;
    }
 
    INT32 _omManager::active ()
@@ -428,25 +1121,19 @@ namespace engine
       pmdEDUMgr *pEDUMgr = pmdGetKRCB()->getEDUMgr() ;
       EDUID eduID = PMD_INVALID_EDUID ;
 
-      // start om manager edu
       rc = pEDUMgr->startEDU( EDU_TYPE_OMMGR, (_pmdObjBase*)this, &eduID ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to start OM Manager edu, rc: %d", rc ) ;
-      // register
-      pEDUMgr->regSystemEDU( EDU_TYPE_OMMGR, eduID ) ;
-      // wait attach
       rc = _attachEvent.wait( OM_WAIT_CB_ATTACH_TIMEOUT ) ;
       PD_RC_CHECK( rc, PDERROR, "Wait OM Manager edu attach failed, rc: %d",
                    rc ) ;
 
-      // start om net
       rc = pEDUMgr->startEDU( EDU_TYPE_OMNET, (netRouteAgent*)&_netAgent,
                               &eduID ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to start om net, rc: %d", rc ) ;
-      // register
-      pEDUMgr->regSystemEDU( EDU_TYPE_OMNET, eduID ) ;
 
-      // start ssql exec timeout checker (1 minutes)
-      _ssqlCheckTimer = setTimer( 60 * OSS_ONE_SEC ) ;
+      _updateTimestamp = (INT64)time( NULL ) ;
+      _updatePluinUsrTimer = setTimer(
+                              OM_UPDATE_PLUGIN_PASSWD_TIMEOUT * OSS_ONE_SEC ) ;
 
    done:
       return rc ;
@@ -457,7 +1144,6 @@ namespace engine
    INT32 _omManager::deactive ()
    {
       _netAgent.closeListen() ;
-      // stop io
       _netAgent.stop() ;
 
       return SDB_OK ;
@@ -465,6 +1151,7 @@ namespace engine
 
    INT32 _omManager::fini ()
    {
+      _pKrcb->unregEventHandler( this ) ;
       _rsManager.fini() ;
 
       _mapID2Host.clear() ;
@@ -502,9 +1189,9 @@ namespace engine
 
    void _omManager::onTimer( UINT64 timerID, UINT32 interval )
    {
-      if ( _ssqlCheckTimer == timerID )
+      if( _updatePluinUsrTimer == timerID )
       {
-         _checkSsqlTimeout() ;
+         _updatePluginPasswd() ;
       }
    }
 
@@ -657,6 +1344,51 @@ namespace engine
       }
    }
 
+   INT32 _omManager::_updatePluginPasswd()
+   {
+      INT32 rc = SDB_OK ;
+      _pmdEDUCB *cb = pmdGetThreadEDUCB() ;
+      SDB_AUTHCB *pAuthCB = pmdGetKRCB()->getAuthCB() ;
+      omAuthTool authTool( cb, pAuthCB ) ;
+      CHAR passwd[OM_DEFAULT_PLUGIN_PASSWD_SIZE] ;
+
+      ossMemset( passwd, 0, OM_DEFAULT_PLUGIN_PASSWD_SIZE ) ;
+      authTool.generateRandomVisualString( passwd,
+                                           OM_DEFAULT_PLUGIN_PASSWD_LEN ) ;
+
+      rc = authTool.createPluginUsr( passwd, OM_DEFAULT_PLUGIN_PASSWD_LEN ) ;
+      if ( rc )
+      {
+         PD_LOG( PDERROR, "failed to update plugin passwd: rc=%d", rc ) ;
+         goto error ;
+      }
+
+      _usrPluginPasswd = passwd ;
+
+      _updateTimestamp = (INT64)time( NULL ) ;
+
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   void _omManager::getPluginPasswd( string &passwd )
+   {
+      passwd = _usrPluginPasswd ;
+   }
+
+   void _omManager::getUpdatePluginPasswdTimeDiffer( INT64 &differ )
+   {
+      differ = (INT64)time( NULL ) - _updateTimestamp ;
+      differ = OM_UPDATE_PLUGIN_PASSWD_TIMEOUT - differ ;
+
+      if ( 0 >= differ )
+      {
+         differ = OM_UPDATE_PLUGIN_PASSWD_TIMEOUT ;
+      }
+   }
+
    void _omManager::_checkTaskTimeout( const BSONObj &task )
    {
       BSONElement element ;
@@ -697,46 +1429,6 @@ namespace engine
 
    done:
       pmdGetThreadEDUCB()->resetInfo( EDU_INFO_ERROR ) ;
-      return ;
-   }
-
-   void _omManager::_checkSsqlTimeout()
-   {
-      INT32 rc = SDB_OK ;
-      BSONElement element ;
-      BSONObj selector ;
-      BSONObj matcher ;
-      BSONObj orderBy ;
-      BSONObj hint ;
-      vector <BSONObj> results ;
-      UINT32 index = 0 ;
-
-      BSONObj noFinish ;
-      BSONObj noCancel ;
-      BSONArrayBuilder arrayBuilder ;
-      noFinish = BSON( "$ne" << OM_TASK_STATUS_FINISH ) ;
-      noCancel = BSON( "$ne" << OM_TASK_STATUS_CANCEL ) ;
-
-      arrayBuilder.append( BSON( OM_TASKINFO_FIELD_STATUS<< noFinish ) ) ;
-      arrayBuilder.append( BSON( OM_TASKINFO_FIELD_STATUS << noCancel ) ) ;
-      arrayBuilder.append( BSON( OM_TASKINFO_FIELD_TYPE 
-                                 << OM_TASK_TYPE_SSQL_EXEC ) ) ;
-
-      matcher = BSON( "$and" << arrayBuilder.arr() ) ;
-      rc = _taskManager->queryTasks( selector, matcher, orderBy, hint, 
-                                     results ) ;
-      if ( SDB_OK != rc || results.size() == 0 )
-      {
-         goto done ;
-      }
-
-      for ( index = 0 ; index < results.size() ; index++ )
-      {
-         BSONObj oneTask = results[index] ;
-         _checkTaskTimeout( oneTask ) ;
-      }
-
-   done:
       return ;
    }
 
@@ -1069,7 +1761,6 @@ namespace engine
       SINT64 numToReturn        = -1 ;
       vector < BSONObj > result ;
       BSONObj response ;
-      // extract command
       rc = msgExtractQuery ( (CHAR *)pMsg, &flags, &pCollectionName,
                              &numToSkip, &numToReturn, &pQuery,
                              &pFieldSelector, &pOrderByBuffer, &pHintBuffer ) ;
@@ -1118,7 +1809,6 @@ namespace engine
 
       if ( SDB_OK == rc )
       {
-         //_sendRes2Agent( handle, pMsg, rc, result[0] ) ;
          _sendResVector2Agent( handle, pMsg, rc, result ) ;
       }
       else

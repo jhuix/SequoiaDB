@@ -1,4 +1,3 @@
-// BSONCallback.java
 
 /**
  *      Copyright (C) 2008 10gen Inc.
@@ -18,6 +17,7 @@
 
 package org.bson;
 
+import org.bson.types.BSONDecimal;
 import org.bson.types.ObjectId;
 
 public interface BSONCallback {
@@ -44,6 +44,7 @@ public interface BSONCallback {
     void gotDouble( String name , double v );
     void gotInt( String name , int v );
     void gotLong( String name , long v );
+	void gotDecimal(String name, BSONDecimal decimal);
     
     void gotDate( String name , long millis );
     void gotString( String name , String v );

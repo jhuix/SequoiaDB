@@ -25,6 +25,7 @@
 #ifndef CLIENT_HPP__
 #define CLIENT_HPP__
 #include "core.hpp"
+#include "clientDef.h"
 #if defined (SDB_ENGINE) || defined (SDB_CLIENT)
 #include "../bson/bson.h"
 #include "../util/fromjson.hpp"
@@ -32,23 +33,21 @@
 #include "bson/bson.hpp"
 #include "fromjson.hpp"
 #endif
-//#include "bson/bson.h"
-//#include "jstobs.h"
 #include "spd.h"
 #include <map>
 #include <string>
 #include <vector>
-/*
-#if defined (_WINDOWS)
-   #if defined (SDB_DLL_BUILD)
-      #define DLLEXPORT __declspec(dllexport)
-   #else
-      #define DLLEXPORT __declspec(dllimport)
-   #endif
-#else
-   #define DLLEXPORT
-#endif
-*/
+
+/** This micro is for internal use, not a public api, it will be removed in the future */
+#define RELEASE_INNER_HANDLE( handle ) \
+do                                     \
+{                                      \
+   if ( handle )                       \
+   {                                   \
+      delete handle ;                  \
+      handle = NULL ;                  \
+   }                                   \
+} while( 0 )
 
 #define DLLEXPORT SDB_EXPORT
 
@@ -60,38 +59,9 @@
 /** 0 means using database's default pagesize, it 64k now */
 #define SDB_PAGESIZE_DEFAULT      0
 
-#define SDB_SNAP_CONTEXTS         0
-#define SDB_SNAP_CONTEXTS_CURRENT 1
-#define SDB_SNAP_SESSIONS         2
-#define SDB_SNAP_SESSIONS_CURRENT 3
-#define SDB_SNAP_COLLECTIONS      4
-#define SDB_SNAP_COLLECTIONSPACES 5
-#define SDB_SNAP_DATABASE         6
-#define SDB_SNAP_SYSTEM           7
-#define SDB_SNAP_CATALOG          8
-
-#define SDB_LIST_CONTEXTS         0
-#define SDB_LIST_CONTEXTS_CURRENT 1
-#define SDB_LIST_SESSIONS         2
-#define SDB_LIST_SESSIONS_CURRENT 3
-#define SDB_LIST_COLLECTIONS      4
-#define SDB_LIST_COLLECTIONSPACES 5
-#define SDB_LIST_STORAGEUNITS     6
-#define SDB_LIST_GROUPS           7
-#define SDB_LIST_STOREPROCEDURES  8
-#define SDB_LIST_DOMAINS          9
-#define SDB_LIST_TASKS            10
-#define SDB_LIST_CS_IN_DOMAIN     11
-#define SDB_LIST_CL_IN_DOMAIN     12
-
 /** The flags represent whether bulk insert continue when hitting index key duplicate error */
 #define FLG_INSERT_CONTONDUP  0x00000001
 
-// client socket timeout value
-// since client and server may not sit in the same network, we need
-// to set this value bigger than engine socket timeout
-// this value is in millisec
-// set to 10 seconds timeout
 #define SDB_CLIENT_SOCKET_TIMEOUT_DFT 10000
 
 /** class name 'sdbReplicaNode' will be deprecated in version 2.x, use 'sdbNode' instead of it. */
@@ -99,11 +69,29 @@
 
 #define activateReplicaGroup   activateReplicaGroup
 
+/** Force to use specified hint to query, if database have no index assigned by the hint, fail to query. */
+#define QUERY_FORCE_HINT                  0x00000080
+/** Enable parallel sub query, each sub query will finish scanning different part of the data. */
+#define QUERY_PARALLED                    0x00000100
+/** In general, query won't return data until cursor gets from database, when add this flag, return data in query response, it will be more high-performance */
+#define QUERY_WITH_RETURNDATA             0x00000200
+/** Enable prepare more data when query */
+#define QUERY_PREPARE_MORE                0x00004000
+/** The sharding key in update rule is not filtered, when executing queryAndUpdate. */
+#define QUERY_KEEP_SHARDINGKEY_IN_UPDATE  0x00008000
+
+/** The sharding key in update rule is not filtered, when executing update or upsert. */
+#define UPDATE_KEEP_SHARDINGKEY           QUERY_KEEP_SHARDINGKEY_IN_UPDATE
+
 enum _SDB_LOB_OPEN_MODE
 {
    SDB_LOB_CREATEONLY = 0x00000001, /**< Open a new lob only */
-   SDB_LOB_READ = 0x00000004        /**< Open an existing lob to read */
+   SDB_LOB_READ       = 0x00000004, /**< Open an existing lob to read */
+   SDB_LOB_WRITE      = 0x00000008  /**< Open an existing lob to write */
 } ;
+/** \typedef enum _SDB_LOB_OPEN_MODE SDB_LOB_OPEN_MODE
+    \brief The open mode.
+*/
 typedef enum _SDB_LOB_OPEN_MODE SDB_LOB_OPEN_MODE ;
 
 enum _SDB_LOB_SEEK
@@ -112,6 +100,9 @@ enum _SDB_LOB_SEEK
    SDB_LOB_SEEK_CUR,     /**< Seek from the current place */
    SDB_LOB_SEEK_END      /**< Seek from the end of file  */
 } ;
+/** \typedef enum _SDB_LOB_SEEK SDB_LOB_SEEK
+    \brief The whence of seek.
+*/
 typedef enum _SDB_LOB_SEEK SDB_LOB_SEEK ;
 
 /** \namespace sdbclient
@@ -121,6 +112,8 @@ namespace sdbclient
 {
    const static bson::BSONObj _sdbStaticObject ;
    const static bson::OID _sdbStaticOid ;
+   const static std::vector<INT32> _sdbStaticVec ;
+   const static std::vector<UINT32> _sdbStaticUINT32Vec ;
    class _sdbCursor ;
    class _sdbCollection ;
    class sdb ;
@@ -140,8 +133,6 @@ namespace sdbclient
       virtual INT32 next          ( bson::BSONObj &obj ) = 0 ;
       virtual INT32 current       ( bson::BSONObj &obj ) = 0 ;
       virtual INT32 close () = 0 ;
-      //virtual INT32 updateCurrent ( bson &rule ) = 0 ;
-      //virtual INT32 delCurrent    () = 0 ;
    } ;
 
 /** \class  sdbCursor
@@ -175,7 +166,9 @@ namespace sdbclient
       ~sdbCursor ()
       {
          if ( pCursor )
+         {
             delete pCursor ;
+         }
       }
 
 /** \fn  INT32 next ( bson::BSONObj &obj )
@@ -215,31 +208,6 @@ namespace sdbclient
             return SDB_OK ;
          return pCursor->close () ;
       }
-
-/*
-* \fn INT32 updateCurrent ( bson::BSONObj &rule )
-    \brief Update the current document of cursor
-    \param [in] rule The updating rule, cannot be null
-    \retval SDB_OK Operation Success
-    \retval Others Operation Fail
-      INT32 updateCurrent ( bson::BSONObj &rule )
-      {
-         if ( !pCursor )
-            return SDB_NOT_CONNECTED ;
-         return pCursor->updateCurrent ( rule ) ;
-      }
-
-* \fn INT32 delCurrent ()
-      \brief Delete the current document of cursor
-      \retval SDB_OK Operation Success
-      \retval Others Operation Fail
-
-      INT32 delCurrent ()
-      {
-         if ( !pCursor )
-            return SDB_NOT_CONNECTED ;
-         return pCursor->delCurrent () ;
-      }*/
    } ;
 
    class DLLEXPORT _sdbCollection
@@ -250,58 +218,31 @@ namespace sdbclient
    public :
       _sdbCollection () {}
       virtual ~_sdbCollection () {}
-      // get the total number of records for a given condition, if the condition
-      // is NULL then match all records in the collection
       virtual INT32 getCount ( SINT64 &count,
-                               const bson::BSONObj &condition = _sdbStaticObject ) = 0 ;
-
-      // insert a bson object into current collection
-      // given:
-      // object ( required )
-      // returns id as the pointer pointing to _id bson element
+                               const bson::BSONObj &condition = _sdbStaticObject,
+                               const bson::BSONObj &hint = _sdbStaticObject ) = 0 ;
       virtual INT32 insert ( const bson::BSONObj &obj, bson::OID *id = NULL ) = 0 ;
 
       virtual INT32 bulkInsert ( SINT32 flags,
                                  std::vector<bson::BSONObj> &obj
                                ) = 0 ;
-      // update bson object from current collection
-      // given:
-      // update rule ( required )
-      // update condition ( optional )
-      // hint ( optional )
       virtual INT32 update ( const bson::BSONObj &rule,
                              const bson::BSONObj &condition = _sdbStaticObject,
-                             const bson::BSONObj &hint      = _sdbStaticObject
+                             const bson::BSONObj &hint      = _sdbStaticObject,
+                             INT32 flag = 0
                            ) = 0 ;
 
-      // update bson object from current collection, if there's nothing match
-      // then insert an record that modified from empty BSON object
-      // given:
-      // update rule ( required )
-      // update condition ( optional )
-      // hint ( optional )
-      // setOnInsert ( optional )
       virtual INT32 upsert ( const bson::BSONObj &rule,
                              const bson::BSONObj &condition = _sdbStaticObject,
                              const bson::BSONObj &hint      = _sdbStaticObject,
-                             const bson::BSONObj &setOnInsert = _sdbStaticObject
+                             const bson::BSONObj &setOnInsert = _sdbStaticObject,
+                             INT32 flag = 0
                            ) = 0 ;
 
-      // delete bson objects from current collection
-      // given:
-      // delete condition ( optional )
-      // hint ( optional )
       virtual INT32 del ( const bson::BSONObj &condition = _sdbStaticObject,
                           const bson::BSONObj &hint      = _sdbStaticObject
                         ) = 0 ;
 
-      // query objects from current collection
-      // given:
-      // query condition ( optional )
-      // query selected def ( optional )
-      // query orderby ( optional )
-      // hint ( optional )
-      // output: _sdbCursor ( required )
       virtual INT32 query  ( _sdbCursor **cursor,
                              const bson::BSONObj &condition = _sdbStaticObject,
                              const bson::BSONObj &selected  = _sdbStaticObject,
@@ -309,7 +250,7 @@ namespace sdbclient
                              const bson::BSONObj &hint      = _sdbStaticObject,
                              INT64 numToSkip    = 0,
                              INT64 numToReturn  = -1,
-                             INT32 flag         = 0
+                             INT32 flags        = 0
                            ) = 0 ;
 
       virtual INT32 query  ( sdbCursor &cursor,
@@ -319,7 +260,7 @@ namespace sdbclient
                              const bson::BSONObj &hint      = _sdbStaticObject,
                              INT64 numToSkip    = 0,
                              INT64 numToReturn  = -1,
-                             INT32 flag         = 0
+                             INT32 flags        = 0
                            ) = 0 ;
 
       virtual INT32 queryOne( bson::BSONObj &obj,
@@ -328,18 +269,8 @@ namespace sdbclient
                               const bson::BSONObj &orderBy   = _sdbStaticObject,
                               const bson::BSONObj &hint      = _sdbStaticObject,
                               INT64 numToSkip    = 0,
-                              INT32 flag         = 0 ) = 0 ;
+                              INT32 flags        = 0 ) = 0 ;
 
-      // query objects from current collection and update
-      // given:
-      // update rule ( required )
-      // query condition ( optional )
-      // query selected def ( optional )
-      // query orderby ( optional )
-      // hint ( optional )
-      // flag ( optional )
-      // returnNew ( optioinal )
-      // output: sdbCursor ( required )
       virtual INT32 queryAndUpdate  ( _sdbCursor **cursor,
                                       const bson::BSONObj &update,
                                       const bson::BSONObj &condition = _sdbStaticObject,
@@ -349,17 +280,9 @@ namespace sdbclient
                                       INT64 numToSkip                = 0,
                                       INT64 numToReturn              = -1,
                                       INT32 flag                     = 0,
-                                      BOOLEAN returnNew              = FALSE 
+                                      BOOLEAN returnNew              = FALSE
                                    ) = 0 ;
 
-      // query objects from current collection and remove
-      // given:
-      // query condition ( optional )
-      // query selected def ( optional )
-      // query orderby ( optional )
-      // hint ( optional )
-      // flag ( optional )
-      // output: sdbCursor ( required )
       virtual INT32 queryAndRemove  ( _sdbCursor **cursor,
                                       const bson::BSONObj &condition = _sdbStaticObject,
                                       const bson::BSONObj &selected  = _sdbStaticObject,
@@ -367,16 +290,9 @@ namespace sdbclient
                                       const bson::BSONObj &hint      = _sdbStaticObject,
                                       INT64 numToSkip                = 0,
                                       INT64 numToReturn              = -1,
-                                      INT32 flag                     = 0 
+                                      INT32 flag                     = 0
                                    ) = 0 ;
 
-      //virtual INT32 rename ( const CHAR *pNewName ) = 0 ;
-      // create an index for the current collection
-      // given:
-      // index definition ( required )
-      // index name ( required )
-      // uniqueness ( required )
-      // enforceness ( required )
       virtual INT32 createIndex ( const bson::BSONObj &indexDef,
                                   const CHAR *pName,
                                   BOOLEAN isUnique,
@@ -438,7 +354,6 @@ namespace sdbclient
       virtual INT32 detachCollection ( const CHAR *subClFullName) = 0 ;
 
       virtual INT32 alterCollection ( const bson::BSONObj &options ) = 0 ;
-      /// explain
       virtual INT32 explain ( sdbCursor &cursor,
                               const bson::BSONObj &condition = _sdbStaticObject,
                               const bson::BSONObj &select    = _sdbStaticObject,
@@ -448,23 +363,28 @@ namespace sdbclient
                               INT64 numToReturn              = -1,
                               INT32 flag                     = 0,
                               const bson::BSONObj &options   = _sdbStaticObject ) = 0 ;
-      /// lob
       virtual INT32 createLob( sdbLob &lob, const bson::OID *oid = NULL ) = 0 ;
 
       virtual INT32 removeLob( const bson::OID &oid ) = 0 ;
 
-      virtual INT32 openLob( sdbLob &lob, const bson::OID &oid ) = 0 ;
-      
+      virtual INT32 truncateLob( const bson::OID &oid, INT64 length ) = 0 ;
+
+      virtual INT32 openLob( sdbLob &lob, const bson::OID &oid,
+                             SDB_LOB_OPEN_MODE mode = SDB_LOB_READ ) = 0 ;
+
       virtual INT32 listLobs( sdbCursor &cursor ) = 0 ;
 
-      /// truncate
+      virtual INT32 listLobPieces( _sdbCursor **cursor ) = 0 ;
+
+      virtual INT32 listLobPieces( sdbCursor &cursor ) = 0 ;
+
       virtual INT32 truncate() = 0 ;
 
-      /// create/drop $id index
       virtual INT32 createIdIndex( const bson::BSONObj &options = _sdbStaticObject ) = 0 ;
 
       virtual INT32 dropIdIndex() = 0 ;
-      
+
+      virtual INT32 pop ( const bson::BSONObj &option = _sdbStaticObject ) = 0 ;
    } ;
 
 /** \class sdbCollection
@@ -512,19 +432,25 @@ namespace sdbclient
       }
 
 /** \fn INT32 getCount ( SINT64 &count,
-                         const bson::BSONObj &condition )
+                         const bson::BSONObj &condition,
+                         const bson::BSONObj &hint )
     \brief Get the count of matching documents in current collection.
     \param [in] condition The matching rule, return the count of all documents if this parameter is empty
+    \param [in] hint Specified the index used to scan data. e.g. {"":"ageIndex"} means
+                    using index "ageIndex" to scan data(index scan);
+                    {"":null} means table scan. when hint is not provided,
+                    database automatically match the optimal index to scan data
     \param [out] count The count of matching documents, matches all records if not provided.
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
 */
       INT32 getCount ( SINT64 &count,
-                       const bson::BSONObj &condition = _sdbStaticObject )
+                       const bson::BSONObj &condition = _sdbStaticObject,
+                       const bson::BSONObj &hint = _sdbStaticObject )
       {
          if ( !pCollection )
             return SDB_NOT_CONNECTED ;
-         return pCollection->getCount ( count, condition ) ;
+         return pCollection->getCount ( count, condition, hint ) ;
       }
 
 /** \fn INT32 split ( const CHAR *pSourceGroupName,
@@ -668,7 +594,7 @@ namespace sdbclient
     \brief Insert a bulk of bson objects into current collection
     \param [in] flags FLG_INSERT_CONTONDUP or 0. While FLG_INSERT_CONTONDUP
                 is set, if some records hit index key duplicate error,
-                database will skip them and go on inserting. However, while 0 
+                database will skip them and go on inserting. However, while 0
                 is set, database will stop inserting in that case, and return
                 errno code.
     \param [in] obj The array of inserted bson objects
@@ -700,48 +626,68 @@ namespace sdbclient
 
 /** \fn  INT32 update ( const bson::BSONObj &rule,
                      const bson::BSONObj &condition,
-                     const bson::BSONObj &hint
+                     const bson::BSONObj &hint,
+                     INT32 flag
                    )
     \brief Update the matching documents in current collection
     \param [in] rule The updating rule
     \param [in] condition The matching rule, update all the documents if not provided
-    \param [in] hint The hint, automatically match the optimal hint if not provided
+    \param [in] hint Specified the index used to scan data. e.g. {"":"ageIndex"} means
+                    using index "ageIndex" to scan data(index scan);
+                    {"":null} means table scan. when hint is not provided,
+                    database automatically match the optimal index to scan data
+    \param [in] flag The query flag, default to be 0. Please see the definition of follow flags for more detail
+    \code
+        UPDATE_KEEP_SHARDINGKEY
+    \endcode
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
-    \note It won't work to update the "ShardingKey" field, but the other fields take effect
+    \note When flag is set to 0, it won't work to update the "ShardingKey" field, but the
+              other fields take effect
 */
       INT32 update ( const bson::BSONObj &rule,
                      const bson::BSONObj &condition = _sdbStaticObject,
-                     const bson::BSONObj &hint      = _sdbStaticObject
+                     const bson::BSONObj &hint      = _sdbStaticObject,
+                     INT32 flag = 0
                    )
       {
          if ( !pCollection )
             return SDB_NOT_CONNECTED ;
-         return pCollection->update ( rule, condition, hint ) ;
+         return pCollection->update ( rule, condition, hint, flag ) ;
       }
 
 /** \fn INT32 upsert ( const bson::BSONObj &rule,
                      const bson::BSONObj &condition = _sdbStaticObject,
-                     const bson::BSONObj &hint      = _sdbStaticObject
+                     const bson::BSONObj &hint      = _sdbStaticObject,
+                     INT32 flag = 0
                    )
     \brief Update the matching documents in current collection, insert if no matching
     \param [in] rule The updating rule
     \param [in] condition The matching rule, update all the documents if not provided
-    \param [in] hint The hint, automatically match the optimal hint if not provided
+    \param [in] hint Specified the index used to scan data. e.g. {"":"ageIndex"} means
+                    using index "ageIndex" to scan data(index scan);
+                    {"":null} means table scan. when hint is not provided,
+                    database automatically match the optimal index to scan data
     \param [in] setOnInsert The setOnInsert assigns the specified values to the fileds when insert
+    \param [in] flag The query flag, default to be 0. Please see the definition of follow flags for more detail
+    \code
+        UPDATE_KEEP_SHARDINGKEY
+    \endcode
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
-    \note It won't work to upsert the "ShardingKey" field, but the other fields take effect
+    \note When flag is set to 0, it won't work to update the "ShardingKey" field, but the
+              other fields take effect
 */
       INT32 upsert ( const bson::BSONObj &rule,
                      const bson::BSONObj &condition = _sdbStaticObject,
                      const bson::BSONObj &hint      = _sdbStaticObject,
-                     const bson::BSONObj &setOnInsert = _sdbStaticObject
+                     const bson::BSONObj &setOnInsert = _sdbStaticObject,
+                     INT32 flag = 0
                    )
       {
          if ( !pCollection )
             return SDB_NOT_CONNECTED ;
-         return pCollection->upsert ( rule, condition, hint, setOnInsert ) ;
+         return pCollection->upsert ( rule, condition, hint, setOnInsert, flag ) ;
       }
 
 /** \fn   INT32 del ( const bson::BSONObj &condition,
@@ -749,7 +695,10 @@ namespace sdbclient
                 )
     \brief Delete the matching documents in current collection
     \param [in] condition The matching rule, delete all the documents if not provided
-    \param [in] hint The hint, automatically match the optimal hint if not provided
+    \param [in] hint Specified the index used to scan data. e.g. {"":"ageIndex"} means
+                    using index "ageIndex" to scan data(index scan);
+                    {"":null} means table scan. when hint is not provided,
+                    database automatically match the optimal index to scan data
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
 */
@@ -769,22 +718,24 @@ namespace sdbclient
                      const bson::BSONObj &hint,
                      INT64 numToSkip,
                      INT64 numToReturn,
-                     INT32 flag
+                     INT32 flags
                     )
     \brief Get the matching documents in current collection
     \param [in] condition The matching rule, return all the documents if not provided
     \param [in] selected The selective rule, return the whole document if not provided
     \param [in] orderBy The ordered rule, result set is unordered if not provided
-    \param [in] hint The hint, automatically match the optimal hint if not provided
+    \param [in] hint Specified the index used to scan data. e.g. {"":"ageIndex"} means
+                    using index "ageIndex" to scan data(index scan);
+                    {"":null} means table scan. when hint is not provided,
+                    database automatically match the optimal index to scan data
     \param [in] numToSkip Skip the first numToSkip documents, default is 0
     \param [in] numToReturn Only return numToReturn documents, default is -1 for returning all results
-    \param [in] flag The query flag, default to be 0
-
-        FLG_QUERY_FORCE_HINT(0x00000080)      : Force to use specified hint to query, if database have no index assigned by the hint, fail to query
-        FLG_QUERY_PARALLED(0x00000100)        : Enable paralled sub query
-        FLG_QUERY_WITH_RETURNDATA(0x00000200) : In general, query won't return data until cursor get from database,
-                                                when add this flag, return data in query response, it will be more high-performance
-        
+    \param [in] flags The query flags, default to be 0. Please see the definition of follow flags for more detail. Usage: e.g. set ( QUERY_FORCE_HINT | QUERY_WITH_RETURNDATA ) to param flags
+    \code
+        QUERY_FORCE_HINT
+        QUERY_PARALLED
+        QUERY_WITH_RETURNDATA
+    \endcode
     \param [out] cursor The cursor of current query
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
@@ -796,13 +747,13 @@ namespace sdbclient
                      const bson::BSONObj &hint      = _sdbStaticObject,
                      INT64 numToSkip          = 0,
                      INT64 numToReturn        = -1,
-                     INT32 flag               = 0
+                     INT32 flags              = 0
                    )
       {
          if ( !pCollection )
             return SDB_NOT_CONNECTED ;
          return pCollection->query ( cursor, condition, selected, orderBy,
-                                     hint, numToSkip, numToReturn, flag ) ;
+                                     hint, numToSkip, numToReturn, flags ) ;
       }
 
 /** \fn INT32 query  ( sdbCursor &cursor,
@@ -818,16 +769,18 @@ namespace sdbclient
     \param [in] condition The matching rule, return all the documents if not provided
     \param [in] selected The selective rule, return the whole document if not provided
     \param [in] orderBy The ordered rule, result set is unordered if not provided
-    \param [in] hint The hint, automatically match the optimal hint if not provided
+    \param [in] hint Specified the index used to scan data. e.g. {"":"ageIndex"} means
+                    using index "ageIndex" to scan data(index scan);
+                    {"":null} means table scan. when hint is not provided,
+                    database automatically match the optimal index to scan data
     \param [in] numToSkip Skip the first numToSkip documents, default is 0
     \param [in] numToReturn Only return numToReturn documents, default is -1 for returning all results
-    \param [in] flag The query flag, defalt to be 0
-
-        FLG_QUERY_FORCE_HINT(0x00000080)      : Force to use specified hint to query, if database have no index assigned by the hint, fail to query
-        FLG_QUERY_PARALLED(0x00000100)        : Enable paralled sub query
-        FLG_QUERY_WITH_RETURNDATA(0x00000200) : In general, query won't return data until cursor get from database,
-                                                when add this flag, return data in query response, it will be more high-performance
-        
+    \param [in] flag The query flag, default to be 0. Please see the definition of follow flags for more detail. Usage: e.g. set ( QUERY_FORCE_HINT | QUERY_WITH_RETURNDATA ) to param flag
+    \code
+        QUERY_FORCE_HINT
+        QUERY_PARALLED
+        QUERY_WITH_RETURNDATA
+    \endcode
     \param [out] cursor The cursor of current query
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
@@ -839,13 +792,16 @@ namespace sdbclient
                      const bson::BSONObj &hint      = _sdbStaticObject,
                      INT64 numToSkip          = 0,
                      INT64 numToReturn        = -1,
-                     INT32 flag               = 0
+                     INT32 flags              = 0
                    )
       {
          if ( !pCollection )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( cursor.pCursor ) ;
          return pCollection->query ( cursor, condition, selected, orderBy,
-                                     hint, numToSkip, numToReturn, flag ) ;
+                                     hint, numToSkip, numToReturn, flags ) ;
       }
 
 /** \fn INT32 queryOne( BSONObj &obj,
@@ -860,15 +816,17 @@ namespace sdbclient
     \param [in] condition The matching rule, return all the documents if not provided
     \param [in] selected The selective rule, return the whole document if not provided
     \param [in] orderBy The ordered rule, result set is unordered if not provided
-    \param [in] hint The hint, automatically match the optimal hint if not provided
+    \param [in] hint Specified the index used to scan data. e.g. {"":"ageIndex"} means
+                    using index "ageIndex" to scan data(index scan);
+                    {"":null} means table scan. when hint is not provided,
+                    database automatically match the optimal index to scan data
     \param [in] numToSkip Skip the first numToSkip documents, default is 0
-    \param [in] flag The query flag, defalt to be 0
-
-        FLG_QUERY_FORCE_HINT(0x00000080)      : Force to use specified hint to query, if database have no index assigned by the hint, fail to query
-        FLG_QUERY_PARALLED(0x00000100)        : Enable paralled sub query
-        FLG_QUERY_WITH_RETURNDATA(0x00000200) : In general, query won't return data until cursor get from database,
-                                                when add this flag, return data in query response, it will be more high-performance
-
+    \param [in] flag The query flag, default to be 0. Please see the definition of follow flags for more detail. Usage: e.g. set ( QUERY_FORCE_HINT | QUERY_WITH_RETURNDATA ) to param flag
+    \code
+        QUERY_FORCE_HINT
+        QUERY_PARALLED
+        QUERY_WITH_RETURNDATA
+    \endcode
     \param [out] obj The first matching object
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
@@ -903,15 +861,19 @@ namespace sdbclient
     \param [in] condition The matching rule, return all the documents if not provided
     \param [in] selected The selective rule, return the whole document if not provided
     \param [in] orderBy The ordered rule, result set is unordered if not provided
-    \param [in] hint The hint, automatically match the optimal hint if not provided
+    \param [in] hint Specified the index used to scan data. e.g. {"":"ageIndex"} means
+                    using index "ageIndex" to scan data(index scan);
+                    {"":null} means table scan. when hint is not provided,
+                    database automatically match the optimal index to scan data
     \param [in] numToSkip Skip the first numToSkip documents, default is 0
     \param [in] numToReturn Only return numToReturn documents, default is -1 for returning all results
-    \param [in] flag The query flag, defalt to be 0
-
-        FLG_QUERY_FORCE_HINT(0x00000080)      : Force to use specified hint to query, if database have no index assigned by the hint, fail to query
-        FLG_QUERY_PARALLED(0x00000100)        : Enable paralled sub query
-        FLG_QUERY_WITH_RETURNDATA(0x00000200) : In general, query won't return data until cursor get from database,
-                                                when add this flag, return data in query response, it will be more high-performance
+    \param [in] flag The query flag, default to be 0. Please see the definition of follow flags for more detail. Usage: e.g. set ( QUERY_FORCE_HINT | QUERY_WITH_RETURNDATA ) to param flag
+    \code
+        QUERY_FORCE_HINT
+        QUERY_PARALLED
+        QUERY_WITH_RETURNDATA
+        QUERY_KEEP_SHARDINGKEY_IN_UPDATE
+    \endcode
     \param [in] returnNew When TRUE, returns the updated document rather than the original
     \param [out] cursor The cursor of current query
     \retval SDB_OK Operation Success
@@ -930,7 +892,10 @@ namespace sdbclient
                           )
       {
          if ( !pCollection )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( cursor.pCursor ) ;
          return pCollection->queryAndUpdate( &cursor.pCursor , update, condition,
                                              selected, orderBy, hint,
                                              numToSkip, numToReturn, flag, returnNew ) ;
@@ -949,15 +914,18 @@ namespace sdbclient
     \param [in] condition The matching rule, return all the documents if not provided
     \param [in] selected The selective rule, return the whole document if not provided
     \param [in] orderBy The ordered rule, result set is unordered if not provided
-    \param [in] hint The hint, automatically match the optimal hint if not provided
+    \param [in] hint Specified the index used to scan data. e.g. {"":"ageIndex"} means
+                    using index "ageIndex" to scan data(index scan);
+                    {"":null} means table scan. when hint is not provided,
+                    database automatically match the optimal index to scan data
     \param [in] numToSkip Skip the first numToSkip documents, default is 0
     \param [in] numToReturn Only return numToReturn documents, default is -1 for returning all results
-    \param [in] flag The query flag, defalt to be 0
-
-        FLG_QUERY_FORCE_HINT(0x00000080)      : Force to use specified hint to query, if database have no index assigned by the hint, fail to query
-        FLG_QUERY_PARALLED(0x00000100)        : Enable paralled sub query
-        FLG_QUERY_WITH_RETURNDATA(0x00000200) : In general, query won't return data until cursor get from database,
-                                                when add this flag, return data in query response, it will be more high-performance
+    \param [in] flag The query flag, default to be 0. Please see the definition of follow flags for more detail. Usage: e.g. set ( QUERY_FORCE_HINT | QUERY_WITH_RETURNDATA ) to param flag
+    \code
+        QUERY_FORCE_HINT
+        QUERY_PARALLED
+        QUERY_WITH_RETURNDATA
+    \endcode
     \param [out] cursor The cursor of current query
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
@@ -973,7 +941,10 @@ namespace sdbclient
                           )
       {
          if ( !pCollection )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( cursor.pCursor ) ;
          return pCollection->queryAndRemove( &cursor.pCursor , condition,
                                              selected, orderBy, hint,
                                              numToSkip, numToReturn, flag ) ;
@@ -993,7 +964,7 @@ namespace sdbclient
       }*/
 
 /** \fn INT32 createIndex ( const bson::BSONObj &indexDef,
-                            const CHAR *pName,
+                            const CHAR *pIndexName,
                             BOOLEAN isUnique,
                             BOOLEAN isEnforced
                           )
@@ -1007,19 +978,19 @@ namespace sdbclient
     \retval Others Operation Fail
 */
       INT32 createIndex ( const bson::BSONObj &indexDef,
-                          const CHAR *pName,
+                          const CHAR *pIndexName,
                           BOOLEAN isUnique,
                           BOOLEAN isEnforced
                         )
       {
          if ( !pCollection )
             return SDB_NOT_CONNECTED ;
-         return pCollection->createIndex ( indexDef, pName, isUnique,
+         return pCollection->createIndex ( indexDef, pIndexName, isUnique,
                                            isEnforced ) ;
       }
 
 /** \fn INT32 createIndex ( const bson::BSONObj &indexDef,
-                            const CHAR *pName,
+                            const CHAR *pIndexName,
                             BOOLEAN isUnique,
                             BOOLEAN isEnforced,
                             INT32 sortBufferSize )
@@ -1035,60 +1006,63 @@ namespace sdbclient
     \retval Others Operation Fail
 */
       INT32 createIndex ( const bson::BSONObj &indexDef,
-                          const CHAR *pName,
+                          const CHAR *pIndexName,
                           BOOLEAN isUnique,
                           BOOLEAN isEnforced,
                           INT32 sortBufferSize )
       {
          if ( !pCollection )
             return SDB_NOT_CONNECTED ;
-         return pCollection->createIndex ( indexDef, pName, isUnique,
+         return pCollection->createIndex ( indexDef, pIndexName, isUnique,
                                            isEnforced, sortBufferSize ) ;
       }
 
 /* \fn INT32 getIndexes ( _sdbCursor **cursor,
-                         const CHAR *pName )
+                         const CHAR *pIndexName )
     \brief Get all of or one of the indexes in current collection
-    \param [in] pName  The index name, returns all of the indexes if this parameter is null
+    \param [in] pIndexName  The index name, returns all of the indexes if this parameter is null
     \param [out] cursor The cursor of all the result for current query
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
 */
       INT32 getIndexes ( _sdbCursor **cursor,
-                         const CHAR *pName )
+                         const CHAR *pIndexName )
       {
          if ( !pCollection )
             return SDB_NOT_CONNECTED ;
-         return pCollection->getIndexes ( cursor, pName ) ;
+         return pCollection->getIndexes ( cursor, pIndexName ) ;
       }
 
 /** \fn INT32 getIndexes ( sdbCursor &cursor,
-                         const CHAR *pName )
+                         const CHAR *pIndexName )
     \brief Get all of or one of the indexes in current collection
-    \param [in] pName  The index name, returns all of the indexes if this parameter is null
+    \param [in] pIndexName  The index name, returns all of the indexes if this parameter is null
     \param [out] cursor The cursor of all the result for current query
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
 */
       INT32 getIndexes ( sdbCursor &cursor,
-                         const CHAR *pName )
+                         const CHAR *pIndexName )
       {
          if ( !pCollection )
+         {
             return SDB_NOT_CONNECTED ;
-         return pCollection->getIndexes ( cursor, pName ) ;
+         }
+         RELEASE_INNER_HANDLE( cursor.pCursor ) ;
+         return pCollection->getIndexes ( cursor, pIndexName ) ;
       }
 
-/** \fn INT32 dropIndex ( const CHAR *pName )
+/** \fn INT32 dropIndex ( const CHAR *pIndexName )
     \brief Drop the index in current collection
-    \param [in] pName The index name
+    \param [in] pIndexName The index name
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
 */
-      INT32 dropIndex ( const CHAR *pName )
+      INT32 dropIndex ( const CHAR *pIndexName )
       {
          if ( !pCollection )
             return SDB_NOT_CONNECTED ;
-         return pCollection->dropIndex ( pName ) ;
+         return pCollection->dropIndex ( pIndexName ) ;
       }
 
 /** \fn INT32 create ()
@@ -1183,21 +1157,26 @@ namespace sdbclient
                  )
 {
    if ( !pCollection )
+   {
       return SDB_NOT_CONNECTED ;
+   }
+   RELEASE_INNER_HANDLE( cursor.pCursor ) ;
    return pCollection->aggregate ( cursor, obj ) ;
 }
 
 /* \fn  INT32 getQueryMeta ( _sdbCursor **cursor,
-                             const bson::BSONObj &condition,
-                             const bson::BSONObj &selected,
-                             const bson::BSONObj &orderBy,
-                             INT64 numToSkip,
-                             INT64 numToReturn ) ;
+                             const bson::BSONObj &condition = _sdbStaticObject,
+                             const bson::BSONObj &selected = _sdbStaticObject,
+                             const bson::BSONObj &orderBy = _sdbStaticObject,
+                             INT64 numToSkip = 0,
+                             INT64 numToReturn = -1 ) ;
     \brief Get the index blocks' or data blocks' infomation for concurrent query
     \param [in] condition The matching rule, return all the documents if not provided
     \param [in] orderBy The ordered rule, result set is unordered if not provided
-    \param [in] hint One of the indexs of current collection, using default index to query if not provided
-                    eg:{"":"ageIndex"}
+    \param [in] hint Specified the index used to scan data. e.g. {"":"ageIndex"} means
+                    using index "ageIndex" to scan data(index scan);
+                    {"":null} means table scan. when hint is not provided,
+                    database automatically match the optimal index to scan data
     \param [in] numToSkip Skip the first numToSkip documents, default is 0
     \param [in] numToReturn Only return numToReturn documents, default is -1 for returning all results
     \param [out] cursor The cursor of current query
@@ -1205,24 +1184,26 @@ namespace sdbclient
     \retval Others Operation Fail
 */
    INT32 getQueryMeta ( _sdbCursor **cursor,
-                             const bson::BSONObj &condition,
-                             const bson::BSONObj &orderBy,
-                             const bson::BSONObj &hint,
-                             INT64 numToSkip,
-                             INT64 numToReturn ) ;
+                             const bson::BSONObj &condition = _sdbStaticObject,
+                             const bson::BSONObj &orderBy = _sdbStaticObject,
+                             const bson::BSONObj &hint = _sdbStaticObject,
+                             INT64 numToSkip = 0,
+                             INT64 numToReturn = -1 ) ;
 
 /** \fn  INT32 getQueryMeta ( sdbCursor &cursor,
-                         const bson::BSONObj &condition,
-                         const bson::BSONObj &selected,
-                         const bson::BSONObj &orderBy,
-                         INT64 numToSkip,
-                         INT64 numToReturn )
+                         const bson::BSONObj &condition = _sdbStaticObject,
+                         const bson::BSONObj &selected = _sdbStaticObject,
+                         const bson::BSONObj &orderBy = _sdbStaticObject,
+                         INT64 numToSkip = 0,
+                         INT64 numToReturn = -1 )
     \brief Get the index blocks' or data blocks' infomations for concurrent query
     \param [in] condition The matching rule, return the whole range of index blocks if not provided
                     eg:{"age":{"$gt":25},"age":{"$lt":75}}
     \param [in] orderBy The ordered rule, result set is unordered if not provided
-    \param [in] hint One of the indexs in current collection, using default index to query if not provided
-                    eg:{"":"ageIndex"}
+    \param [in] hint Specified the index used to scan data. e.g. {"":"ageIndex"} means
+                    using index "ageIndex" to scan data(index scan);
+                    {"":null} means table scan. when hint is not provided,
+                    database automatically match the optimal index to scan data
     \param [in] numToSkip Skip the first numToSkip documents, default is 0
     \param [in] numToReturn Only return numToReturn documents, default is -1 for returning all results
     \param [out] cursor The result of query
@@ -1230,14 +1211,17 @@ namespace sdbclient
     \retval Others Operation Fail
 */
     INT32 getQueryMeta ( sdbCursor &cursor,
-                         const bson::BSONObj &condition,
-                         const bson::BSONObj &orderBy,
-                         const bson::BSONObj &hint,
-                         INT64 numToSkip,
-                         INT64 numToReturn )
+                         const bson::BSONObj &condition = _sdbStaticObject,
+                         const bson::BSONObj &orderBy = _sdbStaticObject,
+                         const bson::BSONObj &hint = _sdbStaticObject,
+                         INT64 numToSkip = 0,
+                         INT64 numToReturn = -1 )
     {
        if ( !pCollection )
+       {
           return SDB_NOT_CONNECTED ;
+       }
+       RELEASE_INNER_HANDLE( cursor.pCursor ) ;
        return pCollection->getQueryMeta ( cursor, condition, orderBy,
                                      hint, numToSkip, numToReturn ) ;
     }
@@ -1252,7 +1236,7 @@ namespace sdbclient
     \retval Others Operation Fail
 */
     INT32 attachCollection ( const CHAR *subClFullName,
-                                      const bson::BSONObj &options)
+                             const bson::BSONObj &options)
     {
        if ( !pCollection )
           return SDB_NOT_CONNECTED ;
@@ -1273,27 +1257,36 @@ namespace sdbclient
     }
 
 /** \fn INT32 explain ( sdbCursor &cursor,
-                    const bson::BSONObj &condition,
-                    const bson::BSONObj &select,
-                    const bson::BSONObj &orderBy,
-                    const bson::BSONObj &hint,
-                    INT64 numToSkip,
-                    INT64 numToReturn,
-                    INT32 flag,
-                    const bson::BSONObj &options )
+                    const bson::BSONObj &condition = _sdbStaticObject,
+                    const bson::BSONObj &select = _sdbStaticObject,
+                    const bson::BSONObj &orderBy = _sdbStaticObject,
+                    const bson::BSONObj &hint = _sdbStaticObject,
+                    INT64 numToSkip = 0,
+                    INT64 numToReturn = -1,
+                    INT32 flag = 0,
+                    const bson::BSONObj &options = _sdbStaticObject )
     \brief Get access plan of query.
     \param [in] condition The matching rule, return all the documents if null
     \param [in] select The selective rule, return the whole document if null
     \param [in] orderBy The ordered rule, never sort if null
-    \param [in] hint The hint, automatically match the optimal hint if null
+    \param [in] hint Specified the index used to scan data. e.g. {"":"ageIndex"} means
+                    using index "ageIndex" to scan data(index scan);
+                    {"":null} means table scan. when hint is not provided,
+                    database automatically match the optimal index to scan data
     \param [in] numToSkip Skip the first numToSkip documents, never skip if this parameter is 0
     \param [in] numToReturn Only return numToReturn documents, return all if this parameter is -1
+    \param [in] flag The query flag, default to be 0. Please see the definition of follow flags for more detail. Usage: e.g. set ( QUERY_FORCE_HINT | QUERY_WITH_RETURNDATA ) to param flag
+    \code
+        QUERY_FORCE_HINT
+        QUERY_PARALLED
+        QUERY_WITH_RETURNDATA
+    \endcode
     \param [in] options the rules of explain, the options are as below:
 
         Run     : Whether execute query explain or not, true for excuting query explain then get
                   the data and time information; false for not excuting query explain but get the
                   query explain information only. e.g. {Run:true}
-    \param [in] flags The flags of query
+
     \param [out] cursor The cursor of current query
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
@@ -1309,7 +1302,10 @@ namespace sdbclient
                     const bson::BSONObj &options   = _sdbStaticObject )
     {
        if ( !pCollection )
+       {
          return SDB_NOT_CONNECTED ;
+       }
+       RELEASE_INNER_HANDLE( cursor.pCursor ) ;
        return pCollection->explain( cursor, condition, select, orderBy, hint,
                                     numToSkip, numToReturn, flag, options ) ;
     }
@@ -1342,19 +1338,35 @@ namespace sdbclient
        return pCollection->removeLob( oid ) ;
     }
 
+/** \fn INT32 truncateLob( const bson::OID &oid, INT64 length )
+    \brief truncate large object to specified length.
+    \param [in] oid The id of the large object
+    \param [in] length The truncate length
+    \retval SDB_OK Operation Success
+    \retval Others Operation Fail
+*/
+    INT32 truncateLob( const bson::OID &oid, INT64 length )
+    {
+       if ( !pCollection )
+         return SDB_NOT_CONNECTED ;
+       return pCollection->truncateLob( oid, length ) ;
+    }
+
 /** \fn INT32 openLob( sdbLob &lob, const bson::OID &oid )
-    \brief Open an existing large object for reading.
+    \brief Open an existing large object for reading or writing.
     \param [in] oid The id of the large object
     \param [out] lob The large object to get
+    \param [in] lob open mode, should be SDB_LOB_READ or SDB_LOB_WRITE
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
     \note Need to close lob to release resource, after opening a lob.
 */
-    INT32 openLob( sdbLob &lob, const bson::OID &oid )
+    INT32 openLob( sdbLob &lob, const bson::OID &oid,
+                   SDB_LOB_OPEN_MODE mode = SDB_LOB_READ )
     {
        if ( !pCollection )
          return SDB_NOT_CONNECTED ;
-       return pCollection->openLob( lob, oid ) ;
+       return pCollection->openLob( lob, oid, mode ) ;
     }
 
 /** \fn INT32 listLobs( sdbCursor &cursor )
@@ -1366,7 +1378,10 @@ namespace sdbclient
     INT32 listLobs( sdbCursor &cursor )
     {
        if ( !pCollection )
+       {
          return SDB_NOT_CONNECTED ;
+       }
+       RELEASE_INNER_HANDLE( cursor.pCursor ) ;
        return pCollection->listLobs( cursor ) ;
     }
 
@@ -1411,7 +1426,47 @@ namespace sdbclient
         return pCollection->dropIdIndex() ;
     }
 
+/* \fn INT32 pop(const bson::BSONObj &option)
+    \brief Pop records from a capped collection
+    \param [in] option The arguments to pop records.
+    \retval SDB_OK Operation Success
+    \retval Others Operation Fail
+*/
+      INT32 pop ( const bson::BSONObj &option = _sdbStaticObject )
+      {
+         if ( !pCollection )
+            return SDB_NOT_CONNECTED ;
+         return pCollection->pop( option ) ;
+      }
 
+/** \fn INT32 listLobPieces( _sdbCursor **cursor )
+    \brief List all the lob pieces' meta data in current collection.
+    \param [out] cursor The cursor of current query
+    \retval SDB_OK Operation Success
+    \retval Others Operation Fail
+*/
+      INT32 listLobPieces( _sdbCursor **cursor )
+      {
+         if( !pCollection )
+            return SDB_NOT_CONNECTED ;
+         return pCollection->listLobPieces( cursor ) ;
+      }
+
+/** \fn INT32 listLobPieces( sdbCursor &cursor )
+    \brief List all the lob pieces' meta data in current collection.
+    \param [out] cursor The curosr reference of the result
+    \retval SDB_OK Operation Success
+    \retval Others Operation Fail
+*/
+      INT32 listLobPieces( sdbCursor &cursor )
+      {
+         if( !pCollection )
+         {
+            return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( cursor.pCursor ) ;
+         return pCollection->listLobPieces( cursor ) ;
+      }
    } ;
 
 /** \enum sdbNodeStatus
@@ -1438,38 +1493,30 @@ namespace sdbclient
    public :
       _sdbNode () {}
       virtual ~_sdbNode () {}
-      // connect to the current node
       virtual INT32 connect ( _sdb **dbConn ) = 0 ;
       virtual INT32 connect ( sdb &dbConn ) = 0 ;
 
-      // get status of the current node
       virtual sdbNodeStatus getStatus () = 0 ;
 
-      // get host name of the current node
       virtual const CHAR *getHostName () = 0 ;
 
-      // get service name of the current node
       virtual const CHAR *getServiceName () = 0 ;
 
-      // get node name of the current node
       virtual const CHAR *getNodeName () = 0 ;
 
-      // stop the node
       virtual INT32 stop () = 0 ;
 
-      // start the node
       virtual INT32 start () = 0 ;
 
-      // modify config for the current node
 /*      virtual INT32 modifyConfig ( std::map<std::string,std::string>
                                    &config ) = 0 ; */
    } ;
 
 /** \class sdbNode
-    \brief Database operation interfaces of node. This class takes the place of class "replicaNode".
+    \brief Database operation interfaces of node. This class takes the place of class "sdbReplicaNode".
     \note We use concept "node" instead of "replica node",
-            and change the class name "ReplicaNode" to "Node".
-            class "ReplicaNode" will be deprecated in version 2.x.
+            and change the class name "sdbReplicaNode" to "sdbNode".
+            class "sdbReplicaNode" will be deprecated in version 2.x.
 */
    class DLLEXPORT sdbNode
    {
@@ -1533,13 +1580,17 @@ namespace sdbclient
       INT32 connect ( sdb &dbConn )
       {
          if ( !pNode )
+         {
             return SDB_NOT_CONNECTED ;
+         }
          return pNode->connect ( dbConn ) ;
       }
 
 /** \fn sdbNodeStatus getStatus ()
     \brief Get status of the current node.
     \return  The status of current node.
+    \deprecated Since v2.8, the status of node are invalid,
+                never use this api again.
 */
       sdbNodeStatus getStatus ()
       {
@@ -1620,27 +1671,23 @@ namespace sdbclient
    public :
       _sdbReplicaGroup () {}
       virtual ~_sdbReplicaGroup () {}
-      // get number of logical nodes
       virtual INT32 getNodeNum ( sdbNodeStatus status, INT32 *num ) = 0 ;
 
-      // get detailed information for the set
       virtual INT32 getDetail ( bson::BSONObj &result ) = 0 ;
 
-      // get the master node
       virtual INT32 getMaster ( _sdbNode **node ) = 0 ;
       virtual INT32 getMaster ( sdbNode &node ) = 0 ;
 
-      // get one of the slave node
-      virtual INT32 getSlave ( _sdbNode **node ) = 0 ;
-      virtual INT32 getSlave ( sdbNode &node ) = 0 ;
+      virtual INT32 getSlave ( _sdbNode **node,
+                               const vector<INT32>& positions = _sdbStaticVec ) = 0 ;
+      virtual INT32 getSlave ( sdbNode &node,
+                               const vector<INT32>& positions = _sdbStaticVec ) = 0 ;
 
-      // get a given node by name
       virtual INT32 getNode ( const CHAR *pNodeName,
                               _sdbNode **node ) = 0 ;
       virtual INT32 getNode ( const CHAR *pNodeName,
                               sdbNode &node ) = 0 ;
 
-      // get a given node by host/service name
       virtual INT32 getNode ( const CHAR *pHostName,
                               const CHAR *pServiceName,
                               _sdbNode **node ) = 0 ;
@@ -1648,7 +1695,6 @@ namespace sdbclient
                               const CHAR *pServiceName,
                               sdbNode &node ) = 0 ;
 
-      // create a new node in current replica group
       virtual INT32 createNode ( const CHAR *pHostName,
                                  const CHAR *pServiceName,
                                  const CHAR *pDatabasePath,
@@ -1658,32 +1704,27 @@ namespace sdbclient
                                  const CHAR *pServiceName,
                                  const CHAR *pDatabasePath,
                                  const bson::BSONObj &options = _sdbStaticObject )= 0;
-      
-      // remove the specified node in current replica group
+
       virtual INT32 removeNode ( const CHAR *pHostName,
                                  const CHAR *pServiceName,
                                  const bson::BSONObj &configure = _sdbStaticObject ) = 0 ;
-      // stop the replica group
       virtual INT32 stop () = 0 ;
 
-      // start the replica group
       virtual INT32 start () = 0 ;
 
-      // get the replica group name
       virtual const CHAR *getName () = 0 ;
 
-      // whether the current replica group is catalog replica group or not
       virtual BOOLEAN isCatalog () = 0 ;
 
-      // attach node
       virtual INT32 attachNode( const CHAR *pHostName,
                                 const CHAR *pSvcName,
                                 const bson::BSONObj &options = _sdbStaticObject ) = 0 ;
 
-      // detach node
       virtual INT32 detachNode( const CHAR *pHostName,
                                 const CHAR *pSvcName,
                                 const bson::BSONObj &options = _sdbStaticObject ) = 0 ;
+
+      virtual INT32 reelect( const bson::BSONObj &options = _sdbStaticObject ) = 0 ;
    } ;
 
 /** \class sdbReplicaGroup
@@ -1696,7 +1737,7 @@ namespace sdbclient
       sdbReplicaGroup& operator=( const sdbReplicaGroup& ) ;
    public :
 /** \var pReplicaGroup
-    \breif A pointer of virtual base class _sdbReplicaGroup
+    \brief A pointer of virtual base class _sdbReplicaGroup
 
      Class sdbReplicaGroup is a shell for _sdbReplicaGroup. We use pCursor to
      call the methods in class _sdbReplicaGroup.
@@ -1731,6 +1772,8 @@ namespace sdbclient
     \param [out] num The count of node.
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
+    \deprecated Since v2.6, the status of node are invalid,
+                never use this api again.
 */
       INT32 getNodeNum ( sdbNodeStatus status, INT32 *num )
       {
@@ -1774,42 +1817,52 @@ namespace sdbclient
       INT32 getMaster ( sdbNode &node )
       {
          if ( !pReplicaGroup )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( node.pNode ) ;
          return pReplicaGroup->getMaster ( node ) ;
       }
 
-/* \fn INT32 getSlave ( _sdbNode **node )
+/* \fn INT32 getSlave ( _sdbNode **node, const vector<INT32>& positions )
     \brief Get one of slave node of the current replica group,
            if no slave exists then get master
+    \param [in] positions The positions of nodes
     \param [out] node The slave node
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
 */
-      INT32 getSlave ( _sdbNode **node )
+      INT32 getSlave ( _sdbNode **node,
+                       const vector<INT32>& positions = _sdbStaticVec )
       {
          if ( !pReplicaGroup )
             return SDB_NOT_CONNECTED ;
-         return pReplicaGroup->getSlave ( node ) ;
+         return pReplicaGroup->getSlave ( node, positions ) ;
       }
 
-/** \fn  INT32 getSlave ( sdbNode &node )
+/** \fn  INT32 getSlave ( sdbNode &node, const vector<INT32>& positions )
     \brief Get one of slave node of the current replica group,
            if no slave exists then get master
+    \param [in] positions The positions of nodes
     \param [out] node The slave node
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
 */
-      INT32 getSlave ( sdbNode &node )
+      INT32 getSlave ( sdbNode &node,
+                       const vector<INT32>& positions = _sdbStaticVec )
       {
          if ( !pReplicaGroup )
+         {
             return SDB_NOT_CONNECTED ;
-         return pReplicaGroup->getSlave ( node ) ;
+         }
+         RELEASE_INNER_HANDLE( node.pNode ) ;
+         return pReplicaGroup->getSlave ( node, positions ) ;
       }
 
 /* \fn INT32 getNode ( const CHAR *pNodeName,
                       _sdbNode **node )
     \brief Get specified node from current replica group.
-    \param [in] pHostName The host name of the node
+    \param [in] pNodeName The name of the node, with the format of "hostname:port".
     \param [out] node  The specified node
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
@@ -1825,7 +1878,7 @@ namespace sdbclient
 /** \fn INT32 getNode ( const CHAR *pNodeName,
                       sdbNode &node )
     \brief Get specified node from current replica group.
-    \param [in] pHostName The host name of the node.
+    \param [in] pNodeName The name of the node, with the format of "hostname:port".
     \param [out] node  The specified node.
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
@@ -1834,7 +1887,10 @@ namespace sdbclient
                       sdbNode &node )
       {
          if ( !pReplicaGroup )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( node.pNode ) ;
          return pReplicaGroup->getNode ( pNodeName, node ) ;
       }
 
@@ -1872,7 +1928,10 @@ namespace sdbclient
                       sdbNode &node )
       {
          if ( !pReplicaGroup )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( node.pNode ) ;
          return pReplicaGroup->getNode ( pHostName, pServiceName, node ) ;
       }
 
@@ -1887,6 +1946,7 @@ namespace sdbclient
     \param [in] configure The configurations for the node
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
+    \deprecated we have override this api by passing a "BSONObj" instead of a "map"
 */
       INT32 createNode ( const CHAR *pHostName,
                          const CHAR *pServiceName,
@@ -2003,7 +2063,7 @@ namespace sdbclient
                         const bson::BSONObj &options = _sdbStaticObject )
       {
          if ( !pReplicaGroup )
-            return FALSE ;
+            return SDB_NOT_CONNECTED ;
          return pReplicaGroup->attachNode( pHostName, pSvcName, options ) ;
       }
 
@@ -2022,10 +2082,23 @@ namespace sdbclient
                         const bson::BSONObj &options = _sdbStaticObject )
       {
          if ( !pReplicaGroup )
-            return FALSE ;
+            return SDB_NOT_CONNECTED ;
          return pReplicaGroup->detachNode( pHostName, pSvcName, options ) ;
       }
 
+/** \fn INT32 reelect( const bson::BSONObj &options )
+ *  \brief Force the replica group to reelect primary node.
+ *  \param [in] options options of reelect:
+      Seconds: Reelection timeout
+ *  \retval SDB_OK Operation Success
+ *  \retval Others Operation Fail
+ */
+      INT32 reelect( const bson::BSONObj &options = _sdbStaticObject )
+      {
+         if( !pReplicaGroup )
+            return SDB_NOT_CONNECTED ;
+         return pReplicaGroup->reelect( options ) ;
+      }
    } ;
 
    class DLLEXPORT _sdbCollectionSpace
@@ -2036,14 +2109,12 @@ namespace sdbclient
    public :
       _sdbCollectionSpace () {}
       virtual ~_sdbCollectionSpace () {}
-      // get a collection object
       virtual INT32 getCollection ( const CHAR *pCollectionName,
                                     _sdbCollection **collection ) = 0 ;
 
       virtual INT32 getCollection ( const CHAR *pCollectionName,
                                     sdbCollection &collection ) = 0 ;
 
-      // create a new collection object with options
       virtual INT32 createCollection ( const CHAR *pCollection,
                                        const bson::BSONObj &options,
                                        _sdbCollection **collection ) = 0 ;
@@ -2052,23 +2123,21 @@ namespace sdbclient
                                        const bson::BSONObj &options,
                                        sdbCollection &collection ) = 0 ;
 
-      // create a new collection object
       virtual INT32 createCollection ( const CHAR *pCollection,
                                        _sdbCollection **collection ) = 0 ;
 
       virtual INT32 createCollection ( const CHAR *pCollection,
                                        sdbCollection &collection ) = 0 ;
 
-      // drop an existing collection
       virtual INT32 dropCollection ( const CHAR *pCollection ) = 0 ;
 
-      // create a collection space with current collection space name
       virtual INT32 create () = 0 ;
-      // drop a collection space with current collection space name
       virtual INT32 drop () = 0 ;
 
-      // get the collecton's name
       virtual const CHAR *getCSName () = 0 ;
+
+      virtual INT32 renameCollection( const CHAR* oldName, const CHAR* newName,
+                         const bson::BSONObj &options = _sdbStaticObject ) = 0 ;
 
    } ;
 /** \class sdbCollectionSpace
@@ -2143,7 +2212,10 @@ namespace sdbclient
                             sdbCollection &collection )
       {
          if ( !pCollectionSpace )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( collection.pCollection ) ;
          return pCollectionSpace->getCollection ( pCollectionName,
                                                   collection ) ;
       }
@@ -2188,7 +2260,10 @@ namespace sdbclient
                                sdbCollection &collection )
       {
          if ( !pCollectionSpace )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( collection.pCollection ) ;
          return pCollectionSpace->createCollection ( pCollection,
                                                      options,
                                                      collection ) ;
@@ -2225,7 +2300,10 @@ namespace sdbclient
                                sdbCollection &collection )
       {
          if ( !pCollectionSpace )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( collection.pCollection ) ;
          return pCollectionSpace->createCollection ( pCollection,
                                                      collection ) ;
       }
@@ -2280,6 +2358,24 @@ namespace sdbclient
             return NULL ;
          return pCollectionSpace->getCSName () ;
       }
+
+/** \fn INT32 renameCollection(const CHAR* oldName,
+                               const CHAR* newName,
+                               const bson::BSONObj &options)
+    \brief Rename collection ( only support the standalone mode )
+    \param [in] oldName The old name of collectionSpace.
+    \param [in] newName The new name of collectionSpace.
+    \param [in] options Reserved argument
+    \retval SDB_OK Operation Success
+    \retval Others Operation Fail
+      */
+      INT32 renameCollection( const CHAR* oldName, const CHAR* newName,
+                              const bson::BSONObj &options = _sdbStaticObject )
+      {
+         if( !pCollectionSpace )
+            return SDB_NOT_CONNECTED ;
+         return pCollectionSpace->renameCollection( oldName, newName, options ) ;
+      }
    } ;
 
    class DLLEXPORT _sdbDomain
@@ -2303,6 +2399,9 @@ namespace sdbclient
 
       virtual INT32 listCollectionsInDomain ( sdbCursor &cursor ) = 0 ;
 
+      virtual INT32 listReplicaGroupInDomain( _sdbCursor **cursor ) = 0 ;
+
+      virtual INT32 listReplicaGroupInDomain( sdbCursor &cursor ) = 0 ;
    } ;
 
    /** \class  sdbDomain
@@ -2357,7 +2456,7 @@ namespace sdbclient
                    changes to contain "group1" "group2" or "group3".
                    We can add or remove groups in current domain. However, if a group has data
                    in it, remove it out of domain will be failing.
-        AutoSplit: Alter current domain to have the ability of automatically split or not. 
+        AutoSplit: Alter current domain to have the ability of automatically split or not.
                    If this option is set to be true, while creating collection(ShardingType is "hash") in this domain,
                    the data of this collection will be split(hash split) into all the groups in this domain automatically.
                    However, it won't automatically split data into those groups which were add into this domain later.
@@ -2382,7 +2481,10 @@ namespace sdbclient
       INT32 listCollectionSpacesInDomain ( sdbCursor &cursor )
       {
          if ( !pDomain )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( cursor.pCursor ) ;
          return pDomain->listCollectionSpacesInDomain ( cursor ) ;
       }
 
@@ -2396,10 +2498,41 @@ namespace sdbclient
       INT32 listCollectionsInDomain ( sdbCursor &cursor )
       {
          if ( !pDomain )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( cursor.pCursor ) ;
          return pDomain->listCollectionsInDomain ( cursor ) ;
       }
 
+/** \fn INT32 listReplicaGroupInDomain( _sdbCursor **cursor )
+    \brief List all the replicagroup in current domain.
+    \param [out] cursor The cursor of current query
+    \retval SDB_OK Operation Success
+    \retval Others Operation Fail
+*/
+      INT32 listReplicaGroupInDomain( _sdbCursor **cursor )
+      {
+         if ( !pDomain )
+            return SDB_NOT_CONNECTED ;
+         return pDomain->listReplicaGroupInDomain( cursor ) ;
+      }
+
+/** \fn INT32 listReplicaGroupInDomain( sdbCursor &cursor )
+    \brief List all the replicagroup in current domain.
+    \param [out] cursor The curosr reference of the result
+    \retval SDB_OK Operation Success
+    \retval Others Operation Fail
+*/
+      INT32 listReplicaGroupInDomain( sdbCursor &cursor )
+      {
+         if ( !pDomain )
+         {
+            return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( cursor.pCursor ) ;
+         return pDomain->listReplicaGroupInDomain( cursor ) ;
+      }
    };
 
    class DLLEXPORT _sdbDataCenter
@@ -2407,7 +2540,7 @@ namespace sdbclient
    private :
       _sdbDataCenter ( const _sdbDataCenter& other ) ; // non construction-copyable
       _sdbDataCenter& operator= ( const _sdbDataCenter& ) ; // non copyable
-      
+
    public :
       _sdbDataCenter () {}
       virtual ~_sdbDataCenter () {}
@@ -2435,7 +2568,7 @@ namespace sdbclient
    private :
       sdbDataCenter ( const sdbDataCenter& ) ; // non construction-copyable
       sdbDataCenter& operator= ( const sdbDataCenter& ) ; // non copyable
-      
+
    public :
 
       /** \var pDC
@@ -2526,7 +2659,7 @@ namespace sdbclient
       /** \fn INT32 createImage( const CHAR *pCataAddrList )
           \brief Create image in data center
           \param [in] pCataAddrList Catalog address list of remote data center, e.g. "192.168.20.165:30003",
-                      "192.168.20.165:30003,192.168.20.166:30003" 
+                      "192.168.20.165:30003,192.168.20.166:30003"
           \retval SDB_OK Operation Success
           \retval Others Operation Fail
       */
@@ -2560,7 +2693,7 @@ namespace sdbclient
             return SDB_NOT_CONNECTED ;
          return pDC->enableImage() ;
       }
-      
+
       /** \fn INT32 disableImage()
           \brief Disable image in data center
           \retval SDB_OK Operation Success
@@ -2599,14 +2732,14 @@ namespace sdbclient
          return pDC->detachGroups( info ) ;
       }
 
-   };   
+   };
 
    class DLLEXPORT _sdbLob
    {
    private :
       _sdbLob ( const _sdbLob& other ) ; // non construction-copyable
       _sdbLob& operator= ( const _sdbLob& ) ; // non copyable
-    
+
    public :
       _sdbLob () {}
 
@@ -2620,12 +2753,16 @@ namespace sdbclient
 
       virtual INT32 seek ( SINT64 size, SDB_LOB_SEEK whence ) = 0 ;
 
+      virtual INT32 lock( INT64 offset, INT64 length ) = 0 ;
+
+      virtual INT32 lockAndSeek( INT64 offset, INT64 length ) = 0 ;
+
       virtual INT32 isClosed( BOOLEAN &flag ) = 0 ;
 
       virtual INT32 getOid( bson::OID &oid ) = 0 ;
 
       virtual INT32 getSize( SINT64 *size ) = 0 ;
-         
+
       virtual INT32 getCreateTime ( UINT64 *millis ) = 0 ;
 
       virtual BOOLEAN isClosed() = 0 ;
@@ -2633,8 +2770,14 @@ namespace sdbclient
       virtual bson::OID getOid() = 0 ;
 
       virtual SINT64 getSize() = 0 ;
-         
+
       virtual UINT64 getCreateTime () = 0 ;
+
+      virtual UINT64 getModificationTime() = 0 ;
+
+      virtual INT32 getPiecesInfoNum() = 0 ;
+
+      virtual bson::BSONArray getPiecesInfo() = 0 ;
 
    } ;
 
@@ -2723,6 +2866,34 @@ namespace sdbclient
          if ( !pLob )
             return SDB_NOT_CONNECTED ;
          return pLob->seek( size, whence ) ;
+      }
+
+/** \fn INT32 lock ( INT64 offset, INT64 length )
+    \brief lock LOB section for write mode.
+    \param [in] offset The lock start position
+    \param [in] length The lock length, -1 means lock to the end of lob
+    \retval SDB_OK Operation Success
+    \retval Others Operation Fail
+*/
+      INT32 lock ( INT64 offset, INT64 length )
+      {
+         if ( !pLob )
+            return SDB_NOT_CONNECTED ;
+         return pLob->lock( offset, length ) ;
+      }
+
+/** \fn INT32 lockAndSeek ( INT64 offset, INT64 length )
+    \brief lock LOB section for write mode and seek to the offset position.
+    \param [in] offset The lock start position
+    \param [in] length The lock length, -1 means lock to the end of lob
+    \retval SDB_OK Operation Success
+    \retval Others Operation Fail
+*/
+      INT32 lockAndSeek ( INT64 offset, INT64 length )
+      {
+         if ( !pLob )
+            return SDB_NOT_CONNECTED ;
+         return pLob->lockAndSeek( offset, length ) ;
       }
 
 /** \fn INT32 isClosed( BOOLEAN &flag )
@@ -2824,7 +2995,31 @@ namespace sdbclient
             return -1 ;
          return pLob->getCreateTime() ;
       }
-      
+
+/** \fn UINT64 getModificationTime ()
+    \brief Get lob's last modification time.
+    \retval The modification time in milliseconds of lob or -1 when the lob does not be opened or has been closed
+*/
+      UINT64 getModificationTime ()
+      {
+         if ( !pLob )
+            return -1 ;
+         return pLob->getModificationTime() ;
+      }
+
+      INT32 getPiecesInfoNum()
+      {
+         if ( !pLob )
+            return -1 ;
+         return pLob->getPiecesInfoNum() ;
+      }
+
+      bson::BSONArray getPiecesInfo()
+      {
+         if ( !pLob )
+            return bson::BSONArray() ;
+         return pLob->getPiecesInfo() ;
+      }
    } ;
 
    class DLLEXPORT _sdb
@@ -2855,6 +3050,7 @@ namespace sdbclient
 
       virtual void disconnect () = 0 ;
 
+
       virtual INT32 createUsr( const CHAR *pUsrName,
                                const CHAR *pPasswd ) = 0 ;
 
@@ -2875,7 +3071,7 @@ namespace sdbclient
                                   const bson::BSONObj &orderBy   = _sdbStaticObject
                                 ) = 0 ;
 
-      virtual INT32 resetSnapshot ( const bson::BSONObj &condition = _sdbStaticObject ) = 0 ;
+      virtual INT32 resetSnapshot ( const bson::BSONObj &options = _sdbStaticObject ) = 0 ;
 
       virtual INT32 getList ( _sdbCursor **cursor,
                               INT32 listType,
@@ -2933,12 +3129,10 @@ namespace sdbclient
 
       virtual INT32 listCollectionSpaces ( sdbCursor &result ) = 0 ;
 
-      // list all collections in a given database
       virtual INT32 listCollections ( _sdbCursor **result ) = 0 ;
 
       virtual INT32 listCollections ( sdbCursor &result ) = 0 ;
 
-      // list all the replica groups in the given database
       virtual INT32 listReplicaGroups ( _sdbCursor **result ) = 0 ;
 
       virtual INT32 listReplicaGroups ( sdbCursor &result ) = 0 ;
@@ -2988,7 +3182,6 @@ namespace sdbclient
       virtual INT32 transactionRollback() = 0 ;
 
       virtual INT32 flushConfigure( const bson::BSONObj &options ) = 0 ;
-      // stored procedure
       virtual INT32 crtJSProcedure ( const CHAR *code ) = 0 ;
       virtual INT32 rmProcedure( const CHAR *spName ) = 0 ;
       virtual INT32 listProcedures( _sdbCursor **cursor, const bson::BSONObj &condition ) = 0 ;
@@ -3002,7 +3195,6 @@ namespace sdbclient
                             sdbCursor &cursor,
                             bson::BSONObj &errmsg ) = 0 ;
 
-      // bakup
       virtual INT32 backupOffline ( const bson::BSONObj &options) = 0 ;
       virtual INT32 listBackup ( _sdbCursor **cursor,
                               const bson::BSONObj &options,
@@ -3016,7 +3208,6 @@ namespace sdbclient
                               const bson::BSONObj &orderBy = _sdbStaticObject)  = 0 ;
       virtual INT32 removeBackup ( const bson::BSONObj &options ) = 0 ;
 
-      // task
       virtual INT32 listTasks ( _sdbCursor **cursor,
                         const bson::BSONObj &condition = _sdbStaticObject,
                         const bson::BSONObj &selector = _sdbStaticObject,
@@ -3035,17 +3226,15 @@ namespace sdbclient
 
       virtual INT32 cancelTask ( SINT64 taskID,
                         BOOLEAN isAsync ) = 0 ;
-      // set session attribute
       virtual INT32 setSessionAttr ( const bson::BSONObj &options =
-                                     _sdbStaticObject) = 0 ;
-      // close all cursor
+                                     _sdbStaticObject ) = 0 ;
+      virtual INT32 getSessionAttr ( bson::BSONObj & result ) = 0 ;
+
       virtual INT32 closeAllCursors () = 0 ;
 
-      // connection is closed
       virtual INT32 isValid( BOOLEAN *result ) = 0 ;
       virtual BOOLEAN isValid() = 0 ;
-      
-      // domain
+
       virtual INT32 createDomain ( const CHAR *pDomainName,
                                    const bson::BSONObj &options,
                                    _sdbDomain **domain ) = 0 ;
@@ -3078,19 +3267,57 @@ namespace sdbclient
       virtual INT32 getDC( _sdbDataCenter **dc ) = 0 ;
       virtual INT32 getDC( sdbDataCenter &dc ) = 0 ;
 
-/*      virtual INT32 modifyConfig ( INT32 nodeID,
-                       std::map<std::string,std::string> &config ) = 0 ;
-
-      virtual INT32 getConfig ( INT32 nodeID,
-                       std::map<std::string,std::string> &config ) = 0 ;
-
-      virtual INT32 modifyConfig (
-                       std::map<std::string,std::string> &config ) = 0 ;
-
-      virtual INT32 getConfig (
-                       std::map<std::string,std::string> &config ) = 0 ;
-*/
       static _sdb *getObj ( BOOLEAN useSSL = FALSE ) ;
+
+      virtual UINT64 getLastAliveTime() const = 0 ;
+
+      virtual INT32 syncDB(
+         const bson::BSONObj &options = _sdbStaticObject ) = 0 ;
+
+      virtual INT32 analyze(
+         const bson::BSONObj &options = _sdbStaticObject ) = 0 ;
+
+      virtual INT32 forceSession(
+         SINT64 sessionID,
+         const bson::BSONObj &options = _sdbStaticObject ) = 0 ;
+
+      virtual INT32 forceStepUp(
+         const bson::BSONObj &options = _sdbStaticObject ) = 0 ;
+
+      virtual INT32 invalidateCache(
+         const bson::BSONObj &options = _sdbStaticObject ) = 0 ;
+
+      virtual INT32 reloadConfig(
+         const bson::BSONObj &options = _sdbStaticObject ) = 0 ;
+
+      virtual INT32 setPDLevel( INT32 level,
+         const bson::BSONObj &options = _sdbStaticObject ) = 0 ;
+
+      virtual INT32 msg( const CHAR* msg ) = 0 ;
+
+      virtual INT32 loadCS( const CHAR* csName,
+         const bson::BSONObj &options = _sdbStaticObject ) = 0 ;
+
+      virtual INT32 unloadCS( const CHAR* csName,
+         const bson::BSONObj &options = _sdbStaticObject ) = 0 ;
+
+      virtual INT32 traceStart( UINT32 traceBufferSize,
+                                const CHAR* component = NULL,
+                                const CHAR* breakpoint = NULL,
+                      const vector<UINT32> &tidVec = _sdbStaticUINT32Vec ) = 0 ;
+
+      virtual INT32 traceStop( const CHAR* dumpFileName ) = 0 ;
+
+      virtual INT32 traceResume() = 0 ;
+
+      virtual INT32 traceStatus( _sdbCursor** cursor ) = 0 ;
+
+      virtual INT32 traceStatus( sdbCursor& cursor ) = 0 ;
+
+
+      virtual INT32 renameCollectionSpace( const CHAR* oldName,
+                                           const CHAR* newName,
+                        const bson::BSONObj &options = _sdbStaticObject ) = 0 ;
    } ;
 /** \typedef class _sdb _sdb
 */
@@ -3290,21 +3517,26 @@ namespace sdbclient
     \brief Get the snapshots of specified type.
     \param [in] snapType The snapshot type as below
 
-        SDB_SNAP_CONTEXTS         : Get all contexts' snapshot
-        SDB_SNAP_CONTEXTS_CURRENT : Get the current context's snapshot
-        SDB_SNAP_SESSIONS         : Get all sessions' snapshot
-        SDB_SNAP_SESSIONS_CURRENT : Get the current session's snapshot
-        SDB_SNAP_COLLECTIONS        : Get the collections' snapshot
-        SDB_SNAP_COLLECTIONSPACES        : Get the collection spaces' snapshot
-        SDB_SNAP_DATABASE         : Get database's snapshot
-        SDB_SNAP_SYSTEM           : Get system's snapshot
-        SDB_SNAP_CATA           : Get catalog's snapshot
-       \param [in] condition The matching rule, match all the documents if not provided.
-       \param [in] select The selective rule, return the whole document if not provided.
-       \param [in] orderBy The ordered rule, result set is unordered if not provided.
-       \param [out] cursor The return cursor object of query.
-       \retval SDB_OK Operation Success
-       \retval Others Operation Fail
+        SDB_SNAP_CONTEXTS         : Get the snapshot of all the contexts
+        SDB_SNAP_CONTEXTS_CURRENT : Get the snapshot of current context
+        SDB_SNAP_SESSIONS         : Get the snapshot of all the sessions
+        SDB_SNAP_SESSIONS_CURRENT : Get the snapshot of current session
+        SDB_SNAP_COLLECTIONS      : Get the snapshot of all the collections
+        SDB_SNAP_COLLECTIONSPACES : Get the snapshot of all the collection spaces
+        SDB_SNAP_DATABASE         : Get the snapshot of the database
+        SDB_SNAP_SYSTEM           : Get the snapshot of the system
+        SDB_SNAP_CATA             : Get the snapshot of the catalog
+        SDB_SNAP_TRANSACTIONS     : Get snapshot of transactions in current session
+        SDB_SNAP_TRANSACTIONS_CURRENT : Get snapshot of all the transactions
+        SDB_SNAP_ACCESSPLANS      : Get the snapshot of cached access plans
+        SDB_SNAP_HEALTH           : Get snapshot of node health detection
+
+    \param [in] condition The matching rule, match all the documents if not provided.
+    \param [in] select The selective rule, return the whole document if not provided.
+    \param [in] orderBy The ordered rule, result set is unordered if not provided.
+    \param [out] cursor The return cursor object of query.
+    \retval SDB_OK Operation Success
+    \retval Others Operation Fail
 */
       INT32 getSnapshot ( sdbCursor &cursor,
                           INT32 snapType,
@@ -3314,7 +3546,10 @@ namespace sdbclient
                         )
       {
          if ( !pSDB )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( cursor.pCursor ) ;
          return pSDB->getSnapshot ( cursor, snapType, condition,
                                     selector, orderBy ) ;
       }
@@ -3329,15 +3564,20 @@ namespace sdbclient
     \brief Get the snapshots of specified type.
     \param [in] snapType The snapshot type as below
 
-        SDB_SNAP_CONTEXTS         : Get all contexts' snapshot
-        SDB_SNAP_CONTEXTS_CURRENT : Get the current context's snapshot
-        SDB_SNAP_SESSIONS         : Get all sessions' snapshot
-        SDB_SNAP_SESSIONS_CURRENT : Get the current session's snapshot
-        SDB_SNAP_COLLECTIONS        : Get the collections' snapshot
-        SDB_SNAP_COLLECTIONSPACES        : Get the collection spaces' snapshot
-        SDB_SNAP_DATABASE         : Get database snapshot
-        SDB_SNAP_SYSTEM           : Get system snapshot
-        SDB_SNAP_CATALOG           : Get catalog snapshot
+        SDB_SNAP_CONTEXTS         : Get the snapshot of all the contexts
+        SDB_SNAP_CONTEXTS_CURRENT : Get the snapshot of current context
+        SDB_SNAP_SESSIONS         : Get the snapshot of all the sessions
+        SDB_SNAP_SESSIONS_CURRENT : Get the snapshot of current session
+        SDB_SNAP_COLLECTIONS      : Get the snapshot of all the collections
+        SDB_SNAP_COLLECTIONSPACES : Get the snapshot of all the collection spaces
+        SDB_SNAP_DATABASE         : Get the snapshot of the database
+        SDB_SNAP_SYSTEM           : Get the snapshot of the system
+        SDB_SNAP_CATA             : Get the snapshot of the catalog
+        SDB_SNAP_TRANSACTIONS     : Get snapshot of transactions in current session
+        SDB_SNAP_TRANSACTIONS_CURRENT : Get snapshot of all the transactions
+        SDB_SNAP_ACCESSPLANS      : Get the snapshot of cached access plans
+        SDB_SNAP_HEALTH           : Get snapshot of node health detection
+
      \param [in] condition The matching rule, match all the documents if not provided.
      \param [in] select The selective rule, return the whole document if not provided.
      \param [in] orderBy The ordered rule, result set is unordered if not provided.
@@ -3358,18 +3598,33 @@ namespace sdbclient
                                     selector, orderBy ) ;
       }
 
-/** \fn INT32 resetSnapshot ( const bson::BSONObj &condition )
+/** \fn INT32 resetSnapshot ( const bson::BSONObj &options )
     \brief Reset the snapshot.
-    \param [in] condition The matching rule, usually specifies the node in sharding environment,
-                   in standalone mode, this option is ignored.
+    \param [in] options The control options:
+
+        Type            : (String) Specify the snapshot type to be reset.( defalut is "all" )
+                          "sessions"
+                          "sessions current"
+                          "database"
+                          "health"
+                          "all"
+        SessionID       : (INT32) Specify the session ID to be reset.
+        Other options   : Some of other options are as below: (please visit the official website to
+                          search "Location Elements" for more detail.)
+                          GroupID   :INT32,
+                          GroupName :String,
+                          NodeID    :INT32,
+                          HostName  :String,
+                          svcname   :String,
+                          ...
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
 */
-      INT32 resetSnapshot ( const bson::BSONObj &condition = _sdbStaticObject )
+      INT32 resetSnapshot ( const bson::BSONObj &options = _sdbStaticObject )
       {
          if ( !pSDB )
             return SDB_NOT_CONNECTED ;
-         return pSDB->resetSnapshot ( condition ) ;
+         return pSDB->resetSnapshot ( options ) ;
       }
 
 /* \fn INT32 getList ( _sdbCursor **cursor,
@@ -3388,8 +3643,13 @@ namespace sdbclient
         SDB_LIST_COLLECTIONS      : Get all collections list
         SDB_LIST_COLLECTIONSPACES : Get all collecion spaces' list
         SDB_LIST_STORAGEUNITS     : Get storage units list
-        SDB_LIST_GROUPS           : Get replica groups list ( only applicable in sharding env )
-        SDB_LIST_STOREPROCEDURES           : Get stored procedure list ( only applicable in sharding env )
+        SDB_LIST_GROUPS           : Get replicaGroup list ( only applicable in sharding env )
+        SDB_LIST_STOREPROCEDURES  : Get all the stored procedure list
+        SDB_LIST_DOMAINS          : Get all the domains list
+        SDB_LIST_TASKS            : Get all the running split tasks ( only applicable in sharding env )
+        SDB_LIST_TRANSACTIONS     : Get all the transactions information.
+        SDB_LIST_TRANSACTIONS_CURRENT : Get the transactions information of current session.
+
    \param [in] condition The matching rule, match all the documents if null.
    \param [in] select The selective rule, return the whole document if null.
    \param [in] orderBy The ordered rule, never sort if null.
@@ -3431,6 +3691,12 @@ namespace sdbclient
         SDB_LIST_COLLECTIONSPACES : Get all collecion spaces' list
         SDB_LIST_STORAGEUNITS     : Get storage units list
         SDB_LIST_GROUPS           : Get replicaGroup list ( only applicable in sharding env )
+        SDB_LIST_STOREPROCEDURES  : Get all the stored procedure list
+        SDB_LIST_DOMAINS          : Get all the domains list
+        SDB_LIST_TASKS            : Get all the running split tasks ( only applicable in sharding env )
+        SDB_LIST_TRANSACTIONS     : Get all the transactions information.
+        SDB_LIST_TRANSACTIONS_CURRENT : Get the transactions information of current session.
+
    \param [in] condition The matching rule, match all the documents if null.
    \param [in] select The selective rule, return the whole document if null.
    \param [in] orderBy The ordered rule, never sort if null.
@@ -3447,12 +3713,12 @@ namespace sdbclient
                     )
       {
          if ( !pSDB )
+         {
             return SDB_NOT_CONNECTED ;
-         return pSDB->getList ( cursor,
-                                listType,
-                                condition,
-                                selector,
-                                orderBy ) ;
+         }
+         RELEASE_INNER_HANDLE( cursor.pCursor ) ;
+         return pSDB->getList ( cursor, listType, condition,
+                                selector, orderBy ) ;
       }
 
 /* \fn INT32 getCollection ( const CHAR *pCollectionFullName,
@@ -3488,7 +3754,10 @@ namespace sdbclient
                           )
       {
          if ( !pSDB )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( collection.pCollection ) ;
          return pSDB->getCollection ( pCollectionFullName,
                                       collection ) ;
       }
@@ -3525,7 +3794,10 @@ namespace sdbclient
                                )
       {
          if ( !pSDB )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( cs.pCollectionSpace ) ;
          return pSDB->getCollectionSpace ( pCollectionSpaceName,
                                            cs ) ;
       }
@@ -3585,21 +3857,13 @@ namespace sdbclient
                                   )
       {
          if ( !pSDB )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( cs.pCollectionSpace ) ;
          return pSDB->createCollectionSpace ( pCollectionSpaceName,
                                               iPageSize, cs ) ;
       }
-
-//      INT32 createCollectionSpace ( const CHAR *pCollectionSpaceName,
-//                                    const bson::BSONObj &options,
-//                                    _sdbCollectionSpace **cs
-//                                  )
-//      {
-//         if ( !pSDB )
-//            return SDB_NOT_CONNECTED ;
-//         return pSDB->createCollectionSpace ( pCollectionSpaceName,
-//                                              options, cs ) ;
-//      }
 
 /** \fn INT32 createCollectionSpace ( const CHAR *pCollectionSpaceName,
                                       const bson::BSONObj &options,
@@ -3621,7 +3885,10 @@ namespace sdbclient
                                   )
       {
          if ( !pSDB )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( cs.pCollectionSpace ) ;
          return pSDB->createCollectionSpace ( pCollectionSpaceName,
                                               options, cs ) ;
       }
@@ -3652,17 +3919,20 @@ namespace sdbclient
          return pSDB->listCollectionSpaces ( result ) ;
       }
 
-/** \fn INT32 listCollectionSpaces  ( sdbCursor &result )
+/** \fn INT32 listCollectionSpaces  ( sdbCursor &cursor )
     \brief List all collection space of current database(include temporary collection space).
-    \param [out] result The return cursor object of query.
+    \param [out] cursor The return cursor object of query.
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
 */
-      INT32 listCollectionSpaces ( sdbCursor &result )
+      INT32 listCollectionSpaces ( sdbCursor &cursor )
       {
          if ( !pSDB )
+         {
             return SDB_NOT_CONNECTED ;
-         return pSDB->listCollectionSpaces ( result ) ;
+         }
+         RELEASE_INNER_HANDLE( cursor.pCursor ) ;
+         return pSDB->listCollectionSpaces ( cursor ) ;
       }
 
 /* \fn INT32 listCollections ( _sdbCursor **result )
@@ -3678,17 +3948,20 @@ namespace sdbclient
          return pSDB->listCollections ( result ) ;
       }
 
-/** \fn  INT32 listCollections ( sdbCursor &result )
+/** \fn  INT32 listCollections ( sdbCursor &cursor )
     \brief list all collections in current database.
-    \param [out] result The return cursor object of query.
+    \param [out] cursor The return cursor object of query.
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
 */
-      INT32 listCollections ( sdbCursor &result )
+      INT32 listCollections ( sdbCursor &cursor )
       {
          if ( !pSDB )
+         {
             return SDB_NOT_CONNECTED ;
-         return pSDB->listCollections ( result ) ;
+         }
+         RELEASE_INNER_HANDLE( cursor.pCursor ) ;
+         return pSDB->listCollections ( cursor ) ;
       }
 
 /* \fn INT32 listReplicaGroups ( _sdbCursor **result )
@@ -3705,17 +3978,20 @@ namespace sdbclient
       }
 
 
-/** \fn INT32 listReplicaGroups ( sdbCursor &result )
+/** \fn INT32 listReplicaGroups ( sdbCursor &cursor )
     \brief List all replica groups of current database.
-    \param [out] result The return cursor object of query.
+    \param [out] cursor The return cursor object of query.
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
 */
-      INT32 listReplicaGroups ( sdbCursor &result )
+      INT32 listReplicaGroups ( sdbCursor &cursor )
       {
          if ( !pSDB )
+         {
             return SDB_NOT_CONNECTED ;
-         return pSDB->listReplicaGroups ( result ) ;
+         }
+         RELEASE_INNER_HANDLE( cursor.pCursor ) ;
+         return pSDB->listReplicaGroups ( cursor ) ;
       }
 
 /* \fn INT32 getReplicaGroup ( const CHAR *pName, _sdbReplicaGroup **result )
@@ -3733,18 +4009,21 @@ namespace sdbclient
       }
 
 
-/** \fn INT32 getReplicaGroup ( const CHAR *pName, sdbReplicaGroup &result )
+/** \fn INT32 getReplicaGroup ( const CHAR *pName, sdbReplicaGroup &group )
     \brief Get the specified replica group.
     \param [in] pName The name of replica group.
-    \param [out] result The sdbReplicaGroup object.
+    \param [out] group The sdbReplicaGroup object.
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
 */
-      INT32 getReplicaGroup ( const CHAR *pName, sdbReplicaGroup &result )
+      INT32 getReplicaGroup ( const CHAR *pName, sdbReplicaGroup &group )
       {
          if ( !pSDB )
+         {
             return SDB_NOT_CONNECTED ;
-         return pSDB->getReplicaGroup ( pName, result ) ;
+         }
+         RELEASE_INNER_HANDLE( group.pReplicaGroup ) ;
+         return pSDB->getReplicaGroup ( pName, group ) ;
       }
 
 /* \fn INT32 getReplicaGroup ( INT32 id, _sdbReplicaGroup **result )
@@ -3761,18 +4040,21 @@ namespace sdbclient
          return pSDB->getReplicaGroup ( id, result ) ;
       }
 
-/** \fn INT32 getReplicaGroup ( INT32 id, sdbReplicaGroup &result )
+/** \fn INT32 getReplicaGroup ( INT32 id, sdbReplicaGroup &group )
     \brief Get the specified replica group.
     \param [in] id The id of replica group.
-    \param [out] result The sdbReplicaGroup object.
+    \param [out] group The sdbReplicaGroup object.
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
 */
-      INT32 getReplicaGroup ( INT32 id, sdbReplicaGroup &result )
+      INT32 getReplicaGroup ( INT32 id, sdbReplicaGroup &group )
       {
          if ( !pSDB )
+         {
             return SDB_NOT_CONNECTED ;
-         return pSDB->getReplicaGroup ( id, result ) ;
+         }
+         RELEASE_INNER_HANDLE( group.pReplicaGroup ) ;
+         return pSDB->getReplicaGroup ( id, group ) ;
       }
 
 /* \fn INT32 createReplicaGroup ( const CHAR *pName, _sdbReplicaGroup **replicaGroup )
@@ -3789,18 +4071,21 @@ namespace sdbclient
          return pSDB->createReplicaGroup ( pName, replicaGroup ) ;
       }
 
-/** \fn INT32 createReplicaGroup ( const CHAR *pName, sdbReplicaGroup &replicaGroup )
+/** \fn INT32 createReplicaGroup ( const CHAR *pName, sdbReplicaGroup &group )
     \brief Create the specified replica group.
     \param [in] pName The name of the replica group.
-    \param [out] replicaGroup The return sdbReplicaGroup object.
+    \param [out] group The return sdbReplicaGroup object.
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
 */
-      INT32 createReplicaGroup ( const CHAR *pName, sdbReplicaGroup &replicaGroup )
+      INT32 createReplicaGroup ( const CHAR *pName, sdbReplicaGroup &group )
       {
          if ( !pSDB )
+         {
             return SDB_NOT_CONNECTED ;
-         return pSDB->createReplicaGroup ( pName, replicaGroup ) ;
+         }
+         RELEASE_INNER_HANDLE( group.pReplicaGroup ) ;
+         return pSDB->createReplicaGroup ( pName, group ) ;
       }
 
 /** \fn INT32 removeReplicaGroup ( const CHAR *pName )
@@ -3863,7 +4148,10 @@ namespace sdbclient
       INT32 activateReplicaGroup ( const CHAR *pName, sdbReplicaGroup &replicaGroup )
       {
          if ( !pSDB )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( replicaGroup.pReplicaGroup ) ;
          return pSDB->activateReplicaGroup ( pName, replicaGroup ) ;
       }
 
@@ -3897,19 +4185,22 @@ namespace sdbclient
       }
 
 /** \fn INT32 exec( const CHAR *sql,
-                 sdbCursor &result )
+                 sdbCursor &cursor )
     \brief Executing SQL command.
     \param [in] sql The SQL command.
-    \param [out] result The return cursor object of matching documents.
+    \param [out] cursor The return cursor object of matching documents.
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
 */
       INT32 exec( const CHAR *sql,
-                  sdbCursor &result )
+                  sdbCursor &cursor )
       {
          if ( !pSDB )
+         {
             return SDB_NOT_CONNECTED ;
-         return pSDB->exec( sql, result ) ;
+         }
+         RELEASE_INNER_HANDLE( cursor.pCursor ) ;
+         return pSDB->exec( sql, cursor ) ;
       }
 
 /** \fn INT32 transactionBegin()
@@ -4006,7 +4297,10 @@ namespace sdbclient
       INT32 listProcedures( sdbCursor &cursor, const bson::BSONObj &condition )
       {
          if ( !pSDB )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( cursor.pCursor ) ;
          return pSDB->listProcedures( cursor, condition ) ;
       }
 
@@ -4034,13 +4328,15 @@ namespace sdbclient
          return pSDB->evalJS( code, type, cursor, errmsg ) ;
      }
 
-     INT32 evalJS( const CHAR *code,
-                   SDB_SPD_RES_TYPE &type,
+     INT32 evalJS( const CHAR *code, SDB_SPD_RES_TYPE &type,
                    sdbCursor &cursor,
                    bson::BSONObj &errmsg )
      {
          if ( !pSDB )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( cursor.pCursor ) ;
          return pSDB->evalJS( code, type, cursor, errmsg ) ;
      }
 
@@ -4086,11 +4382,15 @@ namespace sdbclient
                               const bson::BSONObj &selector = _sdbStaticObject,
                               const bson::BSONObj &orderBy = _sdbStaticObject);
     \brief List the backups.
-    \param [in] options Contains configuration infomations for remove backups, list all the backups in the default backup path if null. The "options" contains 3 options as below. All the elements in options are optional. eg: {"GroupName":["rgame1", "rgName2"], "Path":"/opt/sequoiadb/backup", "Name":"backupName"}
+    \param [in] options Contains configuration information for listing backups, list all the backups in the default backup path if null. The "options" contains several options as below. All the elements in options are optional. eg: {"GroupName":["rgame1", "rgName2"], "Path":"/opt/sequoiadb/backup", "Name":"backupName"}
 
-        GroupName   : Assign the backups of specifed replica groups to be list
-        Path        : Assign the backups in specifed path to be list, if not assign, use the backup path asigned in the configuration file
-        Name        : Assign the backups with specifed name to be list
+        GroupID     : Specified the group id of the backups, default to list all the backups of all the groups.
+        GroupName   : Specified the group name of the backups, default to list all the backups of all the groups.
+        Path        : Specified the path of the backups, default to use the backup path asigned in the configuration file.
+        Name        : Specified the name of backup, default to list all the backups.
+        IsSubDir    : Specified the "Path" is a subdirectory of the backup path assigned in the configuration file or not, default to be false.
+        Prefix      : Specified the prefix name of the backups, support for using wildcards("%g","%G","%h","%H","%s","%s"),such as: Prefix:"%g_bk_", default to not using wildcards.
+        Detail      : Display the detail of the backups or not, default to be false.
     \param [in] condition The matching rule, return all the documents if not provided
     \param [in] selector The selective rule, return the whole document if null
     \param [in] orderBy The ordered rule, never sort if null
@@ -4105,17 +4405,24 @@ namespace sdbclient
                               const bson::BSONObj &orderBy = _sdbStaticObject)
       {
          if ( !pSDB )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( cursor.pCursor ) ;
          return pSDB->listBackup( cursor, options, condition, selector, orderBy ) ;
       }
 
 /** \fn INT32 removeBackup ( const bson::BSONObj &options);
     \brief Remove the backups.
-    \param [in] options Contains configuration infomations for remove backups, remove all the backups in the default backup path if null. The "options" contains 3 options as below. All the elements in options are optional. eg: {"GroupName":["rgName1", "rgName2"], "Path":"/opt/sequoiadb/backup", "Name":"backupName"}
+    \param [in] options Contains configuration information for remove backups, remove all the backups in the default backup path if null. The "options" contains several options as below. All the elements in options are optional. eg: {"GroupName":["rgName1", "rgName2"], "Path":"/opt/sequoiadb/backup", "Name":"backupName"}
 
-        GroupName   : Assign the backups of specifed replica groups to be remove
-        Path        : Assign the backups in specifed path to be remove, if not assign, use the backup path asigned in the configuration file
-        Name        : Assign the backups with specifed name to be remove
+        GroupID     : Specified the group id of the backups, default to list all the backups of all the groups.
+        GroupName   : Specified the group name of the backups, default to list all the backups of all the groups.
+        Path        : Specified the path of the backups, default to use the backup path asigned in the configuration file.
+        Name        : Specified the name of backup, default to list all the backups.
+        IsSubDir    : Specified the "Path" is a subdirectory of the backup path assigned in the configuration file or not, default to be false.
+        Prefix      : Specified the prefix name of the backups, support for using wildcards("%g","%G","%h","%H","%s","%s"),such as: Prefix:"%g_bk_", default to not using wildcards.
+        Detail      : Display the detail of the backups or not, default to be false.
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
 */
@@ -4149,7 +4456,10 @@ namespace sdbclient
     \param [in] condition The matching rule, return all the documents if null
     \param [in] selector The selective rule, return the whole document if null
     \param [in] orderBy The ordered rule, never sort if null
-    \param [in] hint The hint, automatically match the optimal hint if null
+    \param [in] hint Specified the index used to scan data. e.g. {"":"ageIndex"} means
+                    using index "ageIndex" to scan data(index scan);
+                    {"":null} means table scan. when hint is not provided,
+                    database automatically match the optimal index to scan data
     \param [out] cursor The connection handle
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
@@ -4161,7 +4471,10 @@ namespace sdbclient
                         const bson::BSONObj &hint = _sdbStaticObject)
       {
          if ( !pSDB )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( cursor.pCursor ) ;
          return pSDB->listTasks ( cursor,
                                   condition,
                                   selector,
@@ -4208,10 +4521,20 @@ namespace sdbclient
     \brief Set the attributes of the session.
     \param [in] options The configuration options for session.The options are as below:
 
-        PreferedInstance : indicate which instance to respond read request in current session.
-                          eg:{"PreferedInstance":"m"/"M"/"s"/"S"/"a"/"A"/1-7},
-                          prefer to choose "read and write instance"/"read only instance"/"anyone instance"/instance1-insatance7,
-                          default to be {"PreferedInstance":"A"}, means would like to choose anyone instance to respond read request such as query. 
+        PreferedInstance : Preferred instance for read request in the current session. Could be single value in "M", "m", "S", "s", "A", "a", 1-255, or BSON Array to include multiple values.
+                           e.g. { "PreferedInstance" : [ 1, 7 ] }.
+                           "M", "m": read and write instance( master instance ). If multiple numeric instances are given with "M", matched master instance will be chosen in higher priority. If multiple numeric instances are given with "M" or "m", master instance will be chosen if no numeric instance is matched.
+                           "S", "s": read only instance( slave instance ). If multiple numeric instances are given with "S", matched slave instances will be chosen in higher priority. If multiple numeric instances are given with "S" or "s", slave instance will be chosen if no numeric instance is matched.
+                           "A", "a": any instance.
+                           1-255: the instance with specified instance ID.
+                           If multiple alphabet instances are given, only first one will be used.
+                           If matched instance is not found, will choose instance by random.
+        PreferedInstanceMode : The mode to choose query instance when multiple preferred instances are found in the current session.
+                               e.g. { "PreferedInstanceMode : "random" }.
+                               "random": choose the instance from matched instances by random.
+                               "ordered": choose the instance from matched instances by the order of "PreferedInstance".
+        Timeout : The timeout (in ms) for operations in the current session. -1 means no timeout for operations.
+                  e.g. { "Timeout" : 10000 }.
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
 */
@@ -4220,6 +4543,21 @@ namespace sdbclient
          if ( !pSDB )
             return SDB_NOT_CONNECTED ;
          return pSDB->setSessionAttr ( options ) ;
+      }
+
+/** \fn INT32 getSessionAttr ( bson::BSONObj & result ) ;
+    \brief Get the attributes of the session.
+    \param [out] result The return bson object
+    \retval SDB_OK Operation Success
+    \retval Others Operation Fail
+*/
+      INT32 getSessionAttr ( bson::BSONObj & result )
+      {
+         if ( !pSDB )
+         {
+            return SDB_NOT_CONNECTED ;
+         }
+         return pSDB->getSessionAttr( result ) ;
       }
 
 /** \fn INT32 closeAllCursors () ;
@@ -4284,7 +4622,10 @@ namespace sdbclient
                            sdbDomain &domain )
       {
          if ( !pSDB )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( domain.pDomain ) ;
          return pSDB->createDomain ( pDomainName, options, domain ) ;
       }
 
@@ -4312,36 +4653,45 @@ namespace sdbclient
                         sdbDomain &domain )
       {
          if ( !pSDB )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( domain.pDomain ) ;
          return pSDB->getDomain ( pDomainName, domain ) ;
       }
 
 /** \fn INT32 listDomains ( sdbCursor &cursor,
-                          const bson::BSONObj &condition,
-                          const bson::BSONObj &selector,
-                          const bson::BSONObj &orderBy,
-                          const bson::BSONObj &hint ) ;
+                          const bson::BSONObj &condition = _sdbStaticObject,
+                          const bson::BSONObj &selector = _sdbStaticObject,
+                          const bson::BSONObj &orderBy = _sdbStaticObject,
+                          const bson::BSONObj &hint = _sdbStaticObject ) ;
     \brief List the domains.
     \param [in] condition The matching rule, return all the documents if null
     \param [in] selector The selective rule, return the whole document if null
     \param [in] orderBy The ordered rule, never sort if null
-    \param [in] hint The hint, automatically match the optimal hint if null
+    \param [in] hint Specified the index used to scan data. e.g. {"":"ageIndex"} means
+                    using index "ageIndex" to scan data(index scan);
+                    {"":null} means table scan. when hint is not provided,
+                    database automatically match the optimal index to scan data
     \param [out] cursor The sdbCursor object of result
     \retval SDB_OK Operation Success
     \retval Others Operation Fail
 */
       INT32 listDomains ( sdbCursor &cursor,
-                          const bson::BSONObj &condition,
-                          const bson::BSONObj &selector,
-                          const bson::BSONObj &orderBy,
-                          const bson::BSONObj &hint )
+                          const bson::BSONObj &condition = _sdbStaticObject,
+                          const bson::BSONObj &selector = _sdbStaticObject,
+                          const bson::BSONObj &orderBy = _sdbStaticObject,
+                          const bson::BSONObj &hint = _sdbStaticObject )
       {
          if ( !pSDB )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( cursor.pCursor ) ;
          return pSDB->listDomains ( cursor, condition, selector, orderBy, hint ) ;
       }
 
-      /** \fn INT32 getDC( sdbDataCenter &dc )
+      /* \fn INT32 getDC( sdbDataCenter &dc )
           \brief Get current data center.
           \retval SDB_OK Operation Success
           \retval Others Operation Fail
@@ -4349,45 +4699,353 @@ namespace sdbclient
       INT32 getDC( sdbDataCenter &dc )
       {
          if ( !pSDB )
+         {
             return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( dc.pDC ) ;
          return pSDB->getDC ( dc ) ;
       }
 
-/*      INT32 modifyConfig ( INT32 nodeID,
-                           std::map<std::string,std::string> &config )
+      /** \fn UINT64 getLastAliveTime()
+          \brief Get the number of seconds from the standard time point
+          (usually in the midnight of January 1, 1970) to the last alive time
+          \retval UINT64 time difference, unit for seconds
+      */
+      UINT64 getLastAliveTime() const { return pSDB->getLastAliveTime(); }
+
+      /** \fn INT32 syncDB(const bson::BSONObj &options)
+          \brief sync the current database
+          \param [in] options The control options:
+
+              Deep: (INT32) Flush with deep mode or not. 1 in default.
+                    0 for non-deep mode,1 for deep mode,-1 means use the configuration with server
+              Block: (Bool) Flush with block mode or not. false in default.
+              CollectionSpace: (String) Specify the collectionspace to sync.
+                               If not set, will sync all the collectionspaces and logs,
+                               otherwise, will only sync the collectionspace specified.
+              Some of other options are as below:(only take effect in coordinate nodes,
+                             please visit the official website to search "sync"
+                             or "Location Elements" for more detail.)
+              GroupID:INT32,
+              GroupName:String,
+              NodeID:INT32,
+              HostName:String,
+              svcname:String,
+              ...
+          \retval SDB_OK Operation Success
+          \retval Others Operation Fail
+      */
+      INT32 syncDB( const bson::BSONObj &options = _sdbStaticObject )
       {
          if ( !pSDB )
             return SDB_NOT_CONNECTED ;
-         return pSDB->modifyConfig ( nodeID, config ) ;
+         return pSDB->syncDB ( options ) ;
       }
 
-      INT32 getConfig ( INT32 nodeID,
-                        std::map<std::string,std::string> &config )
+      /** \fn INT32 analyze(const bson::BSONObj &options)
+          \brief Analyze collection or index to collect statistics information
+          \param [in] options The control options:
+
+           CollectionSpace : (String) Specify the collection space to be analyzed.
+           Collection      : (String) Specify the collection to be analyzed.
+           Index           : (String) Specify the index to be analyzed.
+           Mode            : (Int32) Specify the analyze mode (default is 1):
+                             Mode 1 will analyze with data samples.
+                             Mode 2 will analyze with full data.
+                             Mode 3 will generate default statistics.
+                             Mode 4 will reload statistics into memory cache.
+                             Mode 5 will clear statistics from memory cache.
+           Other options   : Some of other options are as below:(only take effect
+                             in coordinate nodes, please visit the official website
+                             to search "analyze" or "Location Elements" for more
+                             detail.)
+                             GroupID:INT32,
+                             GroupName:String,
+                             NodeID:INT32,
+                             HostName:String,
+                             svcname:String,
+                             ...
+          \retval SDB_OK Operation Success
+          \retval Others Operation Fail
+      */
+      INT32 analyze ( const bson::BSONObj &options = _sdbStaticObject )
       {
          if ( !pSDB )
             return SDB_NOT_CONNECTED ;
-         return pSDB->getConfig ( nodeID, config ) ;
+         return pSDB->analyze ( options ) ;
       }
 
-      INT32 modifyConfig ( std::map<std::string,std::string> &config )
+      /** \fn INT32 forceSession(SINT64 sessionID,
+                                 const bson::BSONObj &options)
+          \brief Stop the specified session's current operation and terminate it
+          \param [in] sessionID The ID of the session.
+          \param [in] options The control options:(Only take effect in coordinate nodes)
+                GroupID:INT32,
+                GroupName:String,
+                NodeID:INT32,
+                HostName:String,
+                svcname:String,
+                ...
+          \retval SDB_OK Operation Success
+          \retval Others Operation Fail
+      */
+      INT32 forceSession( SINT64 sessionID,
+                          const bson::BSONObj &options = _sdbStaticObject )
       {
-         if ( !pSDB )
+         if( !pSDB )
             return SDB_NOT_CONNECTED ;
-         return pSDB->modifyConfig ( CURRENT_NODEID, config ) ;
+         return pSDB->forceSession( sessionID, options ) ;
       }
 
-      INT32 getConfig ( std::map<std::string,std::string> &config )
+      /** \fn INT32 forceStepUp(const bson::BSONObj &options)
+          \brief In a replica group that doesn't satisfy the requirement ofre-election,
+               upgrade a slave node to a master node by force.
+          \param [in] options The control options:(Only take effect in coordinate nodes)
+                GroupID:INT32,
+                GroupName:String,
+                NodeID:INT32,
+                HostName:String,
+                svcname:String,
+                ...
+          \retval SDB_OK Operation Success
+          \retval Others Operation Fail
+      */
+      INT32 forceStepUp( const bson::BSONObj &options = _sdbStaticObject )
       {
-         if ( !pSDB )
+         if( !pSDB )
             return SDB_NOT_CONNECTED ;
-         return pSDB->getConfig ( CURRENT_NODEID, config ) ;
-      }*/
+         return pSDB->forceStepUp( options ) ;
+      }
 
+      /** \fn INT32 invalidateCache(const bson::BSONObj &options)
+          \brief Clear the cache of the nodes (data/coord node).
+          \param [in] options The control options:(Only take effect in coordinate nodes)
+                GroupID:INT32,
+                GroupName:String,
+                NodeID:INT32,
+                HostName:String,
+                svcname:String,
+                ...
+          \retval SDB_OK Operation Success
+          \retval Others Operation Fail
+      */
+      INT32 invalidateCache( const bson::BSONObj &options = _sdbStaticObject )
+      {
+         if( !pSDB )
+            return SDB_NOT_CONNECTED ;
+         return pSDB->invalidateCache( options ) ;
+      }
+
+      /** \fn INT32 reloadConfig(const bson::BSONObj &options)
+          \brief Force the node to reload config from file and take effect.
+          \param [in] options The control options:(Only take effect in coordinate nodes)
+                GroupID:INT32,
+                GroupName:String,
+                NodeID:INT32,
+                HostName:String,
+                svcname:String,
+                ...
+          \retval SDB_OK Operation Success
+          \retval Others Operation Fail
+      */
+      INT32 reloadConfig( const bson::BSONObj &options = _sdbStaticObject )
+      {
+         if( !pSDB )
+            return SDB_NOT_CONNECTED ;
+         return pSDB->reloadConfig( options ) ;
+      }
+
+      /** \fn INT32 setPDLevel(INT32 level,
+                               const bson::BSONObj &options)
+          \brief Set the node's diagnostic level and take effect.
+          \param [in] level The diagnostic level:
+               value 0~5. value means:
+               0: SEVERE
+               1: ERROR
+               2: EVENT
+               3: WARNING
+               4: INFO
+               5: DEBUG
+          \param [in] options The control options:(Only take effect in coordinate nodes)
+                GroupID:INT32,
+                GroupName:String,
+                NodeID:INT32,
+                HostName:String,
+                svcname:String,
+                ...
+          \retval SDB_OK Operation Success
+          \retval Others Operation Fail
+      */
+      INT32 setPDLevel( INT32 level,
+                        const bson::BSONObj &options = _sdbStaticObject )
+      {
+         if( !pSDB )
+            return SDB_NOT_CONNECTED ;
+         return pSDB->setPDLevel( level, options ) ;
+      }
+
+      INT32 msg( const CHAR* msg )
+      {
+         if( !pSDB )
+            return SDB_NOT_CONNECTED ;
+         return pSDB->msg( msg ) ;
+      }
+
+      /** \fn INT32 loadCS(const CHAR* csName,
+                           const bson::BSONObj &options)
+          \brief Load the specific cs from the file.
+          \param [in] csName The name of cs that will be loaded
+          \param [in] options The control options:(Only take effect in coordinate nodes)
+                GroupID:INT32,
+                GroupName:String,
+                NodeID:INT32,
+                HostName:String,
+                svcname:String,
+                ...
+          \retval SDB_OK Operation Success
+          \retval Others Operation Fail
+      */
+      INT32 loadCS( const CHAR* csName,
+                    const bson::BSONObj &options = _sdbStaticObject )
+      {
+         if( !pSDB )
+            return SDB_NOT_CONNECTED ;
+         return pSDB->loadCS( csName, options ) ;
+      }
+
+      /** \fn INT32 unloadCS(const CHAR* csName,
+                           const bson::BSONObj &options)
+          \brief Unload the specific cs.
+          \param [in] csName The name of cs that will be unloaded
+          \param [in] options The control options:(Only take effect in coordinate nodes)
+                GroupID:INT32,
+                GroupName:String,
+                NodeID:INT32,
+                HostName:String,
+                svcname:String,
+                ...
+          \retval SDB_OK Operation Success
+          \retval Others Operation Fail
+      */
+      INT32 unloadCS( const CHAR* csName,
+                      const bson::BSONObj &options = _sdbStaticObject )
+      {
+         if( !pSDB )
+            return SDB_NOT_CONNECTED ;
+         return pSDB->unloadCS( csName, options ) ;
+      }
+
+      /** \fn INT32 traceStart(UINT32 traceBufferSize,
+                               const CHAR* component,
+                               const CHAR* breakpoint,
+                               const vector<UINT32> &tidVec)
+          \brief Turn on the trace function of the database engine.
+          \param [in] traceBufferSize Trace file's size(MB), Value range:[1,1024].
+          \param [in] component Specific module.
+          \param [in] breakpoint Add a breakpoint in function to trace.
+          \param [in] tidVec The target threads.
+          \retval SDB_OK Operation Success
+          \retval Others Operation Fail
+      */
+      INT32 traceStart( UINT32 traceBufferSize,
+                        const CHAR* component = NULL,
+                        const CHAR* breakpoint = NULL,
+                        const vector<UINT32> &tidVec = _sdbStaticUINT32Vec )
+      {
+         if( !pSDB )
+            return SDB_NOT_CONNECTED ;
+         return pSDB->traceStart( traceBufferSize, component,
+                                  breakpoint, tidVec ) ;
+      }
+
+      /** \fn INT32 traceStop(const CHAR* dumpFileName)
+          \brief Close the tracing function of the database engine,
+            and then export the information in to binary files
+          \param [in] dumpFileName Name of dump file. If the file path is
+            relative path, will store file into the node's 'diagpath'.
+          \retval SDB_OK Operation Success
+          \retval Others Operation Fail
+      */
+      INT32 traceStop( const CHAR* dumpFileName )
+      {
+         if( !pSDB )
+            return SDB_NOT_CONNECTED ;
+         return pSDB->traceStop( dumpFileName ) ;
+      }
+
+      /** \fn INT32 traceResume()
+          \brief Resume the breakpoint trace tool.
+          \retval SDB_OK Operation Success
+          \retval Others Operation Fail
+      */
+      INT32 traceResume()
+      {
+         if( !pSDB )
+            return SDB_NOT_CONNECTED ;
+         return pSDB->traceResume() ;
+      }
+
+      /** \fn INT32 traceStatus(sdbCursor& cursor)
+          \brief Show the current status of the program trace.
+          \param [out] cursor The return cursor object of query.
+          \retval SDB_OK Operation Success
+          \retval Others Operation Fail
+      */
+      INT32 traceStatus( sdbCursor& cursor )
+      {
+         if( !pSDB )
+         {
+            return SDB_NOT_CONNECTED ;
+         }
+         RELEASE_INNER_HANDLE( cursor.pCursor ) ;
+         return pSDB->traceStatus( cursor ) ;
+      }
+
+      /** \fn INT32 traceStatus(_sdbCursor** cursor)
+          \brief Show the current status of the program trace.
+          \param [out] cursor The return cursor handle of query.
+          \retval SDB_OK Operation Success
+          \retval Others Operation Fail
+      */
+      INT32 traceStatus( _sdbCursor** cursor )
+      {
+         if( !pSDB )
+            return SDB_NOT_CONNECTED ;
+         return pSDB->traceStatus( cursor ) ;
+      }
+
+      /** \fn INT32 renameCollectionSpace(const CHAR* oldName,
+                                          const CHAR* newName,
+                                          const bson::BSONObj &options)
+          \brief Rename collectionSpace ( only support the standalone mode )
+          \param [in] oldName The old name of collectionSpace.
+          \param [in] newName The new name of collectionSpace.
+          \param [in] options Reserved argument
+          \retval SDB_OK Operation Success
+          \retval Others Operation Fail
+      */
+      INT32 renameCollectionSpace( const CHAR* oldName,
+                                   const CHAR* newName,
+                                   const bson::BSONObj &options = _sdbStaticObject )
+      {
+         if( !pSDB )
+            return SDB_NOT_CONNECTED ;
+         return pSDB->renameCollectionSpace( oldName, newName, options ) ;
+      }
    } ;
 /** \typedef class sdb sdb
       \brief Class sdb definition for sdb.
 */
    typedef class sdb sdb ;
+
+   /** \fn INT32 initClient( sdbClientConf* config ) ;
+       \brief set client global configuration such as cache strategy to improve performance
+       \param [in] config The configuration struct, see detail of sdbClientConf
+       \retval SDB_OK Operation Success
+       \retval Others Operation Fail
+   */
+   SDB_EXPORT INT32 initClient( sdbClientConf* config ) ;
+
 }
 
 #endif

@@ -71,7 +71,8 @@ namespace engine
    /*
       _omManager define
    */
-   class _omManager : public _pmdObjBase, public _IControlBlock
+   class _omManager : public _pmdObjBase, public _IControlBlock, 
+                      public IEventHander 
    {
       DECLARE_OBJ_MSG_MAP()
 
@@ -100,7 +101,6 @@ namespace engine
          UINT32      setTimer( UINT32 milliSec ) ;
          void        killTimer( UINT32 timerID ) ;
 
-         // comm interface
          netRouteAgent* getRouteAgent() ;
          MsgRouteID     updateAgentInfo( const string &host,
                                          const string &service ) ;
@@ -117,13 +117,28 @@ namespace engine
          INT32             authUpdatePasswd( string user, string oldPasswd,
                                              string newPasswd, pmdEDUCB *cb ) ;
 
+         INT32             getBizHostInfo( const string &businessName, 
+                                           list <string> &hostsList ) ;
+         INT32             appendBizHostInfo( const string &businessName, 
+                                              list <string> &hostsList ) ;
+
          string            getLocalAgentPort() ;
 
          INT32             refreshVersions() ;
          void              updateClusterVersion( string cluster ) ;
          void              removeClusterVersion( string cluster ) ;
+         void              updateClusterHostFilePrivilege( string clusterName,
+                                                           BOOLEAN privilege ) ;
+         void getPluginPasswd( string &passwd ) ;
+
+         void getUpdatePluginPasswdTimeDiffer( INT64 &differ ) ;
 
          omTaskManager     *getTaskManager() ;
+
+      public:
+         virtual void   onRegistered( const MsgRouteID &nodeID ) ;
+         virtual void   onPrimaryChange( BOOLEAN primary,
+                                         SDB_EVENT_OCCUR_TYPE occurType ) ;
 
       protected:
          virtual void      onTimer ( UINT64 timerID, UINT32 interval ) ;
@@ -131,6 +146,27 @@ namespace engine
          MsgRouteID        _incNodeID() ;
 
          INT32             _initOmTables() ;
+
+         void              _getOMVersion( string &version ) ;
+
+         INT32             _appendBusinessInfo( const string &businessName, 
+                                                const string &businessType, 
+                                                const string &clusterName,
+                                                const string &deployMode ) ;
+
+         INT32             _getBussinessInfo( const string &businessName, 
+                                              string &businessType, 
+                                              string &clusterName,
+                                              string &deployMode ) ;
+
+         INT32             _appendHostPackage( const string &hostName,
+                                               const BSONObj &packageInfo ) ;
+
+         INT32             _updateConfTable() ;
+         INT32             _updateBusinessTable() ;
+         INT32             _updateClusterTable() ;
+         INT32             _updateHostTable() ;
+         INT32             _updateTable() ;
 
          INT32             _createJobs() ;
 
@@ -159,14 +195,17 @@ namespace engine
                                            INT32 flag, 
                                            rtnContextBuf &buffObj ) ;
 
-         void              _checkSsqlTimeout() ;
-
          void              _checkTaskTimeout( const BSONObj &task ) ;
+
+         INT32 _updatePluginPasswd() ;
 
          void              _createVersionFile() ;
 
+      private:
+         INT32 _appendClusterGrant( const string& clusertName,
+                                    const string& grantName,
+                                    BOOLEAN privilege ) ;
 
-      // Msg functions
       protected:
 
       private:
@@ -196,7 +235,12 @@ namespace engine
 
          omTaskManager                          *_taskManager ;
 
-         UINT64                                 _ssqlCheckTimer ;
+         INT64                                  _updateTimestamp ;
+         UINT64                                 _updatePluinUsrTimer ;
+
+         BOOLEAN                                _isInitTable ;
+
+         string                                 _usrPluginPasswd ;
    } ;
 
    typedef _omManager omManager ;

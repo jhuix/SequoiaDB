@@ -35,7 +35,6 @@
 #include "omagentHelper.hpp"
 #include "ossProc.hpp"
 #include "utilPath.hpp"
-#include "ossPath.h"
 #include "omagentJob.hpp"
 #include "omagentMgr.hpp"
 
@@ -68,6 +67,28 @@ namespace engine
       {
          SAFE_OSS_FREE ( _fileBuff ) ;
       }
+   }
+
+   INT32 _omaCommand::addUserDefineVar( const CHAR* pVariable )
+   {
+      INT32 rc = SDB_OK ;
+      string variable ;
+
+      if( pVariable == NULL )
+      {
+         rc = SDB_INVALIDARG ;
+         PD_LOG_MSG ( PDERROR, "Invalid variable value" ) ;
+         goto error ;
+      }
+
+      variable = pVariable ;
+
+      _userDefineVar.push_back( variable ) ;
+
+   done:
+      return rc ;
+   error:
+      goto done ;
    }
 
    INT32 _omaCommand::setJsFile( const CHAR *fileName )
@@ -108,7 +129,6 @@ namespace engine
 
       for ( ; it != _jsFiles.end(); it++ )
       {
-         /// caller need to deal with error, when js file had been add
          if ( it->first == name )
          {
             rc = SDB_INVALIDARG ;
@@ -119,7 +139,7 @@ namespace engine
       if ( bus ) para += bus ;
       if ( sys ) para += sys ;
       if ( env ) para += env ;
-      if ( other ) para += other ; 
+      if ( other ) para += other ;
       _jsFiles.push_back( pair<string, string>( name, para ) ) ;
 
    done:
@@ -131,19 +151,29 @@ namespace engine
    INT32 _omaCommand::getExcuteJsContent( string &content )
    {
       INT32 rc = SDB_OK ;
+      vector<string>::iterator varIter ;
       vector< pair<string, string> >::iterator it = _jsFiles.begin() ;
 
       if ( it == _jsFiles.end() )
       {
          goto done ;
       }
+
       content.clear() ;
+
+      for( varIter = _userDefineVar.begin(); varIter != _userDefineVar.end();
+          ++varIter )
+      {
+         content += *varIter ;
+         content += OSS_NEWLINE ;
+      }
+
       for ( ; it != _jsFiles.end(); it++ )
       {
          rc = setJsFile( it->first.c_str() ) ;
          if ( rc )
          {
-            PD_LOG_MSG ( PDERROR, "Failed to set js file[%s], rc = %d", 
+            PD_LOG_MSG ( PDERROR, "Failed to set js file[%s], rc = %d",
                          it->first.c_str(), rc ) ;
             goto error ;
          }
@@ -156,7 +186,7 @@ namespace engine
             goto error ;
          }
          content += it->second ;
-         content += OSS_NEWLINE ;  
+         content += OSS_NEWLINE ;
          content += _fileBuff ;
          content += OSS_NEWLINE ;
       }
@@ -169,9 +199,7 @@ namespace engine
 
    INT32 _omaCommand::prime()
    {
-      // add some common files
       addJsFile ( FILE_DEFINE ) ;
-      addJsFile ( FILE_ERROR ) ;
       addJsFile ( FILE_COMMON ) ;
       addJsFile ( FILE_LOG ) ;
       addJsFile ( FILE_FUNC ) ;
@@ -191,6 +219,7 @@ namespace engine
       string errmsg ;
       BSONObjBuilder bob ;
       BSONObj detail ;
+      const sptResultVal *pRval = NULL ;
       BSONObj rval ;
 
       rc = getExcuteJsContent( _content ) ;
@@ -200,7 +229,6 @@ namespace engine
                       "excute, rc = %d", rc ) ;
          goto error ;
       }
-      // 1. get scope
       _scope = sdbGetOMAgentMgr()->getScope() ;
       if ( !_scope )
       {
@@ -208,14 +236,11 @@ namespace engine
          PD_LOG_MSG ( PDERROR, "Failed to get scope, rc = %d", rc ) ;
          goto error ;
       }
-      // 2. execute js
-      rc = _scope->eval( _content.c_str(), _content.size(),
-                         "", 1, SPT_EVAL_FLAG_NONE, rval, detail ) ;
+      rc = _scope->eval( _content.c_str(), _content.size(), "", 1,
+                         SPT_EVAL_FLAG_NONE | SPT_EVAL_FLAG_IGNORE_ERR_PREFIX,
+                         &pRval ) ;
       if ( rc )
       {
-         // we come here for one of the follow reasons:
-         // a. we throw exception out from js file 
-         // b. eval fail for js syntax error
          errmsg = _scope->getLastErrMsg() ;
          rc = _scope->getLastError() ;
          PD_LOG_MSG ( PDERROR, "%s", errmsg.c_str() ) ;
@@ -225,7 +250,7 @@ namespace engine
          retObj = bob.obj() ;
          goto error ;
       }
-      // 3. adapt the result
+      rval = pRval->toBSON() ;
       rc = final ( rval, retObj ) ;
       if ( rc )
       {
@@ -261,6 +286,12 @@ namespace engine
       return rc ;
    error:
       goto done ;
+   }
+
+   INT32 _omaCommand::convertResult( const BSONObj& itemInfo,
+                                     BSONObj& taskInfo )
+   {
+      return SDB_OK ;
    }
 
    /*

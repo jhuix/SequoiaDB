@@ -5,6 +5,7 @@
 #include "tracegen.h"
 #include "buildgen.h"
 #include "dbConfForWeb.h"
+#include "vergen.h"
 #include <iostream>
 using std::cout;
 using std::endl;
@@ -34,6 +35,12 @@ static void genTrace ()
    TraceGen::genList () ;
 }
 
+static void genVer()
+{
+   VerGen verGen ;
+   verGen.run(false) ;
+}
+
 enum supportedLangs
 {
    LANG_CN = 0,
@@ -46,18 +53,21 @@ const CHAR *pLang[] = {
    "en"
 } ;
 
-static void genDoc ()
+static void genDoc ( const char *lang )
 {
+   RCGen rcGen ( lang ) ;
+   rcGen.genDoc() ;
+
+   OptGenForWeb optGen ( lang ) ;
+   optGen.run () ;
+
+   VerGen verGen ;
+   verGen.run(true) ;
+
    for ( int i = 0; i < LANG_MAX; ++i )
    {
       RCGen xml ( pLang[i] ) ;
-      OptGenForWeb optForWeb ( pLang[i] ) ;
-      // generate document for english and chinese
-      xml.genDoc() ;
-      // generate web console for english and chinese
-      xml.genWeb() ;
-      // generate database options for english and chinese
-      optForWeb.run () ;
+      xml.genWeb() ;  
    }
 }
 
@@ -90,7 +100,8 @@ int main (int argc, char** argv)
    genFileName () ;
    genOpt ( lang ) ;
    genTrace () ;
-   genDoc () ;
+   genDoc ( "cn" ) ;
    genBuild () ;
+   genVer() ;
    return 0;
 }

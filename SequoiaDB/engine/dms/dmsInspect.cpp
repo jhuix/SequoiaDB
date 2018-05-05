@@ -44,6 +44,8 @@
 #include "dmsCompress.hpp"
 #include "pdTrace.hpp"
 #include "dmsTrace.hpp"
+#include "dmsStorageDataCapped.hpp"
+#include "dmsStorageLob.hpp"
 
 using namespace bson ;
 
@@ -52,7 +54,7 @@ namespace engine
 
    UINT32 _dmsInspect::inspectHeader( void *inBuf, UINT32 inSize,
                                       CHAR *outBuf, UINT32 outSize,
-                                      SINT32 &pageSize, SINT32 &pageNum,
+                                      UINT32 &pageSize, UINT32 &pageNum,
                                       UINT64 &secretValue, SINT32 &err )
    {
       SINT32 localErr                    = 0 ;
@@ -82,6 +84,9 @@ namespace engine
                            header->_name ) ;
 
       if ( ossStrncmp ( eyeCatcher, DMS_DATASU_EYECATCHER,
+                        DMS_HEADER_EYECATCHER_LEN ) == 0
+           ||
+           ossStrncmp ( eyeCatcher, DMS_DATACAPSU_EYECATCHER,
                         DMS_HEADER_EYECATCHER_LEN ) == 0 )
       {
          dataOffset = DMS_MME_OFFSET + DMS_MME_SZ ;
@@ -175,12 +180,264 @@ namespace engine
 
       return len ;
    }
+   
+   UINT32 _dmsInspect::inspectLobmHeader( void *inBuf, UINT32 inSize,
+                                         CHAR *outBuf, UINT32 outSize, UINT32 sequence,
+                                         UINT32 &pageNum , UINT32 &lobmPageSize,
+                                         UINT64 secretValue, INT64 fileSize, SINT32 &localErr)
+   {
+      UINT32 len                         = 0 ;
+      dmsStorageUnitHeader *header       = (dmsStorageUnitHeader*)inBuf ;
+      CHAR   eyeCatcher [ DMS_HEADER_EYECATCHER_LEN+1 ] = {0} ;
+
+
+      if ( NULL == inBuf || NULL == outBuf || inSize != DMS_HEADER_SZ )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "Error: inspectHeader input size (%d) doesn't "
+                              "match expected size (%d)"OSS_NEWLINE,
+                              inSize, DMS_HEADER_SZ ) ;
+         ++localErr ;
+         goto exit ;
+      }
+
+      pageNum = header->_pageNum;
+      lobmPageSize = header->_pageSize;
+
+      ossMemcpy ( eyeCatcher, header->_eyeCatcher, DMS_HEADER_EYECATCHER_LEN ) ;
+
+      len += ossSnprintf ( outBuf + len, outSize - len,
+                    "Inspect Storage Unit Header: %s"OSS_NEWLINE,
+                    header->_name ) ;
+
+      if ( ossStrncmp ( eyeCatcher, DMS_LOBM_EYECATCHER,
+                 DMS_HEADER_EYECATCHER_LEN ) != 0)
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                           "Error: Invalid storage unit eye catcher: %s, "
+                           "expected: %s"OSS_NEWLINE,
+                           eyeCatcher, DMS_LOBM_EYECATCHER ) ;
+         ++localErr ;
+      }
+
+
+      if ( header->_version > DMS_LOB_CUR_VERSION )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "Error: Invalid lob version: %d"OSS_NEWLINE,
+                              header->_version ) ;
+         ++localErr ;
+      }
+
+      if ( header->_pageSize != DMS_PAGE_SIZE256B 
+          && header->_pageSize != DMS_PAGE_SIZE64B)
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "Error: Invalid page size: %d"OSS_NEWLINE,
+                              header->_pageSize ) ;
+         ++localErr ;
+      }
+
+      if ( header->_storageUnitSize !=  fileSize / header->_pageSize )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                             "Error: Storage Unit size is smaller than "
+                             "header: %d"OSS_NEWLINE,
+                             header->_storageUnitSize ) ;
+         ++localErr ;
+      }
+
+      if ( ( header->_pageNum % DMS_SEGMENT_PG(header->_lobdPageSize) != 0 )
+          || (header->_pageNum > DMS_MAX_PG) )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "Error: Invalid page number: %d"OSS_NEWLINE,
+                              header->_pageNum ) ;
+         ++localErr ;
+      }
+      pageNum =  header->_pageNum;
+
+
+      if ( header->_secretValue != secretValue )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                      "Error: Secret value[%llu] is not expected[%llu]"OSS_NEWLINE,
+                      header->_secretValue , secretValue ) ;
+         ++localErr ;
+      }
+
+      if ( header->_sequence != sequence )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                             "Error: sequence value[%llu] is not expected[%llu]"OSS_NEWLINE,
+                             header->_sequence , sequence ) ;
+         ++localErr ;
+      }
+
+
+      if ( header->_numMB  != 0 )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "Error: Invalid number of collections: %d, "
+                              "which should be %d"OSS_NEWLINE,
+                              header->_numMB, 0) ;
+         ++localErr ;
+      }
+
+      if ( header->_numMB !=  header->_MBHWM )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "Error: Invalid number of collections: %d, "
+                              "HWM is %d"OSS_NEWLINE,
+                              header->_numMB, header->_MBHWM ) ;
+         ++localErr ;
+      }
+
+   exit :
+      if ( 0 == localErr )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "Inspect Storage Unit Header Done "
+                              "without Error"OSS_NEWLINE ) ;
+      }
+      else
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "Inspect Storage Unit Header Done "
+                              "with Error: %d"OSS_NEWLINE, localErr ) ;
+      }
+      len += ossSnprintf ( outBuf + len, outSize - len, OSS_NEWLINE ) ;
+
+      return len ;
+   }
+
+
+   UINT32 _dmsInspect::inspectLobdHeader( void *inBuf, UINT32 inSize,
+                                         CHAR *outBuf, UINT32 outSize, 
+                                         UINT32 sequence, UINT64 secretValue,
+                                         INT64 fileSize, INT32 &totalErr)
+   {
+      SINT32 localErr                    = 0 ;
+      UINT32 len                         = 0 ;
+      dmsStorageUnitHeader *header       = (dmsStorageUnitHeader*)inBuf ;
+      CHAR   eyeCatcher [ DMS_HEADER_EYECATCHER_LEN+1 ] = {0} ;
+
+      if ( NULL == inBuf || NULL == outBuf || inSize != DMS_HEADER_SZ )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "Error: inspectHeader input size (%d) doesn't "
+                              "match expected size (%d)"OSS_NEWLINE,
+                              inSize, DMS_HEADER_SZ ) ;
+         ++localErr ;
+      }
+
+      ossMemcpy ( eyeCatcher, header->_eyeCatcher, DMS_HEADER_EYECATCHER_LEN ) ;
+
+      len += ossSnprintf ( outBuf + len, outSize - len,
+                    "Inspect Storage Unit Header: %s"OSS_NEWLINE,
+                    header->_name ) ;
+
+      if ( ossStrncmp ( eyeCatcher, DMS_LOBD_EYECATCHER,
+                 DMS_HEADER_EYECATCHER_LEN ) != 0)
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "Error: Invalid storage unit eye catcher: %s, "
+                              "expected: %s"OSS_NEWLINE,
+                              eyeCatcher, DMS_LOBD_EYECATCHER ) ;
+         ++localErr ;
+      }
+
+
+      if ( header->_version > DMS_LOB_CUR_VERSION )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "Error: Invalid lob version: %d"OSS_NEWLINE,
+                              header->_version ) ;
+         ++localErr ;
+      }
+
+      if ( header->_pageSize != 0 )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "Error: Invalid page size: %d"OSS_NEWLINE,
+                              header->_pageSize ) ;
+         ++localErr ;
+      }
+
+      if ( header->_storageUnitSize !=  0 )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                             "Error: Storage Unit size should not be: %d"OSS_NEWLINE,
+                             header->_storageUnitSize) ;
+         ++localErr ;
+      }
+
+      if ( header->_pageNum != 0 )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "Error: page number should not be: %d"OSS_NEWLINE,
+                              header->_pageNum );
+         ++localErr ;
+      }
+
+      if ( header->_secretValue  != secretValue )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                             "Error: Secret value[%llu] is not expected[%llu]"OSS_NEWLINE,
+                             header->_secretValue , secretValue ) ;
+         ++localErr ;
+      }
+
+      if ( header->_sequence != sequence )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                             "Error: sequence value[%llu] is not expected[%llu]"OSS_NEWLINE,
+                             header->_sequence , sequence ) ;
+         ++localErr ;
+      }
+
+
+      if ( header->_numMB  != 0 )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "Error: Invalid number of collections: %d, "
+                              "which should be: %d"OSS_NEWLINE,
+                              header->_numMB, DMS_MME_SZ/DMS_MB_SIZE ) ;
+         ++localErr ;
+      }
+
+      if ( header->_numMB !=  header->_MBHWM )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "Error: Invalid number of collections: %d, "
+                              "HWM is %d"OSS_NEWLINE,
+                              header->_numMB, header->_MBHWM ) ;
+         ++localErr ;
+      }
+
+      if ( 0 == localErr )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "Inspect Storage Unit Header Done "
+                              "without Error"OSS_NEWLINE ) ;
+      }
+      else
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "Inspect Storage Unit Header Done "
+                              "with Error: %d"OSS_NEWLINE, localErr ) ;
+      }
+      len += ossSnprintf ( outBuf + len, outSize - len, OSS_NEWLINE ) ;
+
+      totalErr += localErr;
+      return len ;
+   }
 
    #define DMS_INSPECT_SME_STATE_BUFSZ          63
 
    UINT32 _dmsInspect::inspectSME( void *inBuf, UINT32 inSize,
                                    CHAR *outBuf, UINT32 outSize,
-                                   const CHAR *expBuffer, SINT32 pageNum,
+                                   const CHAR *expBuffer, UINT32 pageNum,
                                    SINT32 &hwmPages, SINT32 &err )
    {
       SINT32 localErr       = 0 ;
@@ -213,7 +470,7 @@ namespace engine
               pSME->getBitMask(i) )
          {
             len += ossSnprintf ( outBuf + len, outSize - len,
-                                 "Error: Page State 0x%08lx (%d) doesn't "
+                                 "Error: Page State 0x%08x (%d) doesn't "
                                  "match"OSS_NEWLINE,
                                  i, i ) ;
             smeMask2String ( pSME->getBitMask(i), stateBuf,
@@ -228,15 +485,14 @@ namespace engine
                                  pExpSME->getBitMask(i), stateBuf ) ;
             ++localErr ;
          }
-         else if ( i < (UINT32)pageNum &&
+         else if ( i < pageNum &&
                    DMS_SME_ALLOCATED == pSME->getBitMask(i) )
          {
             hwmPages = i ;
          }
-         else if ( i >= (UINT32)pageNum &&
+         else if ( i >= pageNum &&
                    DMS_SME_ALLOCATED == pSME->getBitMask(i) )
          {
-            // error
             len += ossSnprintf ( outBuf + len, outSize - len,
                                  "Error: allocated page (%d) over page number "
                                  "(%d) "OSS_NEWLINE,
@@ -333,13 +589,11 @@ namespace engine
          goto exit ;
       }
 
-      // if we want to find a specific collection
       if ( pCollectionName )
       {
          if ( ossStrncmp ( mb->_collectionName, pCollectionName,
                            DMS_COLLECTION_NAME_SZ ) != 0 )
          {
-            // if it doesn't match our expectation
             goto exit ;
          }
       }
@@ -393,19 +647,50 @@ namespace engine
             mbFlag2String ( mb->_flag, tmpStr, DMS_COLLECTION_STATUS_LEN ) ;
             len += ossSnprintf ( outBuf + len, outSize - len,
                                  "Error: Invalid collection flag: "
-                                 "0x%04lx (%s)"OSS_NEWLINE,
+                                 "0x%08x (%s)"OSS_NEWLINE,
                                  mb->_flag, tmpStr ) ;
             ++localErr ;
          }
-         if ( mb->_attributes & ~DMS_MB_ATTR_COMPRESSED )
+
+         if ( OSS_BIT_TEST( mb->_attributes, DMS_MB_ATTR_COMPRESSED ) )
+         {
+            if ( UTIL_COMPRESSOR_LZW != mb->_compressorType &&
+                 UTIL_COMPRESSOR_SNAPPY != mb->_compressorType )
+            {
+               mbAttr2String ( mb->_attributes, tmpStr,
+                               DMS_COLLECTION_STATUS_LEN ) ;
+               len += ossSnprintf( outBuf + len, outSize - len,
+                                   "Error: Imcompatible attribute[0x%08x (%s)] "
+                                   "and compressor type[%u]"OSS_NEWLINE,
+                                   mb->_attributes, tmpStr,
+                                   mb->_compressorType ) ;
+               ++localErr ;
+            }
+         }
+         else
+         {
+            if ( UTIL_COMPRESSOR_INVALID != mb->_compressorType )
+            {
+               len += ossSnprintf( outBuf + len, outSize - len,
+                                   "Error: Imcompatible attribute[0x%08x] "
+                                   "and compressor type[%u]"OSS_NEWLINE,
+                                   mb->_attributes,
+                                   mb->_compressorType ) ;
+               ++localErr ;
+            }
+         }
+
+         if ( mb->_attributes & ~(DMS_MB_ATTR_COMPRESSED|DMS_MB_ATTR_NOIDINDEX
+                                  |DMS_MB_ATTR_CAPPED) )
          {
             mbAttr2String ( mb->_attributes, tmpStr, DMS_COLLECTION_STATUS_LEN ) ;
             len += ossSnprintf ( outBuf + len, outSize - len,
                                  "Error: Invalid collection attributes: "
-                                 "0x%04lx (%s)"OSS_NEWLINE,
+                                 "0x%08x (%s)"OSS_NEWLINE,
                                  mb->_attributes, tmpStr ) ;
             ++localErr ;
          }
+
          if ( mb->_blockID != expCollectionID )
          {
             len += ossSnprintf ( outBuf + len, outSize - len,
@@ -481,8 +766,6 @@ namespace engine
                   ++localErr ;
                }
             }
-            /// don't to check this, because the maxPages is data file's,
-            /// but is not index files's
             /*
             for ( UINT16 i = 0 ; i < DMS_COLLECTION_MAX_INDEX ; i++ )
             {
@@ -513,15 +796,17 @@ namespace engine
       return len ;
    }
 
-   UINT32 _dmsInspect::inspectDataExtent( pmdEDUCB *cb, void *inBuf,
+   UINT32 _dmsInspect::inspectDataExtent( pmdEDUCB *cb, CHAR *inBuf,
                                           UINT32 inSize, CHAR *outBuf,
                                           UINT32 outSize, INT32 maxPages,
                                           UINT16 collectionID,
                                           dmsExtentID &nextExtent,
                                           set< dmsRecordID > *ridList,
                                           SINT32 &err,
-                                          utilCompressor *compressor,
-                                          utilCompressorContext compContext )
+                                          dmsCompressorEntry *compressorEntry,
+                                          UINT64 &recordNum,
+                                          UINT64 &compressedNum,
+                                          BOOLEAN capped )
    {
       UINT32 len           = 0 ;
       SINT32 localErr      = 0 ;
@@ -559,41 +844,17 @@ namespace engine
       }
       nextExtent = extent->_nextExtent ;
 
+      if ( capped )
       {
-         INT32 recordCount = 0 ;
-         len += inspectExtentHeader ( inBuf, inSize, outBuf + len,
-                                      outSize - len, collectionID, localErr ) ;
-         // make sure the extent is valid and in use
-         if ( DMS_EXTENT_FLAG_FREED == extent->_flag )
-         {
-            len += ossSnprintf ( outBuf + len, outSize - len,
-                                 "Error: Extent is not in use"OSS_NEWLINE ) ;
-            ++localErr ;
-         }
-         // start inspect all records
-         dmsOffset nextRecord = extent->_firstRecordOffset ;
-         while ( DMS_INVALID_OFFSET != nextRecord && len < outSize )
-         {
-            if ( nextRecord >= (SINT32)inSize )
-            {
-               len += ossSnprintf (  outBuf + len, outSize - len,
-                                     "Error : nextRecord %d is greater "
-                                     "than inSize %d",
-                                     nextRecord, inSize ) ;
-               ++localErr ;
-            }
-            len += inspectDataRecord ( cb, ((CHAR*)inBuf)+nextRecord,
-                                       inSize - nextRecord,
-                                       outBuf + len, outSize - len,
-                                       recordCount,
-                                       nextRecord, ridList, localErr,
-                                       compressor, compContext ) ;
-            if ( compContext )
-            {
-               compressor->rePrepare( compContext ) ;
-            }
-            ++recordCount ;
-         }
+         len += inspectCappedExtent( inBuf, inSize, outBuf + len, outSize - len,
+                                     collectionID, compressorEntry, recordNum,
+                                     compressedNum, localErr, cb ) ;
+      }
+      else
+      {
+         len += inspectNormalExtent( inBuf, inSize, outBuf + len, outSize - len,
+                                     collectionID, compressorEntry, recordNum,
+                                     compressedNum, localErr, ridList, cb ) ;
       }
 
    exit :
@@ -617,16 +878,16 @@ namespace engine
                                           dmsOffset &nextRecord,
                                           set< dmsRecordID > *ridList,
                                           SINT32 &err,
-                                          utilCompressor *compressor,
-                                          utilCompressorContext compContext )
+                                          dmsCompressorEntry *compressorEntry,
+                                          BOOLEAN &isCompressed )
    {
       INT32 rc          = SDB_OK ;
       UINT32 len        = 0 ;
       dmsRecord *record = (dmsRecord*)inBuf ;
       CHAR flag         = 0 ;
       CHAR state        = 0 ;
-      BOOLEAN   isOvf   = FALSE ;
       BOOLEAN   isDel   = FALSE ;
+      BOOLEAN   isOvf   = FALSE ;
 
       if ( NULL == inBuf  || NULL == outBuf || inSize < sizeof(dmsRecord) )
       {
@@ -639,13 +900,23 @@ namespace engine
          goto exit ;
       }
 
-      flag       = DMS_RECORD_GETFLAG(inBuf) ;
-      state      = DMS_RECORD_GETSTATE(inBuf) ;
+      flag       = record->getFlag() ;
+      state      = record->getState();
+
+      if ( flag & DMS_RECORD_FLAG_COMPRESSED )
+      {
+         isCompressed = TRUE ;
+      }
+      else
+      {
+         isCompressed = FALSE ;
+      }
 
       if ( OSS_BIT_TEST ( flag, DMS_RECORD_FLAG_OVERFLOWF ) )
       {
          isOvf = TRUE ;
       }
+
       if ( OSS_BIT_TEST ( flag, DMS_RECORD_FLAG_DELETED ) )
       {
          isDel = TRUE ;
@@ -670,6 +941,11 @@ namespace engine
          nextRecord = DMS_INVALID_OFFSET ;
          ++err ;
       }
+      else
+      {
+         nextRecord = record->_nextOffset ;
+      }
+
       if ( isDel )
       {
          len += ossSnprintf ( outBuf + len, outSize - len,
@@ -680,7 +956,7 @@ namespace engine
       }
       else if ( isOvf )
       {
-         dmsRecordID rid = DMS_RECORD_GETOVF(inBuf) ;
+         dmsRecordID rid = record->getOvfRID() ;
          if ( ridList )
          {
             ridList->insert ( rid ) ;
@@ -688,19 +964,23 @@ namespace engine
       }
       else
       {
-         // for normal and ovfto types, let's inspect data
          try
          {
+            ++err ;
+
             ossValuePtr recordPtr = 0 ;
-            DMS_RECORD_EXTRACTDATA ( compressor, compContext,
-                                     (ossValuePtr)(inBuf), recordPtr ) ;
+            DMS_RECORD_EXTRACTDATA ( record, recordPtr,
+                                     compressorEntry ) ;
             BSONObj obj ( (CHAR*)recordPtr ) ;
             if ( !obj.isValid() )
             {
                len += ossSnprintf ( outBuf + len, outSize - len,
                                     "Error: Detected invalid record (0x%08x)"
                                     OSS_NEWLINE, nextRecord ) ;
-               ++err ;
+            }
+            else
+            {
+               --err ;
             }
          }
          catch ( std::exception &e )
@@ -709,16 +989,58 @@ namespace engine
                                  "Error: Failed to format "
                                  "record: %s"OSS_NEWLINE,
                                  e.what() ) ;
-            ++err ;
          }
       }
-
-      nextRecord = record->_nextOffset ;
 
    exit :
       return len ;
    error:
       goto exit ;
+   }
+
+   UINT32 _dmsInspect::inspectCappedDataRecord( pmdEDUCB *cb,
+                                                dmsCappedRecord *record,
+                                                CHAR *outBuf,
+                                                UINT32 outSize,
+                                                dmsOffset currentOffset,
+                                                SINT32 &err,
+                                                dmsCompressorEntry *compressorEntry )
+   {
+      INT32 rc = SDB_OK ;
+      UINT32 len = 0 ;
+
+      try
+      {
+         ++err ;
+
+         ossValuePtr recordPtr = 0 ;
+         DMS_RECORD_EXTRACTDATA ( record, recordPtr,
+                                  compressorEntry ) ;
+         BSONObj obj ( (CHAR*)recordPtr ) ;
+         if ( !obj.isValid() )
+         {
+            len += ossSnprintf ( outBuf + len, outSize - len,
+                                 "Error: Detected invalid record (0x%08x)"
+                                 OSS_NEWLINE, currentOffset ) ;
+         }
+         else
+         {
+            --err ;
+         }
+      }
+      catch ( std::exception &e )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "Error: Failed to format "
+                              "record: %s"OSS_NEWLINE,
+                              e.what() ) ;
+      }
+
+   exit :
+      return len ;
+   error:
+      goto exit ;
+
    }
 
    UINT32 _dmsInspect::inspectExtentHeader( void *inBuf, UINT32 inSize,
@@ -1151,7 +1473,6 @@ namespace engine
          goto exit ;
       }
 
-      // get all child extents
       for ( INT32 i = 0; i < extentHead->_totalKeyNodeNum; ++i )
       {
          UINT32 keyOffset = sizeof(ixmExtentHead) +
@@ -1187,7 +1508,6 @@ namespace engine
          ++localErr ;
          goto exit ;
       }
-      // inspect all index keys
       for ( INT32 i = 0 ; i < extentHead->_totalKeyNodeNum ; ++i )
       {
          UINT32 keyOffset = sizeof(ixmExtentHead) +
@@ -1221,6 +1541,248 @@ namespace engine
       return len ;
    }
 
+   INT32 _dmsInspect::inspectNormalExtent( CHAR *inBuf, UINT32 inSize,
+                                           CHAR *outBuf, UINT32 outSize,
+                                           UINT16 collectionID,
+                                           dmsCompressorEntry *compressorEntry,
+                                           UINT64 &recordNum,
+                                           UINT64 &compressedNum,
+                                           INT32 &localErr,
+                                           set< dmsRecordID > *ridList,
+                                           pmdEDUCB *cb )
+   {
+      UINT32 len = 0 ;
+      INT32 recordCount = 0 ;
+      dmsExtent *extent = (dmsExtent *)inBuf ;
+      BOOLEAN isCompressed = FALSE ;
+
+      len += inspectExtentHeader ( inBuf, inSize, outBuf + len,
+                                   outSize - len, collectionID, localErr ) ;
+      if ( DMS_EXTENT_FLAG_FREED == extent->_flag )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "Error: Extent is not in use"OSS_NEWLINE ) ;
+         ++localErr ;
+      }
+      dmsOffset nextRecord = extent->_firstRecordOffset ;
+      while ( DMS_INVALID_OFFSET != nextRecord && len < outSize )
+      {
+         if ( nextRecord >= (SINT32)inSize )
+         {
+            len += ossSnprintf (  outBuf + len, outSize - len,
+                                  "Error : nextRecord %d is greater "
+                                  "than inSize %d",
+                                  nextRecord, inSize ) ;
+            ++localErr ;
+         }
+
+         len += inspectDataRecord ( cb, ((CHAR*)inBuf)+nextRecord,
+                                    inSize - nextRecord,
+                                    outBuf + len, outSize - len,
+                                    recordCount, nextRecord,
+                                    ridList, localErr,
+                                    compressorEntry,
+                                    isCompressed ) ;
+         ++recordCount ;
+         ++recordNum ;
+         if ( isCompressed )
+         {
+            ++compressedNum ;
+         }
+      }
+      return len ;
+   }
+
+   INT32 _dmsInspect::inspectCappedExtent( CHAR *inBuf, UINT32 inSize,
+                                           CHAR *outBuf, UINT32 outSize,
+                                           UINT16 collectionID,
+                                           dmsCompressorEntry *compressorEntry,
+                                           UINT64 &recordNum,
+                                           UINT64 &compressedNum,
+                                           INT32 &localErr,
+                                           pmdEDUCB *cb )
+   {
+      UINT32 len = 0 ;
+      INT32 recordCount = 0 ;
+      dmsExtent *extent = (dmsExtent *)inBuf ;
+      BOOLEAN isCompressed = FALSE ;
+
+      len += inspectExtentHeader ( inBuf, inSize, outBuf + len,
+                                   outSize - len, collectionID, localErr ) ;
+      if ( DMS_EXTENT_FLAG_FREED == extent->_flag )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "Error: Extent is not in use"OSS_NEWLINE ) ;
+         ++localErr ;
+      }
+      dmsOffset nextRecord = extent->_firstRecordOffset ;
+      dmsOffset lastRecord = extent->_lastRecordOffset ;
+      while ( DMS_INVALID_OFFSET != nextRecord && len < outSize )
+      {
+         dmsCappedRecord *record = NULL ;
+         INT64 logicalID = -1 ;
+         dmsOffset myOffset = DMS_INVALID_OFFSET ;
+         if ( nextRecord >= (SINT32)inSize )
+         {
+            len += ossSnprintf (  outBuf + len, outSize - len,
+                                  "Error : nextRecord %d is greater "
+                                  "than inSize %d",
+                                  nextRecord, inSize ) ;
+            ++localErr ;
+         }
+
+         record = (dmsCappedRecord*)( ((CHAR*)inBuf) + nextRecord ) ;
+         logicalID = record->getLogicalID() ;
+
+         if ( logicalID < 0 )
+         {
+            if ( nextRecord <= lastRecord )
+            {
+               len += ossSnprintf( outBuf + len, outSize - len,
+                                   "Error: logicalID (%lld) is invalid"OSS_NEWLINE,
+                                   logicalID ) ;
+               nextRecord = DMS_INVALID_OFFSET ;
+            }
+            else
+            {
+               nextRecord = DMS_INVALID_OFFSET ;
+               goto exit ;
+            }
+         }
+         else
+         {
+            myOffset = logicalID % DMS_CAP_EXTENT_BODY_SZ +
+                       DMS_EXTENT_METADATA_SZ ;
+            if ( myOffset != nextRecord )
+            {
+               if ( nextRecord <= lastRecord )
+               {
+                  len += ossSnprintf( outBuf + len, outSize - len,
+                                      "Error: logicalID (%lld) and offset (%u) "
+                                      "dose not match"OSS_NEWLINE,
+                                      logicalID, nextRecord ) ;
+                  nextRecord = DMS_INVALID_OFFSET ;
+               }
+               else
+               {
+                  nextRecord = DMS_INVALID_OFFSET ;
+                  goto exit ;
+               }
+            }
+         }
+
+         len += inspectCappedDataRecord( cb, record,
+                                         outBuf + len, outSize - len,
+                                         nextRecord, localErr,
+                                         compressorEntry ) ;
+         ++recordCount ;
+         ++recordNum ;
+         if ( isCompressed )
+         {
+            ++compressedNum ;
+         }
+         if ( DMS_INVALID_EXTENT != nextRecord )
+         {
+            nextRecord = ossRoundUpToMultipleX( nextRecord + record->getSize(),
+                                                4 ) ;
+         }
+      }
+
+   exit:
+      return len ;
+   }
+
+   UINT32 _dmsInspect::inspectDmsLobDataMapBlk(dmsLobDataMapBlk *blk, 
+                                 CHAR * outBuf, UINT32 outSize, 
+                                 UINT16 clId,  SINT32 &err)
+   {
+       UINT32 len           = 0 ;
+   
+       if (  blk->_mbID !=  clId )
+       {
+            len += ossSnprintf ( outBuf + len, outSize - len,
+                         "Error: Invalid mbID, mbId: %c, expected: %d"OSS_NEWLINE, blk->_mbID, clId) ;
+            ++err ;
+       }
+   
+       if (blk->_status != DMS_LOB_PAGE_REMOVED
+               && DMS_LOB_PAGE_NORMAL != blk->_status)
+       {
+            len += ossSnprintf ( outBuf + len, outSize - len, 
+                   "Error: Invalid dmsLobDataMapBlk status : %c( UNKOWN STATUS )"OSS_NEWLINE, blk->_status) ;
+            ++err ;
+       }
+      return len ;
+   }
+
+   
+   // PD_TRACE_DECLARE_FUNCTION ( SDB_INSPTDMSLOBMETA, "inspectDmsLobMeta" )
+   UINT32 _dmsInspect::inspectDmsLobMeta(dmsLobMeta *lobMeta,
+                            CHAR * outBuf, UINT32 outSize, 
+                            SINT32 &err)
+   {
+      UINT32 len           = 0 ;
+      CHAR strTime[ OSS_TIMESTAMP_STRING_LEN + 1 ] = { 0 } ;    
+      UINT64 curTime = ossGetCurrentMilliseconds() ;
+
+      if(lobMeta->_flag > DMS_LOB_META_FLAG_PIECESINFO_INSIDE )
+      {
+         len += ossSnprintf ( outBuf + len , outSize - len,
+                              "Error: LobMeta flag  (%d) in lobd file is unkown "
+                              "expected less than DMS_LOB_META_FLAG_PIECESINFO_INSIDE (%d)"
+                              OSS_NEWLINE,  lobMeta->_flag, DMS_LOB_META_FLAG_PIECESINFO_INSIDE) ;
+         err++;
+      }
+
+      if(lobMeta->_version > DMS_LOB_META_CURRENT_VERSION )
+      {
+         len += ossSnprintf ( outBuf + len , outSize - len,
+                              "Error: LobMeta version  (%d) in lobd file is unkown "
+                              "expected less than DMS_LOB_META_CURRENT_VERSION (%d)"
+                              OSS_NEWLINE,  lobMeta->_version, DMS_LOB_META_CURRENT_VERSION) ;
+         err++;
+      }
+
+      if(lobMeta->_status > DMS_LOB_COMPLETE )
+      {
+         len += ossSnprintf ( outBuf + len , outSize - len,
+                              "Error: LobMeta status  (%d) in lobd file is unkown "
+                              "expected less than DMS_LOB_COMPLETE (%d)"
+                              OSS_NEWLINE,  lobMeta->_status, DMS_LOB_COMPLETE) ;
+         err++;
+      }
+
+      if(lobMeta->hasPiecesInfo() && lobMeta->_piecesInfoNum <= 0 )
+      {
+         len += ossSnprintf ( outBuf + len , outSize - len,
+                              "Error: LobMeta piecesInfoNum  (%d)  or flag %d "
+                              "(DMS_LOB_META_MERGE_DATA_VERSION) in lobd file is unkown "
+                              OSS_NEWLINE,  lobMeta->_piecesInfoNum, DMS_LOB_COMPLETE) ;
+         err++;
+      }
+
+      ossTimestamp timestamp(lobMeta->_createTime);
+      if (curTime < lobMeta->_createTime)
+      {
+         ossTimestampToString(timestamp, strTime ) ;
+         len += ossSnprintf ( outBuf + len , outSize - len,
+                              "Error: LobMeta createTime  %lu (%s)  is not correct"OSS_NEWLINE, 
+                              lobMeta->_createTime, strTime) ;
+         err++;
+      }
+
+      if (curTime < lobMeta->_modificationTime)
+      {
+         timestamp = lobMeta->_modificationTime;
+         ossTimestampToString(timestamp, strTime) ;
+         len += ossSnprintf(outBuf + len , outSize - len,
+                             "Error: LobMeta modificationTime  %lu (%s)  is not correct"OSS_NEWLINE, 
+                             lobMeta->_modificationTime, strTime) ;
+         err++;
+      }
+
+      return len ;
+   }
 }
 
 

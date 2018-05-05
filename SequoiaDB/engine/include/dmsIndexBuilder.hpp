@@ -33,6 +33,7 @@
 
 #include "dmsStorageBase.hpp"
 #include "ixmKey.hpp"
+#include "dmsExtent.hpp"
 
 namespace engine
 {
@@ -56,8 +57,8 @@ namespace engine
 
    protected:
       virtual INT32 _build() = 0 ;
+      virtual INT32 _onInit() ;
 
-      // make sure the mbContext is locked before call _beforeExtent()/_afterExtent()
       #define _DMS_SKIP_EXTENT 1
       virtual INT32 _beforeExtent() ;
       virtual INT32 _afterExtent() ;
@@ -82,7 +83,8 @@ namespace engine
       OID                _indexOID ;
       dmsExtentID        _scanExtLID ;
       dmsExtentID        _currentExtentID ;
-      dmsExtent*         _extent ;
+      dmsExtRW           _extRW ;
+      const dmsExtent*   _extent ;
       BOOLEAN            _unique ;
       BOOLEAN            _dropDups ;
 
@@ -91,8 +93,9 @@ namespace engine
                                                _dmsStorageData* dataSU,
                                                _dmsMBContext* mbContext,
                                                _pmdEDUCB* eduCB,
-                                               dmsExtentID indexExtentID, 
-                                               INT32 sortBufferSize ) ;
+                                               dmsExtentID indexExtentID,
+                                               INT32 sortBufferSize,
+                                               UINT16 indexType ) ;
       static void releaseInstance( _dmsIndexBuilder* builder ) ;
    } ;
    typedef class _dmsIndexBuilder dmsIndexBuilder ;

@@ -55,12 +55,9 @@ using namespace std ;
 namespace engine
 {
 
-   // we ALWAYS search for MEM first, because we may have LSN stay in buffer
-   // but not on disk
    #define  DPS_SEARCH_MEM       0x01
-   // indicating also search in file
    #define  DPS_SEARCH_FILE      0x10
-   #define  DPS_SERCAH_ALL       (DPS_SEARCH_MEM|DPS_SEARCH_FILE)
+   #define  DPS_SEARCH_ALL       (DPS_SEARCH_MEM|DPS_SEARCH_FILE)
 
    class _pmdEDUCB ;
    class dpsTransCB ;
@@ -74,7 +71,8 @@ namespace engine
       ossQueue<_dpsLogPage *>    _queue;
       _dpsLogFileMgr             _logger;
       _dpsLogPage                *_pages;
-      _ossSpinXLatch             _mtx;
+      _ossSpinXLatch             _mtx ;
+      _ossSpinXLatch             _writeMutex ;
       _ossAtomic32               _idleSize;
       DPS_LSN                    _lsn;
       DPS_LSN                    _currentLsn;
@@ -90,6 +88,7 @@ namespace engine
 
       dpsTransCB                 *_transCB ;
       vector< dpsEventHandler* > _vecEventHandler ;
+      BOOLEAN                    _incVersion ;
 
    public:
       _dpsReplicaLogMgr();
@@ -111,6 +110,19 @@ namespace engine
          return lsn;
       }
 
+      OSS_INLINE DPS_LSN tryExpectLsn()
+      {
+         DPS_LSN lsn ;
+
+         if ( _mtx.try_get() )
+         {
+            lsn = _lsn ;
+            _mtx.release();
+         }
+
+         return lsn;
+      }
+
       OSS_INLINE DPS_LSN currentLsn()
       {
          DPS_LSN lsn ;
@@ -120,13 +132,39 @@ namespace engine
          return lsn;
       }
 
-      OSS_INLINE DPS_LSN_VER incVersion()
+      OSS_INLINE DPS_LSN commitLsn()
       {
-         DPS_LSN_VER version = DPS_INVALID_LSN_VERSION ;
-         _mtx.get();
-         version = ++_lsn.version ;
-         _mtx.release();
-         return version ;
+         DPS_LSN lsn ;
+         _mtx.get() ;
+         lsn = _lastCommitted ;
+         _mtx.release() ;
+         return lsn ;
+      }
+
+      OSS_INLINE void incVersion()
+      {
+         _mtx.get() ;
+         if ( DPS_INVALID_LSN_VERSION == _lsn.version )
+         {
+            ++_lsn.version ;
+         }
+         else if ( _lsn.offset > 0 )
+         {
+            _incVersion = TRUE ;
+         }
+         _mtx.release() ;
+      }
+
+      OSS_INLINE void cancelIncVersion()
+      {
+         _mtx.get() ;
+         _incVersion = FALSE ;
+         _mtx.release() ;
+      }
+
+      OSS_INLINE BOOLEAN hasDirty() const
+      {
+         return 0 !=_lastCommitted.compare( _currentLsn ) ? TRUE : FALSE ;
       }
 
       void regEventHandler( dpsEventHandler *pEventHandler ) ;
@@ -143,11 +181,8 @@ namespace engine
       INT32 init( const CHAR *path, UINT32 pageNum, dpsTransCB *pTransCB );
 
       INT32 merge( _dpsMergeBlock &block ) ;
-      //INT32 merge( _dpsMergeBlock &block, DPS_LSN &lsn );
 
-      // first step: allocate pages and product lsn
       INT32 preparePages ( dpsMergeInfo &info ) ;
-      // secondary step: write data to pages
       void  writeData ( dpsMergeInfo &info ) ;
 
       INT32 search( const DPS_LSN &minLsn, _dpsMessageBlock *mb,
@@ -157,13 +192,10 @@ namespace engine
       INT32 tearDown();
       INT32 flushAll() ;
 
-      /// committedLsn should be allocated by user
       INT32 commit( BOOLEAN deeply, DPS_LSN *committedLsn ) ;
 
       INT32 checkSyncControl( UINT32 reqLen, _pmdEDUCB *cb ) ;
 
-      /// any other interfaces should not be called
-      /// when this interface is beging called.
       INT32 move( const DPS_LSN_OFFSET &offset,
                   const DPS_LSN_VER &version ) ;
 
@@ -189,9 +221,29 @@ namespace engine
          return _restoreFlag;
       }
 
+      _dpsLogFile* getLogFile( UINT32 fileId )
+      {
+         return _logger.getLogFile( fileId ) ;
+      }
+
       UINT32 calcFileID ( DPS_LSN_OFFSET offset )
       {
          return ( offset / getLogFileSz () ) % getLogFileNum () ;
+      }
+
+      UINT32 calcLogicalFileID( DPS_LSN_OFFSET offset )
+      {
+         return ( offset / getLogFileSz () ) ;
+      }
+
+      BOOLEAN isFirstPhysicalLSNOfFile( DPS_LSN_OFFSET offset )
+      {
+         return ( ( offset % getLogFileSz () ) == 0 ) ? TRUE : FALSE ;
+      }
+
+      DPS_LSN_OFFSET calcFirstPhysicalLSNOfFile( UINT32 logicalFileId )
+      {
+         return ((UINT64)logicalFileId) * getLogFileSz () ;
       }
 
    private:

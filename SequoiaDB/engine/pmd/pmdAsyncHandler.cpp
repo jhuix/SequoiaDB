@@ -69,9 +69,6 @@ namespace engine
       return ( UINT64 )timerID ;
    }
 
-   // This function handle the timeout event
-   // Since timeout event is not critical, it's OK if there's error
-   // so we return void
    // PD_TRACE_DECLARE_FUNCTION ( SDB__PMDTMHD_HDTMOUT, "_pmdAsyncTimerHandler::handleTimeout" )
    void _pmdAsyncTimerHandler::handleTimeout( const UINT32 &millisec,
                                               const UINT32 &id )
@@ -81,15 +78,11 @@ namespace engine
 
       if ( _pSessionMgr->handleSessionTimeout( timerID , millisec ) != SDB_OK )
       {
-         // memory will be freed in the event consumer thread
-         // PMD_EDU_MEM_ALLOC will be passed into pmdEDUEvent, so that the
-         // consumer knows whether to free the memory
          PMD_EVENT_MESSAGES *eventMsg = (PMD_EVENT_MESSAGES *)
                SDB_OSS_MALLOC( sizeof (PMD_EVENT_MESSAGES ) ) ;
 
          if ( NULL == eventMsg )
          {
-            // if unable to allocate memory, let's simply return
             PD_LOG ( PDWARNING, "Failed to allocate memory for PDM "
                      "timeout Event for %d bytes",
                      sizeof (PMD_EVENT_MESSAGES ) ) ;
@@ -103,8 +96,7 @@ namespace engine
             eventMsg->timeoutMsg.occurTime = ts.time ;
             eventMsg->timeoutMsg.timerID = timerID ;
 
-            // post the timeout event of current timestamp
-            _pMgrCB->postEvent( pmdEDUEvent ( PMD_EDU_EVENT_TIMEOUT, 
+            _pMgrCB->postEvent( pmdEDUEvent ( PMD_EDU_EVENT_TIMEOUT,
                                               PMD_EDU_MEM_ALLOC,
                                               (void*)eventMsg ) ) ;
          }
@@ -133,14 +125,10 @@ namespace engine
       PD_TRACE_EXIT ( SDB__PMDMSGHND_DESC ) ;
    }
 
-   // copy content from msg and return the buffer
-   // It's caller's responsibility to free the memory
    // PD_TRACE_DECLARE_FUNCTION ( SDB__PMDMSGHND_CPMSG, "_pmdAsyncMsgHandler::_copyMsg" )
    void * _pmdAsyncMsgHandler::_copyMsg ( const CHAR* msg, UINT32 length )
    {
       PD_TRACE_ENTRY ( SDB__PMDMSGHND_CPMSG );
-      // memory will be freed by the caller
-      // TODO: OSS malloc will be replaced by session based malloc in the future
       CHAR *pBuffer = (CHAR * )SDB_OSS_MALLOC ( length ) ;
       if ( pBuffer )
       {
@@ -151,14 +139,11 @@ namespace engine
       return pBuffer ;
    }
 
-   // This function will not be used concurrently, so we don't need to latch it
    // PD_TRACE_DECLARE_FUNCTION ( SDB__PMDMSGHND_HNDMSG, "_pmdAsyncMsgHandler::handleMsg" )
-   INT32 _pmdAsyncMsgHandler::handleMsg( const NET_HANDLE & handle, 
-                                         const _MsgHeader * header, 
+   INT32 _pmdAsyncMsgHandler::handleMsg( const NET_HANDLE & handle,
+                                         const _MsgHeader * header,
                                          const CHAR * msg)
    {
-      //If TID not Zero, implicate external business require form client
-      //or repl sync messages
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__PMDMSGHND_HNDMSG ) ;
 
@@ -170,7 +155,6 @@ namespace engine
       {
          rc = _handleSessionMsg ( handle, header, msg ) ;
       }
-      //Other msg will push to cb queue
       else
       {
          rc = _handleMainMsg( handle, header, msg ) ;
@@ -185,7 +169,6 @@ namespace engine
       PD_TRACE_EXITRC ( SDB__PMDMSGHND_HNDMSG, rc ) ;
       return rc ;
    error :
-      /// when this error, net will close the connect
       rc = SDB_NET_BROKEN_MSG ;
       goto done ;
    }
@@ -213,7 +196,6 @@ namespace engine
       goto done ;
    }
 
-   // This function will not be used concurrently, so we don't need to latch it
    // PD_TRACE_DECLARE_FUNCTION ( SDB__PMDMSGHND_HNDCLOSE, "_pmdAsyncMsgHandler::handleClose" )
    void _pmdAsyncMsgHandler::handleClose ( const NET_HANDLE & handle,
                                            _MsgRouteID id )
@@ -243,52 +225,54 @@ namespace engine
       UINT64 sessionID = 0 ;
       _pmdAsyncSession *pSession = NULL ;
 
-      // if opcode is disconnect or interrupt, we don't expect to create
-      // new session
       if ( MSG_BS_DISCONNECT == header->opCode ||
-           MSG_BS_INTERRUPTE == header->opCode )
+           MSG_BS_INTERRUPTE == header->opCode ||
+           MSG_BS_INTERRUPTE_SELF == header->opCode )
       {
          bCreate = FALSE ;
       }
 
       sessionID = _pSessionMgr->makeSessionID( handle, header ) ;
 
-      // Find the associated session if exist
-      // If the session doesn't exist, we'll check bCreate, if bCreate=TRUE it
-      // will create one, otherwise will not
-      pSession = _pSessionMgr->getSession( sessionID ,
-                                           PMD_SESSION_PASSIVE,
-                                           handle, bCreate,
-                                           header->opCode,
-                                           NULL ) ;
-      // Determine whether a session is created or retreived
-      if ( NULL == pSession )
+      rc = _pSessionMgr->getSession( sessionID ,
+                                     PMD_SESSION_PASSIVE,
+                                     handle, bCreate,
+                                     header->opCode,
+                                     NULL,
+                                     &pSession ) ;
+      if ( rc )
       {
-         // If session is not retreived
          if ( !bCreate )
          {
-            // It's okay if we don't expect one
+            if ( MSG_BS_DISCONNECT == header->opCode )
+            {
+               _pSessionMgr->onNoneSessionDisconnect( sessionID ) ;
+            }
+            rc = SDB_OK ;
             goto done ;
          }
-         // Otherwise log the message
-         PD_LOG ( PDERROR, "Failed to create session[ID:%lld]",
-                  sessionID ) ;
-         // if pSession is not allocated, there is only one possible scenario
-         // that is out of memory
-         rc = SDB_OOM ;
-         goto error ;
+         PD_LOG ( PDERROR, "Failed to create session[ID:%lld], rc: %d",
+                  sessionID, rc ) ;
+
+         rc = _pSessionMgr->onErrorHanding( rc, header, handle,
+                                            sessionID, NULL ) ;
+         if ( rc )
+         {
+            goto error ;
+         }
+         else
+         {
+            goto done ;
+         }
       }
 
-      // On recieve
       pSession->onRecieve ( handle, (_MsgHeader*)header ) ;
 
-      // Check the received code
       if ( MSG_BS_DISCONNECT == header->opCode )
       {
-         PD_LOG ( PDINFO, "Session[%s] recieved disconnect message", 
+         PD_LOG ( PDINFO, "Session[%s] recieved disconnect message",
                   pSession->sessionName() ) ;
          _pSessionMgr->onSessionDisconnect( pSession ) ;
-         // Session will be released and we don't need to push message
          rc = _pSessionMgr->releaseSession( pSession, TRUE ) ;
          if ( rc )
          {
@@ -299,11 +283,9 @@ namespace engine
       }
       else if ( MSG_BS_INTERRUPTE == header->opCode )
       {
-         PD_LOG ( PDINFO, "Session[%s] recieved interrupt message", 
+         PD_LOG ( PDINFO, "Session[%s] recieved interrupt message",
                   pSession->sessionName() ) ;
          pSession->eduCB()->interrupt() ;
-         // For interrupt message, we have to continue in order to push the
-         // message
       }
       else if ( MSG_BS_INTERRUPTE_SELF == header->opCode )
       {
@@ -313,19 +295,28 @@ namespace engine
          goto done ;
       }
 
-      // push the mssage into session manager
       rc = _pSessionMgr->pushMessage( pSession, header, handle ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG ( PDERROR, "Failed to push message, rc = %d", rc ) ;
-         goto error ;
+
+         rc = _pSessionMgr->onErrorHanding( rc, header, handle,
+                                            sessionID, pSession ) ;
+         if ( rc )
+         {
+            goto error ;
+         }
+         else
+         {
+            goto done ;
+         }
       }
 
    done:
       PD_TRACE_EXITRC ( SDB__PMDMSGHND_HNDSNMSG, rc ) ;
-      return rc;
+      return rc ;
    error:
-      goto done;
+      goto done ;
    }
 
    // PD_TRACE_DECLARE_FUNCTION ( SDB__PMDMSGHND_HNDMAINMSG, "_pmdAsyncMsgHandler::_handleMainMsg" )
@@ -340,15 +331,22 @@ namespace engine
 
       SDB_ASSERT( _pMgrEDUCB, "Main edu can't be NULL" ) ;
 
-      // copy msg to a buffer and post the queue
-      // the memory is allocated in _copyMsg and will be released by consumer
       newMsg = _copyMsg ( msg, header->messageLength ) ;
       if ( NULL == newMsg )
       {
          PD_LOG ( PDERROR, "Failed to allocate memory for new msg for %d bytes",
                   header->messageLength ) ;
          rc = SDB_OOM ;
-         goto error ;
+
+         rc = _pSessionMgr->onErrorHanding( rc, header, handle, 0, NULL ) ;
+         if ( rc )
+         {
+            goto error ;
+         }
+         else
+         {
+            goto done ;
+         }
       }
 
       newHeader = ( MsgHeader * )newMsg ;

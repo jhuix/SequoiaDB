@@ -36,6 +36,7 @@
 #include <string>
 #include "ossTypes.h"
 #include "clsCatalogPredicate.hpp"
+#include "utilMap.hpp"
 
 namespace engine
 {
@@ -45,8 +46,8 @@ namespace engine
    */
    class clsCataHashPredTree : public SDBObject
    {
-   typedef std::vector< clsCataHashPredTree * >       VEC_CLSCATAHASHPREDSET ;
-   typedef std::map< std::string, bson::BSONElement > MAP_CLSCATAHASHPREDFIELDS ;
+   typedef std::vector< clsCataHashPredTree * >             VEC_CLSCATAHASHPREDSET ;
+   typedef _utilMap< std::string, bson::BSONElement, 10 >   MAP_CLSCATAHASHPREDFIELDS ;
    public:
       clsCataHashPredTree( bson::BSONObj shardingKey );
 
@@ -76,7 +77,6 @@ namespace engine
                      BOOLEAN &result );
 
    private:
-      // forbid copy constructor
       clsCataHashPredTree( clsCataHashPredTree &right ){}
    private:
       VEC_CLSCATAHASHPREDSET        _children;
@@ -104,7 +104,6 @@ namespace engine
       }CLS_CATA_PREDICATE_OBJ_TYPE ;
 
    public:
-      // note: don't delete shardingkey before delete clsCataHashMatcher
       clsCataHashMatcher( const bson::BSONObj &shardingKey );
 
       virtual ~clsCataHashMatcher(){};
@@ -128,6 +127,8 @@ namespace engine
 
       INT32 checkOpObj( const bson::BSONObj obj,
                         INT32 &result );
+
+      INT32 checkETInnerObj( const bson::BSONObj obj, INT32 &result ) ;
 
    private:
       clsCataHashPredTree        _predicateSet;

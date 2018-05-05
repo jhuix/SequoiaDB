@@ -62,7 +62,6 @@ namespace engine
       string code ;
       string str ;
 
-      // check, we need 1 argument
       if ( 0 == arg.argc() )
       {
          rc = SDB_INVALIDARG ;
@@ -78,7 +77,7 @@ namespace engine
       }
       
       code = md5::md5simpledigest( str ) ; 
-      rval.setStringVal( "", code.c_str() ) ;
+      rval.getReturnVal().setValue( code ) ;
        
    done:
       return rc ;
@@ -104,7 +103,6 @@ namespace engine
       md5::md5digest digest ;
       string code ;
 
-      // check, we need 1 argument filename
       if ( 0 == arg.argc() )
       {
          rc = SDB_INVALIDARG ;
@@ -118,7 +116,6 @@ namespace engine
          ss << "argument \'filename\' must be a string" ;
          goto error ;
       }
-      // open the file
       rc = ossOpen( filename.c_str(), OSS_READONLY, 0, file ) ;
       if ( rc )
       {
@@ -144,7 +141,7 @@ namespace engine
       }
       md5_finish( &st, digest ) ;
       code = md5::digestToString( digest ) ;
-      rval.setStringVal( "", code.c_str() ) ;
+      rval.getReturnVal().setValue( code ) ;
 
    done:
       if ( TRUE == isOpen )
@@ -163,7 +160,7 @@ namespace engine
       ss << "Hash functions:" << endl
          << " Hash.md5( str )" << endl 
          << " Hash.fileMD5( filename )" << endl ;
-      rval.setStringVal( "", ss.str().c_str() ) ;
+      rval.getReturnVal().setValue( ss.str() ) ;
       return SDB_OK ;
    }
 

@@ -39,8 +39,7 @@
    #include "omManager.hpp"
    #include "msgAuth.hpp"
    #include "coordCB.hpp"
-   #include "rtnCoord.hpp"
-   #include "rtnCoordOperator.hpp"
+   #include "coordAuthOperator.hpp"
    #include "msgMessage.hpp"
    #include "netFrame.hpp"
 #endif // SDB_ENGINE
@@ -153,9 +152,8 @@ namespace engine
          rc = sdbGetOMManager()->authenticate( authObj, _pEDUCB ) ;
          if ( rc )
          {
-            PD_LOG( PDERROR, "Client[%s] authenticate failed[user: %s, "
-                    "passwd: %s], rc: %d", clientName(), user.valuestrsafe(),
-                    pass.valuestrsafe(), rc ) ;
+            PD_LOG( PDERROR, "Client[%s] authenticate failed[user: %s], "
+                    "rc: %d", clientName(), user.valuestrsafe(), rc ) ;
             goto error ;
          }
          _isAuthed = TRUE ;
@@ -165,16 +163,19 @@ namespace engine
          INT64 contextID = -1 ;
          rtnContextBuf buf ;
 
-         CoordCB *pCoordcb = pmdGetKRCB()->getCoordCB();
-         rtnCoordProcesserFactory *pProcesserFactory =
-            pCoordcb->getProcesserFactory();
-         rtnCoordOperator *pOperator = NULL ;
-         pOperator = pProcesserFactory->getOperator( pMsg->opCode );
-         rc = pOperator->execute( pMsg, _pEDUCB, contextID, &buf ) ;
+         CoordCB *pCoordcb = pmdGetKRCB()->getCoordCB() ;
+         coordResource *pResource = pCoordcb->getResource() ;
 
-         // special handling for password verification when there is no
-         // addrlist specified. Usually this happen when there is only
-         // one coord node before creating the first catalog
+         coordAuthOperator opr ;
+         rc = opr.init( pResource, _pEDUCB ) ;
+         if ( rc )
+         {
+            PD_LOG( PDERROR, "Client[%s]: Init operator[%s] failed, rc: %d",
+                    clientName(), opr.getName(), rc ) ;
+            goto error ;
+         }
+
+         rc = opr.execute( pMsg, _pEDUCB, contextID, &buf ) ;
          if ( MSG_AUTH_VERIFY_REQ == pMsg->opCode &&
               SDB_CAT_NO_ADDR_LIST == rc )
          {
@@ -183,9 +184,8 @@ namespace engine
          }
          else if ( rc )
          {
-            PD_LOG( PDERROR, "Client[%s] authenticate failed[user: %s, "
-                    "passwd: %s], rc: %d", clientName(),
-                    user.valuestrsafe(), pass.valuestrsafe(), rc ) ;
+            PD_LOG( PDERROR, "Client[%s] authenticate failed[user: %s], "
+                    "rc: %d", clientName(), user.valuestrsafe(), rc ) ;
             goto error ;
          }
          else
@@ -223,7 +223,6 @@ namespace engine
             replyHeader.flags = rc ;
             replyHeader.startFrom = MSG_GET_INNER_REPLY_STARTFROM(pAuthRes) ;
             ossMemcpy( &(replyHeader.header), pAuthRes, sizeof( MsgHeader ) ) ;
-            /// release recv msg
             SDB_OSS_FREE( (BYTE*)pAuthRes ) ;
             pAuthRes = NULL ;
 
@@ -234,7 +233,6 @@ namespace engine
                rcTmp = pShard->updatePrimaryByReply( &(replyHeader.header) ) ;
                if ( SDB_NET_CANNOT_CONNECT == rcTmp )
                {
-                  /// the node is crashed, sleep some seconds
                   PD_LOG( PDWARNING, "Catalog group primary node is crashed "
                           "but other nodes not aware, sleep %d seconds",
                           NET_NODE_FAULTUP_MIN_TIME ) ;
@@ -249,9 +247,8 @@ namespace engine
             }
             else if ( rc )
             {
-               PD_LOG( PDERROR, "Client[%s] authenticate failed[user: %s, "
-                       "passwd: %s], rc: %d", clientName(),
-                       user.valuestrsafe(), pass.valuestrsafe(), rc ) ;
+               PD_LOG( PDERROR, "Client[%s] authenticate failed[user: %s], "
+                       "rc: %d", clientName(), user.valuestrsafe(), rc ) ;
                goto error ;
             }
             else

@@ -1,48 +1,314 @@
 // Global Constants
-var SDB_PAGESIZE_4K              = 4096 ;
-var SDB_PAGESIZE_8K              = 8192 ;
-var SDB_PAGESIZE_16K             = 16384 ;
-var SDB_PAGESIZE_32K             = 32768 ;
-var SDB_PAGESIZE_64K             = 65536 ;
-var SDB_PAGESIZE_DEFAULT         = SDB_PAGESIZE_64K ;
+const SDB_PAGESIZE_4K              = 4096 ;
+const SDB_PAGESIZE_8K              = 8192 ;
+const SDB_PAGESIZE_16K             = 16384 ;
+const SDB_PAGESIZE_32K             = 32768 ;
+const SDB_PAGESIZE_64K             = 65536 ;
+const SDB_PAGESIZE_DEFAULT         = SDB_PAGESIZE_64K ;
 
-var SDB_SNAP_CONTEXTS            = 0 ;
-var SDB_SNAP_CONTEXTS_CURRENT    = 1 ;
-var SDB_SNAP_SESSIONS            = 2 ;
-var SDB_SNAP_SESSIONS_CURRENT    = 3 ;
-var SDB_SNAP_COLLECTIONS         = 4 ;
-var SDB_SNAP_COLLECTIONSPACES    = 5 ;
-var SDB_SNAP_DATABASE            = 6 ;
-var SDB_SNAP_SYSTEM              = 7 ;
-var SDB_SNAP_CATALOG             = 8 ;
+const SDB_SNAP_CONTEXTS            = 0 ;
+const SDB_SNAP_CONTEXTS_CURRENT    = 1 ;
+const SDB_SNAP_SESSIONS            = 2 ;
+const SDB_SNAP_SESSIONS_CURRENT    = 3 ;
+const SDB_SNAP_COLLECTIONS         = 4 ;
+const SDB_SNAP_COLLECTIONSPACES    = 5 ;
+const SDB_SNAP_DATABASE            = 6 ;
+const SDB_SNAP_SYSTEM              = 7 ;
+const SDB_SNAP_CATALOG             = 8 ;
+const SDB_SNAP_TRANSACTIONS        = 9 ;
+const SDB_SNAP_TRANSACTIONS_CURRENT= 10 ;
+const SDB_SNAP_ACCESSPLANS         = 11 ;
+const SDB_SNAP_HEALTH              = 12 ;
 
-var SDB_LIST_CONTEXTS            = 0 ;
-var SDB_LIST_CONTEXTS_CURRENT    = 1 ;
-var SDB_LIST_SESSIONS            = 2 ;
-var SDB_LIST_SESSIONS_CURRENT    = 3 ;
-var SDB_LIST_COLLECTIONS         = 4 ;
-var SDB_LIST_COLLECTIONSPACES    = 5 ;
-var SDB_LIST_STORAGEUNITS        = 6 ;
-var SDB_LIST_GROUPS              = 7 ;
-var SDB_LIST_STOREPROCEDURES     = 8 ;
-var SDB_LIST_DOMAINS             = 9 ;
-var SDB_LIST_TASKS               = 10 ;
+const SDB_LIST_CONTEXTS            = 0 ;
+const SDB_LIST_CONTEXTS_CURRENT    = 1 ;
+const SDB_LIST_SESSIONS            = 2 ;
+const SDB_LIST_SESSIONS_CURRENT    = 3 ;
+const SDB_LIST_COLLECTIONS         = 4 ;
+const SDB_LIST_COLLECTIONSPACES    = 5 ;
+const SDB_LIST_STORAGEUNITS        = 6 ;
+const SDB_LIST_GROUPS              = 7 ;
+const SDB_LIST_STOREPROCEDURES     = 8 ;
+const SDB_LIST_DOMAINS             = 9 ;
+const SDB_LIST_TASKS               = 10 ;
+const SDB_LIST_TRANSACTIONS        = 11 ;
+const SDB_LIST_TRANSACTIONS_CURRENT = 12 ;
 
-var SDB_INSERT_CONTONDUP         = 1 ;
-var SDB_INSERT_RETURN_ID         = 2 ; // only available when inserting only one document
+const SDB_INSERT_CONTONDUP         = 1 ;
+const SDB_INSERT_RETURN_ID         = 2 ; // only available when inserting only one document
 
-var SDB_TRACE_FLW                = 0 ;
-var SDB_TRACE_FMT                = 1 ;
+const SDB_TRACE_FLW                = 0 ;
+const SDB_TRACE_FMT                = 1 ;
 
-var SDB_COORD_GROUP_NAME         = "SYSCoord" ;
-var SDB_CATALOG_GROUP_NAME       = "SYSCatalogGroup" ;
-var SDB_SPARE_GROUP_NAME         = "SYSSpare" ;
+const SDB_COORD_GROUP_NAME         = "SYSCoord" ;
+const SDB_CATALOG_GROUP_NAME       = "SYSCatalogGroup" ;
+const SDB_SPARE_GROUP_NAME         = "SYSSpare" ;
 
-var SDB_PRINT_JSON_FORMAT        = true ; 
+var SDB_PRINT_JSON_FORMAT          = true ;
 
+const SDB_JSON_PARSE               = JSON.parse ;
 // end Global Constants
 
 // Global functions
+
+// register json function
+//JSON.parse JSON.stringify
+function SDB_INIT(){
+
+   function isArray( object ){
+      return ( object &&
+               typeof( object ) === 'object' &&
+               typeof( object.length ) === 'number' &&
+               typeof( object.splice ) === 'function' &&
+               !( object.propertyIsEnumerable( 'length' ) ) ) ;
+   }
+
+   function filterInviChart(str) {
+      var i = 0, len = str.length;
+      var newStr = '';
+      var chars, code;
+      while (i < len) {
+         chars = str.charAt(i);
+         code = chars.charCodeAt();
+         if (code < 0x20 || code == 0x7F) {
+            chars = '?';
+         }
+         newStr += chars;
+         ++i;
+      }
+      return newStr;
+   }
+
+   JSON.parse = function(str, func) {
+      var json;
+      try {
+         json = SDB_JSON_PARSE(str, func);
+      } catch (e) {
+         try {
+            var newStr = filterInviChart(str);
+            json = SDB_JSON_PARSE(newStr, func);
+         } catch (e) {
+            json = eval('(' + str + ')');
+         }
+      }
+      return json;
+   } ;
+
+   //var rx_escapable = /[\\\"\u0000-\u001f\u007f-\u009f\u00ad\u0600-\u0604\u070f\u17b4\u17b5\u200c-\u200f\u2028-\u202f\u2060-\u206f\ufeff\ufff0-\uffff]/g;
+
+   function f(n) {
+      return n < 10
+          ? "0" + n
+          : n;
+   }
+
+   function this_value() {
+      return this.valueOf();
+   }
+
+   if (typeof Date.prototype.toJSON !== "function") {
+
+      Date.prototype.toJSON = function () {
+
+         return isFinite(this.valueOf())
+             ? this.getUTCFullYear() + "-" +
+                     f(this.getUTCMonth() + 1) + "-" +
+                     f(this.getUTCDate()) + "T" +
+                     f(this.getUTCHours()) + ":" +
+                     f(this.getUTCMinutes()) + ":" +
+                     f(this.getUTCSeconds()) + "Z"
+             : null;
+      };
+
+      Boolean.prototype.toJSON = this_value;
+      Number.prototype.toJSON = this_value;
+      String.prototype.toJSON = this_value;
+   }
+
+   var gap;
+   var indent;
+   var meta;
+   var rep;
+
+
+   function quote(str) {
+      var newString = "" ;
+      var length = str.length ;
+      for( var i = 0; i < length; ++i )
+      {
+         switch( str.charAt( i ) )
+         {
+         case "\"":
+            newString += "\\\"" ;
+            break ;
+         case "\\":
+            newString += "\\\\" ;
+            break ;
+         case "\b":
+            newString += "\\b" ;
+            break ;
+         case "\f":
+            newString += "\\f" ;
+            break ;
+         case "\n":
+            newString += "\\n" ;
+            break ;
+         case "\r":
+            newString += "\\r" ;
+            break ;
+         case "\t":
+            newString += "\\t" ;
+            break ;
+         default:
+            newString += str.charAt( i ) ;
+         }
+      }
+      return "\"" + newString + "\"" ;
+   }
+
+
+   function str(key, holder) {
+
+      var i;
+      var k;
+      var v;
+      var length;
+      var mind = gap;
+      var partial;
+      var value = holder[key];
+
+      if (value && typeof value === "object" &&
+              typeof value.toJSON === "function") {
+         value = value.toJSON(key);
+      }
+
+      if (typeof rep === "function") {
+         value = rep.call(holder, key, value);
+      }
+
+      switch (typeof value) {
+         case "string":
+            return quote(value);
+
+         case "number":
+            if (value === Number.POSITIVE_INFINITY) {
+               return 'Infinity';
+            }
+            else if (value === Number.NEGATIVE_INFINITY) {
+               return '-Infinity';
+            }
+            else if (value === Number.NaN) {
+               return '0';
+            }
+            else {
+               return String(value);
+            }
+
+         case "boolean":
+         case "null":
+            return String(value);
+
+         case "object":
+            if (!value) {
+               return "null";
+            }
+            gap += indent;
+            partial = [];
+
+            if( isArray( value ) ) {
+               length = value.length;
+               for (i = 0; i < length; i += 1) {
+                  partial[i] = str(i, value) || "null";
+               }
+
+               v = partial.length === 0
+                   ? "[]"
+                   : gap
+                       ? "[\n" + gap + partial.join(",\n" + gap) + "\n" + mind + "]"
+                       : "[" + partial.join(",") + "]";
+               gap = mind;
+               return v;
+            }
+
+            if (rep && typeof rep === "object") {
+               length = rep.length;
+               for (i = 0; i < length; i += 1) {
+                  if (typeof rep[i] === "string") {
+                     k = rep[i];
+                     v = str(k, value);
+                     if (v) {
+                        partial.push(quote(k) + (
+                            gap
+                                ? ": "
+                                : ":"
+                        ) + v);
+                     }
+                  }
+               }
+            } else {
+
+               for (k in value) {
+                  //if (Object.prototype.hasOwnProperty.call(value, k)) {
+                     v = str(k, value);
+                     if (v) {
+                        partial.push(quote(k) + (
+                            gap
+                                ? ": "
+                                : ":"
+                        ) + v);
+                     }
+                  //}
+               }
+            }
+
+            v = partial.length === 0
+                ? "{}"
+                : gap
+                    ? "{\n" + gap + partial.join(",\n" + gap) + "\n" + mind + "}"
+                    : "{" + partial.join(",") + "}";
+            gap = mind;
+            return v;
+      }
+   }
+
+   meta = {
+      "\b": "\\b",
+      "\t": "\\t",
+      "\n": "\\n",
+      "\f": "\\f",
+      "\r": "\\r",
+      "\"": "\\\"",
+      "\\": "\\\\"
+   };
+
+   JSON.stringify = function (value, replacer, space) {
+
+      var i;
+      gap = "";
+      indent = "";
+
+      if (typeof space === "number") {
+         for (i = 0; i < space; i += 1) {
+            indent += " ";
+         }
+
+      } else if (typeof space === "string") {
+         indent = space;
+      }
+
+      rep = replacer;
+      if (replacer && typeof replacer !== "function" &&
+              (typeof replacer !== "object" ||
+              typeof replacer.length !== "number")) {
+         throw new Error("JSON.stringify");
+      }
+
+      return str("", { "": value });
+   };
+
+}
+SDB_INIT() ;
+
 function println ( val ) {
    if ( arguments.length > 0 )
       print ( val ) ;
@@ -83,20 +349,66 @@ function jsonFormat(pretty) {
 
 // end Global functions
 
-// Bson
-function _numberLongRevier(key, value) {
-   if ( "number" === typeof(value) ) {
-   	// if we use +/-9007199254740992(+/-2^53) as the max/min valid integer
-   	// for sdb shell to input, we must use "<=" and ">=" to compare,
-   	// because, when value is greater then 9007199254740992,
-   	// value may show as 9007199254740992
-      if (value < -9007199254740991 || value > 9007199254740991 ) {
-         throw "can't display number, for it's too large" ;
-	  }
+Object.defineProperty(Object.prototype,'_rawValueOf',{
+   enumerable:false,
+   value: Object.prototype.valueOf
+});
+
+Object.defineProperty(Object.prototype,'_rawToString',{
+   enumerable:false,
+   value: Object.prototype.toString
+});
+
+Object.defineProperty(Object.prototype,'_equality',{
+   enumerable:false,
+   value: function(rval) {
+      if ( this.$numberLong != undefined ) {
+         if ( rval.$numberLong != undefined ) {
+            return this.valueOf() == rval.valueOf() ;
+         }
+         return rval == this.valueOf() ;
+      }
+      if ( rval.$numberLong != undefined ) {
+         return this == rval.valueOf() ;
+      }
+
+      throw "condition not suitable for the function" ;
    }
-   return value ;
+});
+
+Object.prototype.valueOf = function() {
+   if (this.$numberLong != undefined) {
+      if ( typeof(this.$numberLong ) == "string" )
+      {
+         return parseInt(this.$numberLong) ;
+      }
+      else if ( typeof(this.$numberLong ) == "number" )
+      {
+         return this.$numberLong ;
+      }
+      else
+      {
+         throw "invalid $numberLong" ;
+      }
+   }
+
+   return this._rawValueOf() ;
 }
 
+Object.prototype.toString = function() {
+   if (this.$numberLong != undefined) {
+      try
+      {
+         return JSON.stringify ( this, undefined, 2 ) ;
+      }
+      catch ( e )
+      {
+      }
+   }
+   return this._rawToString() ;
+}
+
+// Bson
 Bson.prototype.toObj = function() {
    return JSON.parse( this.toJson() ) ;
 }
@@ -189,6 +501,10 @@ SdbCursor.prototype.toString = function() {
 
 // CLCount
 CLCount.prototype.toString = function() {
+   this._exec() ;
+   return this._count ;
+}
+CLCount.prototype.valueOf = function() {
    this._exec() ;
    return this._count ;
 }
@@ -289,7 +605,8 @@ SdbQuery.prototype._exec = function() {
                                                this._hint,
                                                this._skip,
                                                this._limit,
-                                               this._flags );
+                                               this._flags,
+                                               this._options );
    }
    return this._cursor;
 }
@@ -343,12 +660,15 @@ SdbQuery.prototype.close = function() {
    return this._cursor.close();
 }
 
-SdbQuery.prototype.update = function( rule, returnNew ) {
+SdbQuery.prototype.update = function( rule, returnNew, options ) {
    if ((typeof rule) != "object" || isEmptyObject(rule)) {
       throw "SdbQuery.update(): the 1st param should be non-empty object";
    }
    if (undefined != returnNew && (typeof returnNew) != "boolean") {
       throw "SdbQuery.update(): the 2nd param should be boolean";
+   }
+   if (undefined != options && (typeof options) != "object") {
+      throw "SdbQuery.update(): the 3rd param should be object";
    }
 
    this._checkExecuted();
@@ -364,6 +684,10 @@ SdbQuery.prototype.update = function( rule, returnNew ) {
    modify.Update = rule;
    modify.ReturnNew = (returnNew != undefined) ? returnNew : false;
    this._hint.$Modify = modify;
+
+   if (undefined != options) {
+      this._options = options;
+   }
 
    return this;
 }
@@ -422,7 +746,16 @@ SdbQuery.prototype.explain = function( options ) {
                                     this._hint,
                                     this._skip,
                                     this._limit,
+                                    this._flags,
                                     options ) ;
+}
+
+SdbQuery.prototype.getQueryMeta = function() {
+   return this._collection.getQueryMeta( this._query,
+                                         this._sort,
+                                         this._hint,
+                                         this._skip,
+                                         this._limit ) ;
 }
 
 SdbQuery.prototype.size = function() {
@@ -495,6 +828,7 @@ SdbCS.prototype.toString = function() {
 SdbCS.prototype._resolveCL = function(clName) {
    this.getCL(clName) ;
 }
+
 // end SdbCS
 
 
@@ -563,6 +897,26 @@ Sdb.prototype.removeSpareRG  = function() {
    return this.removeRG( SDB_SPARE_GROUP_NAME ) ;
 }
 
+Sdb.prototype.stopRG = function() {
+   for( var index in arguments )
+   {
+      var rgName = arguments[ index ] ;
+      if ( "string" != typeof( rgName ) )
+      {
+         setLastErrMsg( "Sdb.stopRG(): wrong arguments" ) ;
+         throw SDB_INVALIDARG ;
+      }
+      try
+      {
+         this.getRG( rgName ).stop() ;
+      }
+      catch( e )
+      {
+         setLastErrMsg( rgName + ": " + getLastErrMsg() ) ;
+         throw e ;
+      }
+   }
+}
 // end Sdb
 
 function printCallStack()
@@ -610,7 +964,7 @@ if ( !Timestamp.prototype )
    Timestamp.prototype = {}
 
 Timestamp.prototype.toString = function() {
-   return "Timestamp(\"" + this._t + "\")" ; 
+   return "Timestamp(\"" + this._t + "\")" ;
 }
 // end Timestamp
 
@@ -653,6 +1007,14 @@ NumberLong.prototype.toString = function() {
    return "NumberLong(" + this._v + ")" ;
 }
 
+NumberLong.prototype.valueOf = function() {
+   if ( typeof(this._v ) == "string" )
+   {
+      return parseInt(this._v) ;
+   }
+   return this._v ;
+}
+
 // end NumberLong
 
 // SdbDate
@@ -663,5 +1025,3 @@ SdbDate.prototype.toString = function() {
    return "SdbDate(\"" + this._d + "\")" ;
 }
 // end SdbDate
-
-

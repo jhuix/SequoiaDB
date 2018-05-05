@@ -38,7 +38,6 @@
 
 #include "dmsScanner.hpp"
 #include "dmsStorageIndex.hpp"
-#include "mthMatcher.hpp"
 #include "rtnIXScanner.hpp"
 #include "bpsPrefetch.hpp"
 #include "dmsCompress.hpp"
@@ -53,14 +52,15 @@ namespace engine
    /*
       _dmsScanner implement
    */
-   _dmsScanner::_dmsScanner( dmsStorageData *su, dmsMBContext *context,
-                             _mthMatcher *match, DMS_ACCESS_TYPE accessType )
+   _dmsScanner::_dmsScanner( dmsStorageDataCommon *su, dmsMBContext *context,
+                             mthMatchRuntime *matchRuntime,
+                             DMS_ACCESS_TYPE accessType )
    {
       SDB_ASSERT( su, "storage data can't be NULL" ) ;
       SDB_ASSERT( context, "context can't be NULL" ) ;
       _pSu = su ;
       _context = context ;
-      _match = match ;
+      _matchRuntime = matchRuntime ;
       _accessType = accessType ;
    }
 
@@ -71,20 +71,22 @@ namespace engine
    }
 
    /*
-      _dmsExtScanner implement
+      _dmsExtScannerBase implement
    */
-   _dmsExtScanner::_dmsExtScanner( dmsStorageData *su, dmsMBContext *context,
-                                   mthMatcher *match, dmsExtentID curExtentID,
-                                   DMS_ACCESS_TYPE accessType,
-                                   INT64 maxRecords, INT64 skipNum )
-   :_dmsScanner( su, context, match, accessType )
+   _dmsExtScannerBase::_dmsExtScannerBase( dmsStorageDataCommon *su,
+                                           dmsMBContext *context,
+                                           mthMatchRuntime *matchRuntime,
+                                           dmsExtentID curExtentID,
+                                           DMS_ACCESS_TYPE accessType,
+                                           INT64 maxRecords, INT64 skipNum )
+   :_dmsScanner( su, context, matchRuntime, accessType ),
+    _curRecordPtr( NULL )
    {
       _maxRecords          = maxRecords ;
       _skipNum             = skipNum ;
-      _curRecordPtr        = 0 ;
       _next                = DMS_INVALID_OFFSET ;
       _firstRun            = TRUE ;
-      _pMonAppCB           = NULL ;
+      _extent              = NULL ;
       _pTransCB            = NULL ;
       _curRID._extent      = curExtentID ;
       _recordXLock         = FALSE ;
@@ -99,10 +101,9 @@ namespace engine
       }
    }
 
-   _dmsExtScanner::~_dmsExtScanner ()
+   _dmsExtScannerBase::~_dmsExtScannerBase ()
    {
       _extent     = NULL ;
-      _pMonAppCB  = NULL ;
 
       if ( FALSE == _firstRun && _recordXLock &&
            DMS_INVALID_OFFSET != _curRID._offset )
@@ -112,7 +113,7 @@ namespace engine
       }
    }
 
-   dmsExtentID _dmsExtScanner::nextExtentID() const
+   dmsExtentID _dmsExtScannerBase::nextExtentID() const
    {
       if ( _extent )
       {
@@ -121,7 +122,7 @@ namespace engine
       return DMS_INVALID_EXTENT ;
    }
 
-   INT32 _dmsExtScanner::stepToNextExtent()
+   INT32 _dmsExtScannerBase::stepToNextExtent()
    {
       if ( 0 != _maxRecords &&
            DMS_INVALID_EXTENT != nextExtentID() )
@@ -133,13 +134,91 @@ namespace engine
       return SDB_DMS_EOC ;
    }
 
+   void _dmsExtScannerBase::_checkMaxRecordsNum( _mthRecordGenerator &generator )
+   {
+      if ( _maxRecords > 0 )
+      {
+         if ( _maxRecords >= generator.getRecordNum() )
+         {
+            _maxRecords -= generator.getRecordNum() ;
+         }
+         else
+         {
+            INT32 num = generator.getRecordNum() - _maxRecords ;
+            generator.popTail( num ) ;
+            _maxRecords = 0 ;
+         }
+      }
+   }
+
+   INT32 _dmsExtScannerBase::advance( dmsRecordID &recordID,
+                                      _mthRecordGenerator &generator,
+                                      pmdEDUCB *cb,
+                                      _mthMatchTreeContext *mthContext )
+   {
+      INT32 rc = SDB_OK ;
+
+      if ( _firstRun )
+      {
+         rc = _firstInit( cb ) ;
+         PD_RC_CHECK( rc, PDWARNING, "first init failed, rc: %d", rc ) ;
+      }
+      else if ( _needUnLock && DMS_INVALID_OFFSET != _curRID._offset )
+      {
+         _pTransCB->transLockRelease( cb, _pSu->logicalID(), _context->mbID(),
+                                      &_curRID ) ;
+      }
+
+      rc = _fetchNext( recordID, generator, cb, mthContext ) ;
+      if ( rc )
+      {
+         if ( SDB_DMS_EOC != rc )
+         {
+            PD_LOG( PDERROR, "Get next record failed, rc: %d", rc ) ;
+         }
+         goto error ;
+      }
+
+   done:
+      return rc ;
+   error:
+      recordID.reset() ;
+      _curRID._offset = DMS_INVALID_OFFSET ;
+      goto done ;
+   }
+
+   void _dmsExtScannerBase::stop()
+   {
+      if ( FALSE == _firstRun && _recordXLock &&
+           DMS_INVALID_OFFSET != _curRID._offset )
+      {
+         _pTransCB->transLockRelease( _cb, _pSu->logicalID(), _context->mbID(),
+                                      &_curRID ) ;
+      }
+      _next = DMS_INVALID_OFFSET ;
+      _curRID._offset = DMS_INVALID_OFFSET ;
+   }
+
+   _dmsExtScanner::_dmsExtScanner( dmsStorageDataCommon *su, _dmsMBContext *context,
+                                   mthMatchRuntime *matchRuntime,
+                                   dmsExtentID curExtentID,
+                                   DMS_ACCESS_TYPE accessType,
+                                   INT64 maxRecords, INT64 skipNum )
+   : _dmsExtScannerBase( su, context, matchRuntime, curExtentID, accessType,
+                         maxRecords, skipNum )
+   {
+   }
+
+   _dmsExtScanner::~_dmsExtScanner()
+   {
+   }
+
    INT32 _dmsExtScanner::_firstInit( pmdEDUCB *cb )
    {
       INT32 rc          = SDB_OK ;
       _pTransCB         = pmdGetKRCB()->getTransCB() ;
       SDB_BPSCB *pBPSCB = pmdGetKRCB()->getBPSCB () ;
       BOOLEAN   bPreLoadEnabled = pBPSCB->isPreLoadEnabled() ;
-      _pMonAppCB        = cb ? cb->getMonAppCB() : NULL ;
       INT32 lockType    = _recordXLock ? EXCLUSIVE : SHARED ;
 
       if ( _recordXLock && DPS_INVALID_TRANS_ID == cb->getTransID() )
@@ -147,9 +226,9 @@ namespace engine
          _needUnLock = TRUE ;
       }
 
-      ossValuePtr extentPtr = _pSu->extentAddr( _curRID._extent ) ;
-      SDB_ASSERT( extentPtr, "extent id is invalid" ) ;
-      _extent = (dmsExtent*)extentPtr ;
+      _extRW = _pSu->extent2RW( _curRID._extent, _context->mbID() ) ;
+      _extRW.setNothrow( TRUE ) ;
+      _extent = _extRW.readPtr<dmsExtent>() ;
       if ( NULL == _extent )
       {
          rc = SDB_INVALIDARG ;
@@ -179,7 +258,6 @@ namespace engine
          goto error ;
       }
 
-      // send pre-load request
       if ( bPreLoadEnabled && DMS_INVALID_EXTENT != _extent->_nextExtent )
       {
          pBPSCB->sendPreLoadRequest ( bpsPreLoadReq( _pSu->CSID(),
@@ -190,7 +268,6 @@ namespace engine
       _cb   = cb ;
       _next = _extent->_firstRecordOffset ;
 
-      // unset first run
       _firstRun = FALSE ;
 
    done:
@@ -199,30 +276,18 @@ namespace engine
       goto done ;
    }
 
-   INT32 _dmsExtScanner::advance( dmsRecordID &recordID,
-                                  ossValuePtr &recordDataPtr,
-                                  pmdEDUCB *cb,
-                                  vector<INT64> *dollarList )
+   INT32 _dmsExtScanner::_fetchNext( dmsRecordID &recordID,
+                                     _mthRecordGenerator &generator,
+                                     pmdEDUCB *cb,
+                                     _mthMatchTreeContext *mthContext )
    {
       INT32 rc                = SDB_OK ;
       BOOLEAN result          = TRUE ;
-      utilCompressor *compressor = NULL ;
-      utilCompressorContext compContext = UTIL_INVALID_COMP_CTX ;
+      ossValuePtr recordDataPtr ;
+      dmsRecordData recordData ;
+      BOOLEAN lockedRecord    = FALSE ;
 
-      if ( _firstRun )
-      {
-         rc = _firstInit( cb ) ;
-         PD_RC_CHECK( rc, PDWARNING, "first init failed, rc: %d", rc ) ;
-      }
-      // have locked, but not trans, need to release record X lock
-      else if ( _needUnLock && DMS_INVALID_OFFSET != _curRID._offset )
-      {
-         _pTransCB->transLockRelease( cb, _pSu->logicalID(), _context->mbID(),
-                                      &_curRID ) ;
-      }
-
-      // skip extent all
-      if ( !_match && _skipNum > 0 && _skipNum >= _extent->_recCount )
+      if ( !_matchRuntime && _skipNum > 0 && _skipNum >= _extent->_recCount )
       {
          _skipNum -= _extent->_recCount ;
          _next = DMS_INVALID_OFFSET ;
@@ -230,9 +295,10 @@ namespace engine
 
       while ( DMS_INVALID_OFFSET != _next && 0 != _maxRecords )
       {
-         _curRecordPtr = (ossValuePtr)_extent + _next ;
          _curRID._offset = _next ;
-         _next = DMS_RECORD_GETNEXTOFFSET(_curRecordPtr) ;
+         _recordRW = _pSu->record2RW( _curRID, _context->mbID() ) ;
+         _curRecordPtr = _recordRW.readPtr( 0 ) ;
+         _next = _curRecordPtr->getNextOffset() ;
 
          if ( _recordXLock )
          {
@@ -243,8 +309,6 @@ namespace engine
                PD_CHECK( SDB_DPS_TRANS_APPEND_TO_WAIT == rc, rc, error, PDERROR,
                          "Failed to get record, append lock-wait-queue failed, "
                          "rc: %d", rc ) ;
-               // now haved append to lock-wait-queue, release latch and then
-               // wait the lock
                _context->pause() ;
                {
                DPS_TRANS_WAIT_LOCK _transWaitLock( cb, _pSu->logicalID(),
@@ -254,12 +318,12 @@ namespace engine
                }
                PD_RC_CHECK( rc, PDERROR, "Failed to wait record lock, rc: %d",
                             rc ) ;
-               // got the record-X-Lock, re-get the latch
+               lockedRecord = TRUE ;
                rc = _context->resume() ;
                if ( rc )
                {
                   PD_LOG( PDERROR, "Remove dms mb context failed, rc: %d", rc );
-                  goto error_release ;
+                  goto error ;
                }
                if ( !dmsAccessAndFlagCompatiblity ( _context->mb()->_flag,
                                                     _accessType ) )
@@ -267,18 +331,18 @@ namespace engine
                   PD_LOG ( PDERROR, "Incompatible collection mode: %d",
                            _context->mb()->_flag ) ;
                   rc = SDB_DMS_INCOMPATIBLE_MODE ;
-                  goto error_release ;
+                  goto error ;
                }
-               _next = DMS_RECORD_GETNEXTOFFSET(_curRecordPtr) ;
+               _next = _curRecordPtr->getNextOffset() ;
             }
          }
 
-         if ( OSS_BIT_TEST( DMS_RECORD_FLAG_DELETING,
-                            DMS_RECORD_GETATTR(_curRecordPtr) ) )
+         if ( _curRecordPtr->isDeleting() )
          {
             if ( _recordXLock )
             {
-               INT32 rc1 = _pSu->deleteRecord( _context, _curRID, 0, cb, NULL ) ;
+               INT32 rc1 = _pSu->deleteRecord( _context, _curRID,
+                                               0, cb, NULL ) ;
                if ( rc1 )
                {
                   PD_LOG( PDWARNING, "Failed to delete the deleting record, "
@@ -286,72 +350,66 @@ namespace engine
                }
                _pTransCB->transLockRelease( cb, _pSu->logicalID(),
                                             _context->mbID(), &_curRID ) ;
+               lockedRecord = FALSE ;
             }
             continue ;
          }
-         SDB_ASSERT( DMS_RECORD_FLAG_DELETED !=
-                     DMS_RECORD_GETSTATE(_curRecordPtr),
-                     "record can't be deleted" ) ;
+         SDB_ASSERT( !_curRecordPtr->isDeleted(), "record can't be deleted" ) ;
 
-         if ( !_match && _skipNum > 0 )
+         if ( !_matchRuntime && _skipNum > 0 )
          {
             --_skipNum ;
          }
          else
          {
             recordID = _curRID ;
-            if ( DMS_RECORD_FLAG_OVERFLOWF ==
-                 DMS_RECORD_GETSTATE(_curRecordPtr) )
+            rc = _pSu->extractData( _context, _recordRW, cb, recordData ) ;
+            if ( rc )
             {
-               _ovfRID = DMS_RECORD_GETOVF(_curRecordPtr) ;
-               _curRecordPtr = _pSu->extentAddr(_ovfRID._extent) +
-                               _ovfRID._offset ;
-               DMS_MON_OP_COUNT_INC( _pMonAppCB, MON_DATA_READ, 1 ) ;
+               PD_LOG( PDERROR, "Extract record data failed, rc: %d", rc ) ;
+               goto error ;
             }
+            recordDataPtr = ( ossValuePtr )recordData.data() ;
+            generator.setDataPtr( recordDataPtr ) ;
 
-            compressor =
-               _pSu->getCompressorEntry( _context->mbID() )->getCompressor() ;
-            if ( compressor )
-            {
-               rc = compressor->prepare( compContext ) ;
-               PD_RC_CHECK( rc, PDERROR,
-                           "Failed to prepare compressor, rc: %d", rc ) ;
-            }
-            DMS_RECORD_EXTRACTDATA( compressor, compContext,
-                                    _curRecordPtr, recordDataPtr ) ;
-            if ( compContext )
-            {
-               compressor->done( compContext ) ;
-               compContext = UTIL_INVALID_COMP_CTX ;
-            }
-            DMS_MON_OP_COUNT_INC( _pMonAppCB, MON_DATA_READ, 1 ) ;
-            DMS_MON_OP_COUNT_INC( _pMonAppCB, MON_READ, 1 ) ;
-
-            // math
-            if ( _match )
+            if ( _matchRuntime && _matchRuntime->getMatchTree() )
             {
                result = TRUE ;
                try
                {
-                  BSONObj obj ( (CHAR*)recordDataPtr ) ;
-                  rc = _match->matches( obj, result, dollarList ) ;
+                  _mthMatchTree *matcher = _matchRuntime->getMatchTree() ;
+                  rtnParamList *parameters = _matchRuntime->getParametersPointer() ;
+                  BSONObj obj( recordData.data() ) ;
+                  mthContextClearRecordInfoSafe( mthContext ) ;
+                  rc = matcher->matches( obj, result, mthContext, parameters ) ;
                   if ( rc )
                   {
                      PD_LOG( PDERROR, "Failed to match record, rc: %d", rc ) ;
-                     goto error_release ;
+                     goto error ;
                   }
                   if ( result )
                   {
+                     rc = generator.resetValue( obj, mthContext ) ;
+                     PD_RC_CHECK( rc, PDERROR, "resetValue failed:rc=%d", rc ) ;
+
                      if ( _skipNum > 0 )
                      {
-                        --_skipNum ;
+                        if ( _skipNum >= generator.getRecordNum() )
+                        {
+                           _skipNum -= generator.getRecordNum() ;
+                        }
+                        else
+                        {
+                           generator.popFront( _skipNum ) ;
+                           _skipNum = 0 ;
+                           _checkMaxRecordsNum( generator ) ;
+
+                           goto done ;
+                        }
                      }
                      else
                      {
-                        if ( _maxRecords > 0 )
-                        {
-                           --_maxRecords ;
-                        }
+                        _checkMaxRecordsNum( generator ) ;
                         goto done ; // find ok
                      }
                   }
@@ -361,11 +419,25 @@ namespace engine
                   PD_LOG ( PDERROR, "Failed to create BSON object: %s",
                            e.what() ) ;
                   rc = SDB_SYS ;
-                  goto error_release ;
+                  goto error ;
                }
             } // if ( _match )
             else
             {
+               try
+               {
+                  BSONObj obj( recordData.data() ) ;
+                  rc = generator.resetValue( obj, mthContext ) ;
+                  PD_RC_CHECK( rc, PDERROR, "resetValue failed:rc=%d", rc ) ;
+               }
+               catch( std::exception &e )
+               {
+                  rc = SDB_SYS ;
+                  PD_RC_CHECK( rc, PDERROR, "Failed to create BSON object: %s",
+                               e.what() ) ;
+                  goto error ;
+               }
+
                if ( _skipNum > 0 )
                {
                   --_skipNum ;
@@ -385,6 +457,7 @@ namespace engine
          {
             _pTransCB->transLockRelease( cb, _pSu->logicalID(),
                                          _context->mbID(), &_curRID ) ;
+            lockedRecord = FALSE ;
          }
       } // while
 
@@ -392,60 +465,402 @@ namespace engine
       goto error ;
 
    done:
-      if ( UTIL_INVALID_COMP_CTX != compContext )
-      {
-         compressor->done( compContext ) ;
-      }
       return rc ;
    error:
-      recordID.reset() ;
-      recordDataPtr = 0 ;
-      _curRID._offset = DMS_INVALID_OFFSET ;
-      goto done ;
-   error_release:
-      if ( _recordXLock )
+      if ( lockedRecord && _recordXLock )
       {
          _pTransCB->transLockRelease( cb, _pSu->logicalID(), _context->mbID(),
                                       &_curRID ) ;
       }
-      goto error ;
+      recordID.reset() ;
+      recordDataPtr = 0 ;
+      generator.setDataPtr( recordDataPtr ) ;
+      _curRID._offset = DMS_INVALID_OFFSET ;
+      goto done ;
    }
 
-   void _dmsExtScanner::stop()
+   _dmsCappedExtScanner::_dmsCappedExtScanner( dmsStorageDataCommon *su,
+                                               dmsMBContext *context,
+                                               mthMatchRuntime *matchRuntime,
+                                               dmsExtentID curExtentID,
+                                               DMS_ACCESS_TYPE accessType,
+                                               INT64 maxRecords,
+                                               INT64 skipNum )
+   : _dmsExtScannerBase( su, context, matchRuntime, curExtentID, accessType,
+                         maxRecords, skipNum )
    {
-      if ( FALSE == _firstRun && _recordXLock &&
-           DMS_INVALID_OFFSET != _curRID._offset )
-      {
-         _pTransCB->transLockRelease( _cb, _pSu->logicalID(), _context->mbID(),
-                                      &_curRID ) ;
-      }
+      _maxRecords = maxRecords ;
+      _skipNum = skipNum ;
+      _extent = NULL ;
+      _curRID._extent = curExtentID ;
       _next = DMS_INVALID_OFFSET ;
-      _curRID._offset = DMS_INVALID_OFFSET ;
+      _lastOffset = DMS_INVALID_OFFSET ;
+      _firstRun = TRUE ;
+      _cb = NULL ;
+      _workExtInfo = NULL ;
+      _rangeInit = FALSE ;
+      _fastScanByID = FALSE ;
+   }
+
+   _dmsCappedExtScanner::~_dmsCappedExtScanner()
+   {
+   }
+
+   INT32 _dmsCappedExtScanner::_firstInit( pmdEDUCB *cb )
+   {
+      INT32 rc = SDB_OK ;
+      _pTransCB = pmdGetKRCB()->getTransCB() ;
+      INT32 lockType = _recordXLock ? EXCLUSIVE : SHARED ;
+      BOOLEAN inRange = FALSE ;
+
+      if ( _recordXLock && DPS_INVALID_TRANS_ID == cb->getTransID() )
+      {
+         _needUnLock = TRUE ;
+      }
+
+      _extRW = _pSu->extent2RW( _curRID._extent, _context->mbID() ) ;
+      _extRW.setNothrow( TRUE ) ;
+      _extent = _extRW.readPtr<dmsExtent>() ;
+      if ( NULL == _extent )
+      {
+         rc = SDB_INVALIDARG ;
+         goto error ;
+      }
+
+      rc = _validateRange( inRange ) ;
+      PD_RC_CHECK( rc , PDERROR, "Failed to validate extant range, rc: %d",
+                   rc ) ;
+
+      if ( !inRange )
+      {
+         rc = SDB_DMS_EOC ;
+         goto error ;
+      }
+
+      if ( !_context->isMBLock( lockType ) )
+      {
+         rc = _context->mbLock( lockType ) ;
+         PD_RC_CHECK( rc, PDERROR, "dms mb lock failed, rc: %d", rc ) ;
+      }
+
+      _workExtInfo =
+         (( _dmsStorageDataCapped * )_pSu)->getWorkExtInfo( _context->mbID() ) ;
+
+      if ( _curRID._extent == _workExtInfo->getID() )
+      {
+         _next = _workExtInfo->_firstRecordOffset ;
+         _lastOffset = _workExtInfo->_lastRecordOffset ;
+      }
+      else
+      {
+         _next = _extent->_firstRecordOffset ;
+         _lastOffset = _extent->_lastRecordOffset ;
+      }
+
+      if ( !_extent->validate( _context->mbID() ) )
+      {
+         rc = SDB_SYS ;
+         goto error ;
+      }
+
+      _cb = cb ;
+      _firstRun = FALSE ;
+
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _dmsCappedExtScanner::_fetchNext( dmsRecordID &recordID,
+                                           _mthRecordGenerator &generator,
+                                           pmdEDUCB *cb,
+                                           _mthMatchTreeContext *mthContext )
+   {
+      INT32 rc = SDB_OK ;
+      BOOLEAN result = TRUE ;
+      ossValuePtr recordDataPtr ;
+      dmsRecordData recordData ;
+      const dmsCappedRecord *record = NULL ;
+      UINT32 currExtRecNum = 0 ;
+
+      currExtRecNum = ( _curRID._extent == _workExtInfo->getID() ) ?
+                       _workExtInfo->_recCount : _extent->_recCount ;
+
+      if ( !_matchRuntime && _skipNum > 0 && _skipNum >= currExtRecNum &&
+           ( _curRID._extent != _context->mb()->_lastExtentID ) )
+      {
+         _skipNum -= currExtRecNum ;
+         _next = DMS_INVALID_OFFSET ;
+      }
+
+      while ( _next <= _lastOffset && DMS_INVALID_OFFSET != _next &&
+              0 != _maxRecords )
+      {
+         _curRID._offset = _next ;
+         _recordRW = _pSu->record2RW( _curRID, _context->mbID() ) ;
+         _recordRW.setNothrow( TRUE ) ;
+         record= _recordRW.readPtr<dmsCappedRecord>( 0 ) ;
+         if ( !record )
+         {
+            PD_LOG( PDERROR, "Get record failed" ) ;
+            rc = SDB_SYS ;
+            goto error ;
+         }
+
+         _next += record->getSize() ;
+
+         if ( !_matchRuntime && _skipNum > 0 )
+         {
+            --_skipNum ;
+         }
+         else
+         {
+            recordID = _curRID ;
+            rc = _pSu->extractData( _context, _recordRW, cb, recordData ) ;
+            if ( rc )
+            {
+               PD_LOG( PDERROR, "Extract record data failed, rc: %d", rc ) ;
+               goto error ;
+            }
+            recordDataPtr = ( ossValuePtr )recordData.data() ;
+            generator.setDataPtr( recordDataPtr ) ;
+
+            if ( _matchRuntime && _matchRuntime->getMatchTree() )
+            {
+               result = TRUE ;
+               try
+               {
+                  _mthMatchTree *matcher = _matchRuntime->getMatchTree() ;
+                  rtnParamList *parameters = _matchRuntime->getParametersPointer() ;
+                  BSONObj obj( recordData.data() ) ;
+                  mthContextClearRecordInfoSafe( mthContext ) ;
+                  rc = matcher->matches( obj, result, mthContext, parameters ) ;
+                  if ( rc )
+                  {
+                     PD_LOG( PDERROR, "Failed to match record, rc: %d", rc ) ;
+                     goto error ;
+                  }
+                  if ( result )
+                  {
+                     rc = generator.resetValue( obj, mthContext ) ;
+                     PD_RC_CHECK( rc, PDERROR, "resetValue failed:rc=%d", rc ) ;
+
+                     if ( _skipNum > 0 )
+                     {
+                        if ( _skipNum >= generator.getRecordNum() )
+                        {
+                           _skipNum -= generator.getRecordNum() ;
+                        }
+                        else
+                        {
+                           generator.popFront( _skipNum ) ;
+                           _skipNum = 0 ;
+                           _checkMaxRecordsNum( generator ) ;
+
+                           goto done ;
+                        }
+                     }
+                     else
+                     {
+                        _checkMaxRecordsNum( generator ) ;
+                        goto done ; // find ok
+                     }
+                  }
+               }
+               catch( std::exception &e )
+               {
+                  PD_LOG ( PDERROR, "Failed to create BSON object: %s",
+                           e.what() ) ;
+                  rc = SDB_SYS ;
+                  goto error ;
+               }
+            } // if ( _match )
+            else
+            {
+               try
+               {
+                  BSONObj obj( recordData.data() ) ;
+                  rc = generator.resetValue( obj, mthContext ) ;
+                  PD_RC_CHECK( rc, PDERROR, "resetValue failed, rc: %d", rc ) ;
+               }
+               catch( std::exception &e )
+               {
+                  rc = SDB_SYS ;
+                  PD_RC_CHECK( rc, PDERROR, "Failed to create BSON object: %s",
+                               e.what() ) ;
+                  goto error ;
+               }
+
+               if ( _maxRecords > 0 )
+               {
+                  --_maxRecords ;
+               }
+
+               goto done ;
+            }
+         }
+      }
+
+      rc =  SDB_DMS_EOC ;
+      goto error ;
+
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   OSS_INLINE dmsExtentID _dmsCappedExtScanner::_idToExtLID( INT64 id )
+   {
+      SDB_ASSERT( id >= 0, "id can't be negative" ) ;
+      return ( id / DMS_CAP_EXTENT_BODY_SZ ) ;
+   }
+
+   INT32 _dmsCappedExtScanner::_initFastScanRange()
+   {
+      INT32 rc = SDB_OK ;
+      rtnPredicateSet predicateSet ;
+      _mthMatchTree *matcher = _matchRuntime->getMatchTree() ;
+      rtnParamList *parameters = _matchRuntime->getParametersPointer() ;
+
+      rc = matcher->calcPredicate( predicateSet, parameters ) ;
+      PD_RC_CHECK( rc, PDERROR, "Failed to calculate predicate, rc: %d",
+                   rc ) ;
+
+      {
+         rtnPredicate predicate = predicateSet.predicate( DMS_ID_KEY_NAME ) ;
+         if ( predicate.isGeneric() )
+         {
+            _fastScanByID = FALSE ;
+         }
+         else
+         {
+            _fastScanByID = TRUE ;
+            BSONObj boStartKey = BSON( DMS_ID_KEY_NAME << 0 ) ;
+            BSONObj boStopKey = BSON( DMS_ID_KEY_NAME << OSS_SINT64_MAX ) ;
+
+            rc = predicateSet.addPredicate( DMS_ID_KEY_NAME,
+                                            boStartKey.firstElement(),
+                                            BSONObj::GTE, FALSE, FALSE, FALSE,
+                                            -1, -1 ) ;
+            PD_RC_CHECK( rc, PDERROR, "Failed to add predicate, rc: %d", rc ) ;
+            rc = predicateSet.addPredicate( DMS_ID_KEY_NAME,
+                                            boStopKey.firstElement(),
+                                            BSONObj::LTE, FALSE, FALSE, FALSE,
+                                            -1, -1 ) ;
+            PD_RC_CHECK( rc, PDERROR, "Failed to add predicate, rc: %d", rc ) ;
+
+            predicate = predicateSet.predicate( DMS_ID_KEY_NAME ) ;
+
+            for ( RTN_SSKEY_LIST::iterator itr = predicate._startStopKeys.begin();
+                  itr != predicate._startStopKeys.end(); ++itr )
+            {
+               dmsExtentID startExtLID = DMS_INVALID_EXTENT ;
+               dmsExtentID endExtLID = DMS_INVALID_EXTENT ;
+               const rtnKeyBoundary &startKey = itr->_startKey ;
+               const rtnKeyBoundary &stopKey = itr->_stopKey ;
+
+               startExtLID = _idToExtLID( startKey._bound.numberLong() ) ;
+               endExtLID = _idToExtLID( stopKey._bound.numberLong() ) ;
+
+               _rangeSet.insert( std::pair<dmsExtentID, dmsExtentID>( startExtLID,
+                                                                      endExtLID ) ) ;
+            }
+         }
+      }
+      _rangeInit = TRUE ;
+
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _dmsCappedExtScanner::_validateRange( BOOLEAN &inRange )
+   {
+      INT32 rc = SDB_OK ;
+
+      inRange = TRUE ;
+      if ( _matchRuntime )
+      {
+         if ( !_rangeInit )
+         {
+            rc = _initFastScanRange() ;
+            PD_RC_CHECK( rc, PDERROR, "Failed to initial fast scan range, "
+                         "rc: %d", rc ) ;
+         }
+
+         if ( _fastScanByID )
+         {
+            for ( EXT_RANGE_SET_ITR itr = _rangeSet.begin();
+                  itr != _rangeSet.end(); ++itr )
+            {
+               if ( _extent->_logicID >= itr->first &&
+                    _extent->_logicID <= itr->second )
+               {
+                  inRange = TRUE ;
+                  break ;
+               }
+            }
+         }
+         else
+         {
+            inRange = TRUE ;
+         }
+      }
+
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   dmsExtentID _dmsCappedExtScanner::nextExtentID () const
+   {
+      if ( _extent )
+      {
+         return _extent->_nextExtent ;
+      }
+      return DMS_INVALID_EXTENT ;
    }
 
    /*
       _dmsTBScanner implement
    */
-   _dmsTBScanner::_dmsTBScanner( dmsStorageData *su, dmsMBContext *context,
-                                 mthMatcher *match, DMS_ACCESS_TYPE accessType,
+   _dmsTBScanner::_dmsTBScanner( dmsStorageDataCommon *su,
+                                 dmsMBContext *context,
+                                 mthMatchRuntime *matchRuntime,
+                                 DMS_ACCESS_TYPE accessType,
                                  INT64 maxRecords, INT64 skipNum )
-   :_dmsScanner( su, context, match, accessType ),
-    _extScanner( su, context, match, DMS_INVALID_EXTENT, accessType,
-                 maxRecords, skipNum )
+   :_dmsScanner( su, context, matchRuntime, accessType )
    {
+      _extScanner    = NULL ;
       _curExtentID   = DMS_INVALID_EXTENT ;
       _firstRun      = TRUE ;
+      _maxRecords    = maxRecords ;
+      _skipNum       = skipNum ;
    }
 
    _dmsTBScanner::~_dmsTBScanner()
    {
       _curExtentID   = DMS_INVALID_EXTENT ;
+      if ( _extScanner )
+      {
+         SDB_OSS_DEL _extScanner ;
+      }
    }
 
    INT32 _dmsTBScanner::_firstInit()
    {
       INT32 rc = SDB_OK ;
-      INT32 lockType = _extScanner._recordXLock ? EXCLUSIVE : SHARED ;
+      INT32 lockType = SHARED ;
+
+      rc = _getExtScanner() ;
+      PD_RC_CHECK( rc, PDERROR, "Get extent scanner failed, rc: %d", rc ) ;
+
+      lockType = _extScanner->_recordXLock ? EXCLUSIVE : SHARED ;
+
       if ( !_context->isMBLock( lockType ) )
       {
          rc = _context->mbLock( lockType ) ;
@@ -463,14 +878,36 @@ namespace engine
 
    void _dmsTBScanner::_resetExtScanner()
    {
-      _extScanner._firstRun = TRUE ;
-      _extScanner._curRID._extent = _curExtentID ;
+      _extScanner->_firstRun = TRUE ;
+      _extScanner->_curRID._extent = _curExtentID ;
+   }
+
+   INT32 _dmsTBScanner::_getExtScanner()
+   {
+      INT32 rc = SDB_OK ;
+      _extScanner = dmsGetScannerFactory()->create( _pSu, _context,
+                                                    _matchRuntime,
+                                                    _curExtentID,
+                                                    _accessType,
+                                                    _maxRecords,
+                                                    _skipNum ) ;
+      if ( !_extScanner )
+      {
+         PD_LOG( PDERROR, "Create extent scanner failed" ) ;
+         rc = SDB_OOM ;
+         goto error ;
+      }
+
+   done:
+      return rc ;
+   error:
+      goto done ;
    }
 
    INT32 _dmsTBScanner::advance( dmsRecordID &recordID,
-                                 ossValuePtr &recordDataPtr,
+                                 _mthRecordGenerator &generator,
                                  pmdEDUCB *cb,
-                                 vector<INT64> *dollarList )
+                                 _mthMatchTreeContext *mthContext )
    {
       INT32 rc = SDB_OK ;
       if ( _firstRun )
@@ -481,12 +918,12 @@ namespace engine
 
       while ( DMS_INVALID_EXTENT != _curExtentID )
       {
-         rc = _extScanner.advance( recordID, recordDataPtr, cb, dollarList ) ;
+         rc = _extScanner->advance( recordID, generator, cb, mthContext ) ;
          if ( SDB_DMS_EOC == rc )
          {
-            if ( 0 != _extScanner.getMaxRecords() )
+            if ( 0 != _extScanner->getMaxRecords() )
             {
-               _curExtentID = _extScanner.nextExtentID() ;
+               _curExtentID = _extScanner->nextExtentID() ;
                _resetExtScanner() ;
                _context->pause() ;
                continue ;
@@ -518,27 +955,26 @@ namespace engine
 
    void _dmsTBScanner::stop()
    {
-      _extScanner.stop() ;
+      _extScanner->stop() ;
       _curExtentID = DMS_INVALID_EXTENT ;
    }
 
    /*
       _dmsIXSecScanner implement
    */
-   _dmsIXSecScanner::_dmsIXSecScanner( dmsStorageData *su,
+   _dmsIXSecScanner::_dmsIXSecScanner( dmsStorageDataCommon *su,
                                        dmsMBContext *context,
-                                       mthMatcher *match,
+                                       mthMatchRuntime *matchRuntime,
                                        rtnIXScanner *scanner,
                                        DMS_ACCESS_TYPE accessType,
                                        INT64 maxRecords,
                                        INT64 skipNum )
-   :_dmsScanner( su, context, match, accessType )
+   :_dmsScanner( su, context, matchRuntime, accessType ),
+    _curRecordPtr( NULL )
    {
       _maxRecords          = maxRecords ;
       _skipNum             = skipNum ;
-      _curRecordPtr        = 0 ;
       _firstRun            = TRUE ;
-      _pMonAppCB           = NULL ;
       _pTransCB            = NULL ;
       _recordXLock         = FALSE ;
       _needUnLock          = FALSE ;
@@ -563,8 +999,6 @@ namespace engine
 
    _dmsIXSecScanner::~_dmsIXSecScanner ()
    {
-      _pMonAppCB  = NULL ;
-
       if ( FALSE == _firstRun && _recordXLock &&
            DMS_INVALID_OFFSET != _curRID._offset )
       {
@@ -608,7 +1042,6 @@ namespace engine
          _includeEndKey = TRUE ;
       }
 
-      // reset start/end RID
       if ( _getStartRID()->isNull() )
       {
          if ( 1 == _scanner->getDirection() )
@@ -651,7 +1084,6 @@ namespace engine
    {
       INT32 rc          = SDB_OK ;
       _pTransCB         = pmdGetKRCB()->getTransCB() ;
-      _pMonAppCB        = cb ? cb->getMonAppCB() : NULL ;
       INT32 lockType    = SHARED ;
 
       if ( _countOnly )
@@ -695,7 +1127,6 @@ namespace engine
 
       _cb   = cb ;
 
-      // unset first run
       _firstRun = FALSE ;
       _onceRestNum = (INT64)pmdGetKRCB()->getOptionCB()->indexScanStep() ;
 
@@ -725,29 +1156,45 @@ namespace engine
       return _scanner->getDirection() == _blockScanDir ? &_endRID : &_startRID ;
    }
 
+   void _dmsIXSecScanner::_updateMaxRecordsNum( _mthRecordGenerator &generator )
+   {
+      if ( _maxRecords > 0 )
+      {
+         if ( _maxRecords >= generator.getRecordNum() )
+         {
+            _maxRecords -= generator.getRecordNum() ;
+         }
+         else
+         {
+            INT32 num = generator.getRecordNum() - _maxRecords ;
+            generator.popTail( num ) ;
+            _maxRecords = 0 ;
+         }
+      }
+   }
+
    INT32 _dmsIXSecScanner::advance( dmsRecordID &recordID,
-                                    ossValuePtr &recordDataPtr,
+                                    _mthRecordGenerator &generator,
                                     pmdEDUCB * cb,
-                                    vector<INT64> *dollarList )
+                                    _mthMatchTreeContext *mthContext )
    {
       INT32 rc                = SDB_OK ;
       BOOLEAN result          = TRUE ;
-      utilCompressor *compressor = NULL ;
-      utilCompressorContext compContext = UTIL_INVALID_COMP_CTX ;
+      ossValuePtr recordDataPtr ;
+      dmsRecordData recordData ;
+      BOOLEAN lockedRecord    = FALSE ;
 
       if ( _firstRun )
       {
          rc = _firstInit( cb ) ;
          PD_RC_CHECK( rc, PDWARNING, "first init failed, rc: %d", rc ) ;
       }
-      // have locked, but not trans, need to release record X lock
       else if ( _needUnLock && DMS_INVALID_OFFSET != _curRID._offset )
       {
          _pTransCB->transLockRelease( cb, _pSu->logicalID(), _context->mbID(),
                                       &_curRID ) ;
       }
 
-      //DMS_RECORD_EXTRACTDATA(_curRecordPtr, recordDataPtr) ;
       while ( _onceRestNum-- > 0 && 0 != _maxRecords )
       {
          rc = _scanner->advance( _curRID, _recordXLock ? FALSE : TRUE ) ;
@@ -764,7 +1211,6 @@ namespace engine
          }
          SDB_ASSERT( _curRID.isValid(), "rid msut valid" ) ;
 
-         // index block scan
          if ( _indexBlockScan )
          {
             INT32 result = 0 ;
@@ -780,7 +1226,6 @@ namespace engine
                }
                if ( result < 0 )
                {
-                  // need to relocate
                   rc = _scanner->relocateRID( *_getStartKey(),
                                               *_getStartRID() ) ;
                   PD_RC_CHECK( rc, PDERROR, "Failed to relocateRID, rc: %d",
@@ -803,8 +1248,7 @@ namespace engine
             }
          }
 
-         // don't read data
-         if ( !_match )
+         if ( !_matchRuntime )
          {
             if ( _skipNum > 0 )
             {
@@ -819,13 +1263,13 @@ namespace engine
                }
                recordID = _curRID ;
                recordDataPtr = 0 ;
+               generator.setDataPtr( recordDataPtr ) ;
                goto done ;
             }
          }
 
-         _curRecordPtr = (ossValuePtr)_pSu->extentAddr( _curRID._extent ) +
-                         _curRID._offset ;
-
+         _recordRW = _pSu->record2RW( _curRID, _context->mbID() ) ;
+         _curRecordPtr = _recordRW.readPtr( 0 ) ;
          if ( _recordXLock )
          {
             rc = _pTransCB->tryOrAppendX( cb, _pSu->logicalID(),
@@ -835,10 +1279,8 @@ namespace engine
                PD_CHECK( SDB_DPS_TRANS_APPEND_TO_WAIT == rc, rc, error, PDERROR,
                          "Failed to get record, append lock-wait-queue failed, "
                          "rc: %d", rc ) ;
-               // now haved append to lock-wait-queue, release latch and then
-               // wait the lock
                rc = _scanner->pauseScan( _recordXLock ? FALSE : TRUE ) ;
-               PD_RC_CHECK( rc, PDERROR, "Failed to pause scan, rc: %d", rc ) ;
+               PD_RC_CHECK( rc, PDERROR, "Failed to pause ixscan, rc: %d", rc ) ;
 
                _context->pause() ;
                {
@@ -850,12 +1292,12 @@ namespace engine
                }
                PD_RC_CHECK( rc, PDERROR, "Failed to wait record lock, rc: %d",
                             rc ) ;
-               // got the record-X-Lock, re-get the latch
+               lockedRecord = TRUE ;
                rc = _context->resume() ;
                if ( rc )
                {
                   PD_LOG( PDERROR, "Remove dms mb context failed, rc: %d", rc );
-                  goto error_release ;
+                  goto error ;
                }
                if ( !dmsAccessAndFlagCompatiblity ( _context->mb()->_flag,
                                                     _accessType ) )
@@ -863,92 +1305,88 @@ namespace engine
                   PD_LOG ( PDERROR, "Incompatible collection mode: %d",
                            _context->mb()->_flag ) ;
                   rc = SDB_DMS_INCOMPATIBLE_MODE ;
-                  goto error_release ;
+                  goto error ;
                }
                rc = _scanner->resumeScan( _recordXLock ? FALSE : TRUE ) ;
                if ( rc )
                {
-                  PD_LOG( PDERROR, "Failed to resum ixscan, rc: %d", rc ) ;
-                  goto error_release ;
+                  PD_LOG( PDERROR, "Failed to resume ixscan, rc: %d", rc ) ;
+                  goto error ;
                }
             }
          }
-         // Note: index scan can't find deleting record
-         /*
-         if ( OSS_BIT_TEST( DMS_RECORD_FLAG_DELETING,
-                            DMS_RECORD_GETATTR(_curRecordPtr) ) )
+
+         if ( _curRecordPtr->isDeleting() )
          {
             if ( _recordXLock )
             {
-               INT32 rc1 = _pSu->deleteRecord( context, _curRID, 0, cb, NULL ) ;
-               if ( rc1 )
+               rc = _scanner->pauseScan( _recordXLock ? FALSE : TRUE ) ;
+               PD_RC_CHECK( rc, PDERROR, "Failed to pause ixscan, rc: %d", rc ) ;
+
+               rc = _pSu->deleteRecord( _context, _curRID, 0, cb, NULL ) ;
+               if ( SDB_OK != rc )
                {
                   PD_LOG( PDWARNING, "Failed to delete the deleting record, "
                           "rc: %d", rc ) ;
                }
+
+               rc = _scanner->resumeScan( _recordXLock ? FALSE : TRUE ) ;
+               PD_RC_CHECK( rc, PDERROR, "Failed to resume ixscan, rc: %d", rc ) ;
+
                _pTransCB->transLockRelease( cb, _pSu->logicalID(),
                                             _context->mbID(), &_curRID ) ;
+               lockedRecord = FALSE ;
             }
             continue ;
-         }*/
-         SDB_ASSERT( DMS_RECORD_FLAG_DELETED !=
-                     DMS_RECORD_GETSTATE(_curRecordPtr),
-                     "record can't be deleted" ) ;
+         }
+         SDB_ASSERT( !_curRecordPtr->isDeleted(), "record can't be deleted" ) ;
 
          recordID = _curRID ;
-         if ( DMS_RECORD_FLAG_OVERFLOWF ==
-              DMS_RECORD_GETSTATE(_curRecordPtr) )
+         rc = _pSu->extractData( _context, _recordRW, cb, recordData ) ;
+         if ( rc )
          {
-            _ovfRID = DMS_RECORD_GETOVF(_curRecordPtr) ;
-            _curRecordPtr = _pSu->extentAddr(_ovfRID._extent) +
-                            _ovfRID._offset ;
-            DMS_MON_OP_COUNT_INC( _pMonAppCB, MON_DATA_READ, 1 ) ;
+            PD_LOG( PDERROR, "Extract record data failed, rc: %d", rc ) ;
+            goto error ;
          }
+         recordDataPtr = ( ossValuePtr )recordData.data() ;
+         generator.setDataPtr( recordDataPtr ) ;
 
-         compressor =
-            _pSu->getCompressorEntry( _context->mbID() )->getCompressor() ;
-         if ( compressor )
-         {
-            rc = compressor->prepare( compContext ) ;
-            PD_RC_CHECK( rc, PDERROR,
-                        "Failed to prepare compressor, rc: %d", rc ) ;
-         }
-         DMS_RECORD_EXTRACTDATA( compressor, compContext,
-                                 _curRecordPtr, recordDataPtr) ;
-         if ( compContext )
-         {
-            compressor->done( compContext ) ;
-            compContext = UTIL_INVALID_COMP_CTX ;
-         }
-
-         DMS_MON_OP_COUNT_INC( _pMonAppCB, MON_DATA_READ, 1 ) ;
-         DMS_MON_OP_COUNT_INC( _pMonAppCB, MON_READ, 1 ) ;
-
-         // math
-         if ( _match )
+         if ( _matchRuntime && _matchRuntime->getMatchTree() )
          {
             result = TRUE ;
             try
             {
-               BSONObj obj ( (CHAR*)recordDataPtr ) ;
-               rc = _match->matches( obj, result, dollarList ) ;
+               _mthMatchTree *matcher = _matchRuntime->getMatchTree() ;
+               rtnParamList *parameters = _matchRuntime->getParametersPointer() ;
+               BSONObj obj ( recordData.data() ) ;
+               mthContextClearRecordInfoSafe( mthContext ) ;
+               rc = matcher->matches( obj, result, mthContext, parameters ) ;
                if ( rc )
                {
                   PD_LOG( PDERROR, "Failed to match record, rc: %d", rc ) ;
-                  goto error_release ;
+                  goto error ;
                }
                if ( result )
                {
+                  rc = generator.resetValue( obj, mthContext ) ;
+                  PD_RC_CHECK( rc, PDERROR, "resetValue failed:rc=%d", rc ) ;
                   if ( _skipNum > 0 )
                   {
-                     --_skipNum ;
+                     if ( _skipNum >= generator.getRecordNum() )
+                     {
+                        _skipNum -= generator.getRecordNum() ;
+                     }
+                     else
+                     {
+                        generator.popFront( _skipNum ) ;
+                        _skipNum = 0 ;
+                        _updateMaxRecordsNum( generator ) ;
+                        goto done ;
+                     }
                   }
                   else
                   {
-                     if ( _maxRecords > 0 )
-                     {
-                        --_maxRecords ;
-                     }
+                     _updateMaxRecordsNum( generator ) ;
                      goto done ; // find ok
                   }
                }
@@ -958,11 +1396,25 @@ namespace engine
                PD_LOG ( PDERROR, "Failed to create BSON object: %s",
                         e.what() ) ;
                rc = SDB_SYS ;
-               goto error_release ;
+               goto error ;
             }
          } // if ( _match )
          else
          {
+            try
+            {
+               BSONObj obj( recordData.data() ) ;
+               rc = generator.resetValue( obj, mthContext ) ;
+               PD_RC_CHECK( rc, PDERROR, "resetValue failed:rc=%d", rc ) ;
+            }
+            catch( std::exception &e )
+            {
+               rc = SDB_SYS ;
+               PD_RC_CHECK( rc, PDERROR, "Failed to create BSON object: %s",
+                            e.what() ) ;
+               goto error ;
+            }
+
             if ( _skipNum > 0 )
             {
                --_skipNum ;
@@ -981,6 +1433,7 @@ namespace engine
          {
             _pTransCB->transLockRelease( cb, _pSu->logicalID(),
                                          _context->mbID(), &_curRID ) ;
+            lockedRecord = FALSE ;
          }
       } // while
 
@@ -996,11 +1449,6 @@ namespace engine
       goto error ;
 
    done:
-      if ( UTIL_INVALID_COMP_CTX != compContext )
-      {
-         compressor->done( compContext ) ;
-      }
-
       if ( SDB_OK == rc && ( _onceRestNum <= 0 || 0 == _maxRecords ) )
       {
          rc = _scanner->pauseScan( _recordXLock ? FALSE : TRUE ) ;
@@ -1012,17 +1460,16 @@ namespace engine
 
       return rc ;
    error:
-      recordID.reset() ;
-      recordDataPtr = 0 ;
-      _curRID._offset = DMS_INVALID_OFFSET ;
-      goto done ;
-   error_release:
-      if ( _recordXLock )
+      if ( lockedRecord && _recordXLock )
       {
          _pTransCB->transLockRelease( cb, _pSu->logicalID(), _context->mbID(),
                                       &_curRID ) ;
       }
-      goto error ;
+      recordID.reset() ;
+      recordDataPtr = 0 ;
+      generator.setDataPtr( recordDataPtr ) ;
+      _curRID._offset = DMS_INVALID_OFFSET ;
+      goto done ;
    }
 
    void _dmsIXSecScanner::stop ()
@@ -1047,14 +1494,17 @@ namespace engine
    /*
       _dmsIXScanner implement
    */
-   _dmsIXScanner::_dmsIXScanner( dmsStorageData *su, dmsMBContext *context,
-                                 mthMatcher *match, rtnIXScanner *scanner,
+   _dmsIXScanner::_dmsIXScanner( dmsStorageDataCommon *su,
+                                 dmsMBContext *context,
+                                 mthMatchRuntime *matchRuntime,
+                                 rtnIXScanner *scanner,
                                  BOOLEAN ownedScanner,
                                  DMS_ACCESS_TYPE accessType,
                                  INT64 maxRecords,
                                  INT64 skipNum )
-   :_dmsScanner( su, context, match, accessType ),
-    _secScanner( su, context, match, scanner, accessType, maxRecords, skipNum )
+   :_dmsScanner( su, context, matchRuntime, accessType ),
+    _secScanner( su, context, matchRuntime, scanner, accessType, maxRecords,
+                 skipNum )
    {
       _scanner       = scanner ;
       _eof           = FALSE ;
@@ -1076,15 +1526,15 @@ namespace engine
    }
 
    INT32 _dmsIXScanner::advance( dmsRecordID &recordID,
-                                 ossValuePtr &recordDataPtr,
+                                 _mthRecordGenerator &generator,
                                  pmdEDUCB * cb,
-                                 vector<INT64> *dollarList )
+                                 _mthMatchTreeContext *mthContext )
    {
       INT32 rc = SDB_OK ;
 
       while ( !_eof )
       {
-         rc = _secScanner.advance( recordID, recordDataPtr, cb, dollarList ) ;
+         rc = _secScanner.advance( recordID, generator, cb, mthContext ) ;
          if ( SDB_DMS_EOC == rc )
          {
             if ( 0 != _secScanner.getMaxRecords() &&
@@ -1129,35 +1579,39 @@ namespace engine
       _dmsExtentItr implement
    */
    _dmsExtentItr::_dmsExtentItr( dmsStorageData *su, dmsMBContext * context,
-                                 DMS_ACCESS_TYPE accessType )
+                                 DMS_ACCESS_TYPE accessType,
+                                 INT32 direction )
+   :_curExtent( NULL )
    {
       SDB_ASSERT( su, "storage data unit can't be NULL" ) ;
       SDB_ASSERT( context, "context can't be NULL" ) ;
 
       _pSu = su ;
       _context = context ;
-      _curExtAddr = 0 ;
-      _curExtent  = NULL ;
       _extentCount = 0 ;
       _accessType = accessType ;
+      _direction = direction ;
+   }
+
+   void _dmsExtentItr::reset( INT32 direction )
+   {
+      _extentCount = 0 ;
+      _direction = direction ;
+      _curExtent = NULL ;
    }
 
    _dmsExtentItr::~_dmsExtentItr ()
    {
       _pSu = NULL ;
       _context = NULL ;
-      _curExtAddr = 0 ;
       _curExtent = NULL ;
    }
 
    #define DMS_EXTENT_ITR_EXT_PERCOUNT    20
 
-   INT32 _dmsExtentItr::next( dmsExtent **ppExtent, pmdEDUCB *cb )
+   INT32 _dmsExtentItr::next( dmsExtentID &extentID, pmdEDUCB *cb )
    {
       INT32 rc = SDB_OK ;
-
-      SDB_ASSERT( ppExtent, "Extent can't be NULL" ) ;
-      *ppExtent = NULL ;
 
       if ( _extentCount >= DMS_EXTENT_ITR_EXT_PERCOUNT )
       {
@@ -1198,39 +1652,68 @@ namespace engine
 
       if ( NULL == _curExtent )
       {
-         if ( DMS_INVALID_EXTENT == _context->mb()->_firstExtentID )
+         if ( _direction > 0 )
          {
-            rc = SDB_DMS_EOC ;
-            goto error ;
+            if ( DMS_INVALID_EXTENT == _context->mb()->_firstExtentID )
+            {
+               rc = SDB_DMS_EOC ;
+               goto error ;
+            }
+            else
+            {
+               _extRW = _pSu->extent2RW( _context->mb()->_firstExtentID,
+                                         _context->mbID() ) ;
+               _extRW.setNothrow( FALSE ) ;
+               _curExtent = _extRW.readPtr<dmsExtent>() ;
+            }
          }
          else
          {
-            _curExtAddr = _pSu->extentAddr( _context->mb()->_firstExtentID ) ;
+            if ( DMS_INVALID_EXTENT == _context->mb()->_lastExtentID )
+            {
+               rc = SDB_DMS_EOC ;
+               goto error ;
+            }
+            else
+            {
+               _extRW = _pSu->extent2RW( _context->mb()->_lastExtentID,
+                                         _context->mbID() ) ;
+               _extRW.setNothrow( FALSE ) ;
+               _curExtent = _extRW.readPtr<dmsExtent>() ;
+            }
          }
       }
-      else if ( DMS_INVALID_EXTENT == _curExtent->_nextExtent )
+      else if ( ( _direction >= 0 &&
+                  DMS_INVALID_EXTENT == _curExtent->_nextExtent ) ||
+                ( _direction < 0 &&
+                  DMS_INVALID_EXTENT == _curExtent->_prevExtent ) )
       {
          rc = SDB_DMS_EOC ;
          goto error ;
       }
       else
       {
-         _curExtAddr = _pSu->extentAddr( _curExtent->_nextExtent ) ;
+         dmsExtentID next = _direction >= 0 ?
+                            _curExtent->_nextExtent :
+                            _curExtent->_prevExtent ;
+         _extRW = _pSu->extent2RW( next, _context->mbID() ) ;
+         _extRW.setNothrow( FALSE ) ;
+         _curExtent = _extRW.readPtr<dmsExtent>() ;
       }
 
-      if ( 0 == _curExtAddr )
+      if ( 0 == _curExtent )
       {
          rc = SDB_SYS ;
          goto error ;
       }
-      _curExtent = (dmsExtent*)_curExtAddr ;
+
       if ( !_curExtent->validate( _context->mbID() ) )
       {
-         PD_LOG( PDERROR, "Invalid extent[%d]", _pSu->extentID(_curExtAddr) ) ;
+         PD_LOG( PDERROR, "Invalid extent[%d]", _extRW.getExtentID() ) ;
          rc = SDB_SYS ;
          goto error ;
       }
-      *ppExtent = _curExtent ;
+      extentID = _extRW.getExtentID() ;
       ++_extentCount ;
 
    done:
@@ -1239,6 +1722,60 @@ namespace engine
       goto done ;
    }
 
+   _dmsExtScannerFactory::_dmsExtScannerFactory()
+   {
+   }
+
+   _dmsExtScannerFactory::~_dmsExtScannerFactory()
+   {
+   }
+
+   dmsExtScannerBase* _dmsExtScannerFactory::create( dmsStorageDataCommon *su,
+                                                     dmsMBContext *context,
+                                                     mthMatchRuntime *matchRuntime,
+                                                     dmsExtentID curExtentID,
+                                                     DMS_ACCESS_TYPE accessType,
+                                                     INT64 maxRecords,
+                                                     INT64 skipNum )
+   {
+      dmsExtScannerBase* scanner = NULL ;
+
+      if ( OSS_BIT_TEST( DMS_MB_ATTR_CAPPED, context->mb()->_attributes ) )
+      {
+         scanner = SDB_OSS_NEW dmsCappedExtScanner( su, context,
+                                                    matchRuntime,
+                                                    curExtentID,
+                                                    accessType,
+                                                    maxRecords,
+                                                    skipNum ) ;
+      }
+      else
+      {
+         scanner = SDB_OSS_NEW dmsExtScanner( su, context,
+                                              matchRuntime,
+                                              curExtentID,
+                                              accessType,
+                                              maxRecords,
+                                              skipNum ) ;
+      }
+
+      if ( !scanner )
+      {
+         PD_LOG( PDERROR, "Allocate memory for extent scanner failed" ) ;
+         goto error ;
+      }
+
+   done:
+      return scanner ;
+   error:
+      goto done ;
+   }
+
+   dmsExtScannerFactory* dmsGetScannerFactory()
+   {
+      static dmsExtScannerFactory s_factory ;
+      return &s_factory ;
+   }
 }
 
 

@@ -35,7 +35,8 @@
 #include "ossIO.hpp"
 #include "ossLatch.hpp"
 #include <openssl/crypto.h>
-
+#include "sptUsrSystemCommon.hpp"
+#include "utilStr.hpp"
 using namespace std ;
 
 #define SPT_COPY_BUF_SIZE  8192
@@ -47,15 +48,59 @@ namespace engine
    #define SPT_AUTH_KEYBOARD     0x0002
    #define SPT_AUTH_PUBKEY       0x0004
 
-   #define SPT_PUBLICKEY_FILE    "~/.ssh/id_rsa.pub"
-   #define SPT_PRIVATEKEY_FILE   "~/.ssh/id_rsa"
+   #define SPT_PUBLICKEY_FILE    "./.ssh/id_rsa.pub"
+   #define SPT_PRIVATEKEY_FILE   "./.ssh/id_rsa"
 
    #define MAX_OUT_STRING_LEN    ( 1024 * 1024 )
    #define READ_OUT_STR_LINE_LEN ( 1024 )
-   
+
    static ossSpinSLatch *locks = NULL ;
 
-   // callback function 1
+   struct SshMapRCItem
+   {
+      INT32 key ;
+      INT32 value ;
+      const BOOLEAN end ;
+   } ;
+
+   #define MAP_SSH_RC_ITEM( key, value ) { key, value, FALSE }
+
+   static INT32 _sshRCToSdbRC( INT32 retCode )
+   {
+      INT32 rc = SDB_SYS ;
+      static SshMapRCItem sshRCMap[] =
+      {
+         MAP_SSH_RC_ITEM( LIBSSH2_ERROR_NONE, SDB_OK ),
+         MAP_SSH_RC_ITEM( LIBSSH2_ERROR_ALLOC, SDB_OOM ),
+         MAP_SSH_RC_ITEM( LIBSSH2_ERROR_AUTHENTICATION_FAILED, SDB_INVALIDARG ),
+         MAP_SSH_RC_ITEM( LIBSSH2_ERROR_INVALID_POLL_TYPE, SDB_INVALIDARG ),
+         MAP_SSH_RC_ITEM( LIBSSH2_ERROR_INVAL, SDB_INVALIDARG ),
+         MAP_SSH_RC_ITEM( LIBSSH2_ERROR_BUFFER_TOO_SMALL, SDB_INVALIDSIZE ),
+         MAP_SSH_RC_ITEM( LIBSSH2_ERROR_METHOD_NOT_SUPPORTED, SDB_INVALIDARG ),
+         MAP_SSH_RC_ITEM( LIBSSH2_ERROR_EAGAIN, SDB_INTERRUPT ),
+         MAP_SSH_RC_ITEM( LIBSSH2_ERROR_TIMEOUT, SDB_TIMEOUT ),
+         MAP_SSH_RC_ITEM( LIBSSH2_ERROR_SOCKET_TIMEOUT, SDB_TIMEOUT ),
+         MAP_SSH_RC_ITEM( LIBSSH2_ERROR_SOCKET_DISCONNECT, SDB_NETWORK_CLOSE ),
+         MAP_SSH_RC_ITEM( LIBSSH2_ERROR_OUT_OF_BOUNDARY, SDB_INVALIDSIZE ),
+         MAP_SSH_RC_ITEM( LIBSSH2_ERROR_CHANNEL_PACKET_EXCEEDED, SDB_INVALIDSIZE ),
+         MAP_SSH_RC_ITEM( LIBSSH2_ERROR_SOCKET_SEND, SDB_NET_SEND_ERR ),
+         MAP_SSH_RC_ITEM( LIBSSH2_ERROR_BAD_SOCKET, SDB_NET_INVALID_HANDLE ),
+         { 0, 0, TRUE }
+      } ;
+
+      SshMapRCItem *item = &sshRCMap[0] ;
+      while( item->end != TRUE )
+      {
+         if( item->key == retCode )
+         {
+            rc = item->value ;
+            break ;
+         }
+         item++ ;
+      }
+      return rc ;
+   }
+
    void lock_callback( INT32 mode, INT32 type, CHAR *file, INT32 line )
    {
       if ( mode & CRYPTO_LOCK )
@@ -64,25 +109,21 @@ namespace engine
          locks[type].release() ;
    }
 
-   // callback function 2
    UINT64 thread_id( void )
    {
       return (UINT64)ossGetCurrentThreadID() ;
    }
 
-   // set 2 callback functions
    void ssh2_user_init( void )
    {
       if ( NULL == locks )
       {
-         /// _locks is delete[] in ssh2_user_cleanup
          locks = SDB_OSS_NEW ossSpinSLatch[CRYPTO_num_locks()] ;
          if ( NULL == locks )
          {
             PD_LOG ( PDERROR, "Failed to new[] memory, rc = %d", SDB_OOM ) ;
             ossPanic() ;
          }
-         // TODO: have not macro for "unsigned long"
          CRYPTO_set_id_callback( (unsigned long(*)())thread_id) ;
          CRYPTO_set_locking_callback((void(*)(INT32, INT32, const CHAR*, INT32))lock_callback) ;
       }
@@ -90,7 +131,6 @@ namespace engine
 
    void ssh2_user_cleanup( void )
    {
-      /// when nobody use _locks, delete[] it
       if ( NULL != locks )
       {
          SDB_OSS_DEL[] locks ;
@@ -133,7 +173,6 @@ namespace engine
                              LIBSSH2_USERAUTH_KBDINT_RESPONSE *responses,
                              void **abstract )
    {
-      // disable warning
       (void)name ;
       (void)name_len ;
       (void)instruction ;
@@ -201,7 +240,6 @@ namespace engine
          goto error ;
       }
 
-      // check auth type
       authList = libssh2_userauth_list( _session, _usr.c_str(),
                                         ossStrlen( _usr.c_str() ) ) ;
 
@@ -230,9 +268,38 @@ namespace engine
       }
       else
       {
+         string homePath ;
+         string err ;
+         CHAR publicKeyFile[ OSS_MAX_PATHSIZE + 1 ] ;
+         CHAR privateKeyFile[ OSS_MAX_PATHSIZE + 1 ] ;
+         rc = _sptUsrSystemCommon::getHomePath( homePath, err ) ;
+         if( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "%s", err.c_str() ) ;
+            goto error ;
+         }
+
+         rc = utilBuildFullPath( homePath.c_str(), SPT_PUBLICKEY_FILE,
+                                 OSS_MAX_PATHSIZE, publicKeyFile ) ;
+         if( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "Failed to build public key file path, rc: %d",
+                    rc ) ;
+            goto error ;
+         }
+
+         rc = utilBuildFullPath( homePath.c_str(), SPT_PRIVATEKEY_FILE,
+                                 OSS_MAX_PATHSIZE, privateKeyFile ) ;
+         if( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "Failed to build private key file path, rc: %d",
+                    rc ) ;
+            goto error ;
+         }
+
          rc = libssh2_userauth_publickey_fromfile( _session, _usr.c_str(),
-                                                   SPT_PUBLICKEY_FILE,
-                                                   SPT_PRIVATEKEY_FILE,
+                                                   publicKeyFile,
+                                                   privateKeyFile,
                                                    "" ) ;
       }
       if ( SDB_OK != rc )
@@ -266,7 +333,7 @@ namespace engine
       {
          PD_LOG( PDERROR, "failed to open channel in sesison" ) ;
          _getLastError( _errmsg ) ;
-         rc = SDB_SYS ;
+         rc = _getLastErrorRC() ;
          goto error ;
       }
 
@@ -275,7 +342,7 @@ namespace engine
       {
          _getLastError( _errmsg ) ;
          PD_LOG( PDERROR, "failed to exec cmd on remote node:%d", rc ) ;
-         rc = SDB_SYS ;
+         rc = _getLastErrorRC() ;
          goto error ;
       }
 
@@ -352,7 +419,7 @@ namespace engine
          else
          {
             PD_LOG( PDERROR, "failed to read from channel:%d", rc ) ;
-            rc = SDB_SYS ;
+            rc = _getLastErrorRC() ;
             goto error ;
          }
       }
@@ -428,20 +495,20 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
       CHAR *sig = NULL ;
-      
+
       if ( NULL != _channel )
       {
          rc = libssh2_channel_close( _channel ) ;
          if ( SDB_OK != rc )
          {
             _getLastError( _errmsg ) ;
+            rc = _getLastErrorRC() ;
             PD_LOG( PDERROR, "failed to close channel:%d", rc ) ;
             goto error ;
          }
 
          eixtcode = libssh2_channel_get_exit_status( _channel ) ;
 
-         /// we don't own the signal's mem.
          libssh2_channel_get_exit_signal(_channel, &sig,
                                          NULL, NULL, NULL, NULL, NULL);
          if ( NULL != sig )
@@ -459,7 +526,7 @@ namespace engine
    {
       errMsg = _errmsg ;
       _errmsg.clear() ;
-      return ; 
+      return ;
    }
 
    void _sptLibssh2Session::_getLastError( std::string &errMsg )
@@ -467,7 +534,6 @@ namespace engine
       CHAR *msg = NULL ;
       INT32 errLen = 0 ;
 
-      /// we do not want to own the mem. set want_buf = 0.
       if ( NULL != _session )
       {
          libssh2_session_last_error( _session, &msg, &errLen, 0 ) ;
@@ -499,7 +565,7 @@ namespace engine
          {
             _getLastError( _errmsg ) ;
             PD_LOG( PDERROR, "failed to send data:%lld", once ) ;
-            rc = SDB_SYS ;
+            rc = _getLastErrorRC() ;
             goto error ;
          }
       }
@@ -535,7 +601,7 @@ namespace engine
          {
             _getLastError( _errmsg ) ;
             PD_LOG( PDERROR, "failed to recv data:%lld", once ) ;
-            rc = SDB_SYS ;
+		    rc = _getLastErrorRC() ;
             goto error ;
          }
       }
@@ -566,12 +632,12 @@ namespace engine
          goto error ;
       }
 
-      _channel = libssh2_scp_send64( _session, dst, 0755, fileSize, 0, 0 ) ;
+      _channel = libssh2_scp_send64( _session, dst, mode, fileSize, 0, 0 ) ;
       if ( NULL == _channel )
       {
          _getLastError( _errmsg ) ;
          PD_LOG( PDERROR, "failed to create scp channel" ) ;
-         rc = SDB_SYS ;
+         rc = _getLastErrorRC() ;
          goto error ;
       }
 
@@ -610,7 +676,7 @@ namespace engine
       PD_LOG( PDDEBUG, "%lld bytes were written this time", sendLen ) ;
 
       libssh2_channel_send_eof( _channel ) ;
-      
+
       }
    done:
       if ( file.isOpened() )
@@ -642,7 +708,7 @@ namespace engine
       {
          _getLastError( _errmsg ) ;
          PD_LOG( PDERROR, "failed to crate scp recv channel" ) ;
-         rc = SDB_SYS ;
+         rc = _getLastErrorRC() ;
          goto error ;
       }
 
@@ -650,7 +716,7 @@ namespace engine
 
       rc = ossOpen( local,
                     fMode,
-                    OSS_DEFAULTFILE, file ) ;
+                    mode, file ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "failed to open file:%s, rc:%d", local, rc ) ;
@@ -726,7 +792,6 @@ namespace engine
          _session = NULL ;
       }
 
-      //libssh2_exit() ;
 
       return ;
    }
@@ -755,4 +820,32 @@ namespace engine
       goto done ;
    }
 
+   INT32 _sptLibssh2Session::_getLastErrorRC()
+   {
+      INT32 rc = SDB_OK ;
+      INT32 err = SDB_OK ;
+      INT32 sshErrno = libssh2_session_last_errno( _session ) ;
+      if( ( LIBSSH2_ERROR_SOCKET_SEND == sshErrno ||
+            LIBSSH2_ERROR_SOCKET_RECV == sshErrno )
+            && ( ( err = SOCKET_GETLASTERROR ) != SDB_OK ) )
+      {
+#if defined (_WINDOWS)
+         if( WSAETIMEDOUT == err )
+#else
+         if( ETIMEDOUT == err )
+#endif
+         {
+            rc = SDB_TIMEOUT ;
+         }
+         else
+         {
+            rc = SDB_NETWORK ;
+         }
+      }
+      else
+      {
+         rc = _sshRCToSdbRC( sshErrno ) ;
+      }
+      return rc ;
+   }
 }

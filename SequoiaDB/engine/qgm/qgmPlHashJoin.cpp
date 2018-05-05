@@ -79,7 +79,6 @@ namespace engine
       _qgmConditionNode *left = opti->_condition->left ;
       _qgmConditionNode *right = opti->_condition->right ;
 
-      /// TODO: put public attrs of qgmPlNLJoin and qgmPlHashJoin to qgmPlJoin.
       _outerAlias = &(input( 0 )->alias()) ;
       _innerAlias = &(input( 1 )->alias()) ;
       _inner = input( 1 ) ;
@@ -138,7 +137,7 @@ namespace engine
 
       _hitBuildEnd = FALSE ;
 
-      UINT64 bufSize = pmdGetOptionCB()->getHjBufSize() * 1024 * 1024 ;
+      UINT64 bufSize = ( ( UINT64 )pmdGetOptionCB()->getHjBufSize() ) * 1024 * 1024 ;
       rc = _hashTbl.init( bufSize ) ;
       if ( SDB_OK != rc )
       {
@@ -284,7 +283,6 @@ namespace engine
             }
             else
             {
-               /// do noting.
             }
          }
 

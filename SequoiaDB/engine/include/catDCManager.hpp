@@ -39,6 +39,7 @@
 #include "pmd.hpp"
 #include "netDef.hpp"
 #include "catDCLogMgr.hpp"
+#include "catEventHandler.hpp"
 #include "rtnContextBuff.hpp"
 #include "dpsLogDef.hpp"
 #include "dpsMessageBlock.hpp"
@@ -57,7 +58,7 @@ namespace engine
    /*
       _catDCManager define
    */
-   class _catDCManager : public SDBObject
+   class _catDCManager : public SDBObject, public _catEventHandler
    {
    public:
       _catDCManager() ;
@@ -66,6 +67,7 @@ namespace engine
       catDCLogMgr* getLogMgr() { return _pLogMgr ; }
 
       INT32 init() ;
+      INT32 fini() ;
 
       void  attachCB( _pmdEDUCB *cb ) ;
       void  detachCB( _pmdEDUCB *cb ) ;
@@ -86,10 +88,12 @@ namespace engine
       void    setWritedCommand( BOOLEAN writed ) { _isWritedCmd = writed ; }
       BOOLEAN isWritedCommand() const { return _isWritedCmd ; }
 
-      void    onCommandBegin( MsgHeader *pMsg ) ;
-      void    onCommandEnd( MsgHeader *pMsg, INT32 result ) ;
+   public :
+      virtual const CHAR *getHandlerName () { return "catDCManager" ; }
+      virtual INT32 onBeginCommand ( MsgHeader *pReqMsg ) ;
+      virtual INT32 onEndCommand ( MsgHeader *pReqMsg, INT32 result ) ;
+      virtual INT32 onSendReply ( MsgOpReply *pReply, INT32 result ) ;
 
-   // message process functions
    protected:
       INT32 processCommandMsg( const NET_HANDLE &handle, MsgHeader *pMsg,
                                BOOLEAN writable ) ;
@@ -97,7 +101,6 @@ namespace engine
                                   const CHAR *pQuery,
                                   rtnContextBuf &ctxBuff ) ;
 
-   // inner process
    protected:
       INT32 processCmdCreateImage( const NET_HANDLE &handle,
                                    _clsDCMgr *pDCMgr,
@@ -155,7 +158,6 @@ namespace engine
       INT32   _checkGroupsValid( map< string, string > &mapGroups,
                                  nodeMgrAgent *pNodeAgent ) ;
 
-   // tool fuctions
    private:
       INT16 _majoritySize() ;
       INT32 _updateGlobalInfo() ;
@@ -172,7 +174,6 @@ namespace engine
       _clsDCBaseInfo             *_pDCBaseInfo ;
       _catDCLogMgr               *_pLogMgr ;
 
-      // for commands
       BOOLEAN                    _isWritedCmd ;
       DPS_LSN                    _lsn ;
       _dpsMessageBlock           _mb ;

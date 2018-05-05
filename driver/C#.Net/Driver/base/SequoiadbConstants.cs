@@ -54,6 +54,10 @@ namespace SequoiaDB
         public const string DOMAIN = "domain";
         public const string DOMAINS = "domains";
         public const string TASKS = "tasks";
+        public const string TRANSACTIONS = "transactions";
+        public const string TRANSACTIONS_CURRENT = "transactions current";
+        public const string ACCESSPLANS = "accessplans";
+        public const string HEALTH = "health";
         public const string CS_IN_DOMAIN = "collectionspaces in domain";
         public const string CL_IN_DOMAIN = "collections in domain";
 
@@ -70,6 +74,7 @@ namespace SequoiaDB
         public const string LINK_CL = "link collection"; 
         public const string UNLINK_CL = "unlink collection";
         public const string SETSESS_ATTR = "set session attribute";
+        public const string GETSESS_ATTR = "get session attribute";
         public const string LIST_TASK_CMD = "list tasks";
 	    public const string WAIT_TASK_CMD = "wait task";
         public const string CANCEL_TASK_CMD = "cancel task";
@@ -94,6 +99,8 @@ namespace SequoiaDB
         public const string CMD_VALUE_NAME_DEACTIVATE = "deactivate";
         public const string CMD_VALUE_NAME_ENABLE_READONLY = "enable readonly";
         public const string CMD_VALUE_NAME_DISABLE_READONLY = "disable readonly";
+        public const string CMD_VALUE_NAME_SYNC_DB = "sync db";
+        public const string CMD_VALUE_NAME_ANALYZE = "analyze";
 
         public const string OID = "_id";
         public const string CLIENT_RECORD_ID_INDEX = "$id";
@@ -127,6 +134,7 @@ namespace SequoiaDB
         public const string FIELD_SHARDINGKEY = "ShardingKey";
         public const string FIELD_SUBCLNAME = "SubCLName";
         public const string FIELD_PREFERED_INSTANCE = "PreferedInstance";
+        public const string FIELD_PREFERED_INSTANCE_V1 = "PreferedInstanceV1";
         public const string FIELD_ASYNC = "Async";
         public const string FIELD_TASKTYPE = "TaskType";
         public const string FIELD_TASKID = "TaskID";
@@ -139,7 +147,11 @@ namespace SequoiaDB
         public const string FIELD_LOB_OID = "Oid";
         public const string FIELD_LOB_OPEN_MODE = "Mode";
         public const string FIELD_LOB_SIZE = "Size";
-        public const string FIELD_LOB_CREATTIME = "CreateTime";
+        public const string FIELD_LOB_CREATE_TIME = "CreateTime";
+        public const string FIELD_LOB_MODIFICATION_TIME = "ModificationTime";
+        public const string FIELD_LOB_PAGESIZE = "LobPageSize";
+        public const string FIELD_LOB_OFFSET = "Offset";
+        public const string FIELD_LOB_LENGTH = "Length";
         public const string FIELD_NAME_ONLY_DETACH = "OnlyDetach";
         public const string FIELD_NAME_ONLY_ATTACH = "OnlyAttach";
         public const string FIELD_NAME_ALTER = "Alter";
@@ -171,7 +183,6 @@ namespace SequoiaDB
         public const string SDB_ALTER_CRT_ID_INDEX = "create id index";
         public const string SDB_ALTER_DROP_ID_INDEX = "drop id index";
 
-
         public const string FIELD_SET_ON_INSERT = "$SetOnInsert";
 
         public const string IXM_NAME = "name";
@@ -193,13 +204,14 @@ namespace SequoiaDB
 
         public static readonly byte[] ZERO_NODEID = new byte[12] { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 	    public const int DEFAULT_VERSION    = 1;
-	    public const short DEFAULT_W        = 0;
+	    public const short DEFAULT_W        = 1;
 	    public const int DEFAULT_FLAGS      = 0;
 	    public const long DEFAULT_CONTEXTID = -1;
     }
-
     internal enum Operation : int
     {
+        RES_FLAG                  = unchecked((int)0x80000000),
+
         OP_MSG                    = 1000,
         OP_UPDATE                 = 2001,
         OP_INSERT                 = 2002,
@@ -221,12 +233,15 @@ namespace SequoiaDB
         MSG_AUTH_CRTUSR_REQ       = 7001,
         MSG_AUTH_DELUSR_REQ       = 7002,
 
-        MSG_BS_LOB_OPEN_REQ       = 8001, 
-		MSG_BS_LOB_WRITE_REQ      = 8002,
-        MSG_BS_LOB_READ_REQ       = 8003,
-		MSG_BS_LOB_REMOVE_REQ     = 8004,
-        MSG_BS_LOB_UPDATE_REQ     = 8005,
-		MSG_BS_LOB_CLOSE_REQ      = 8006
+        MSG_BS_LOB_OPEN_REQ = 8001, MSG_BS_LOB_OPEN_RES = unchecked((int)(RES_FLAG | (uint)MSG_BS_LOB_OPEN_REQ)),
+        MSG_BS_LOB_WRITE_REQ = 8002, MSG_BS_LOB_WRITE_RES = unchecked((int)(RES_FLAG | (uint)MSG_BS_LOB_WRITE_REQ)),
+        MSG_BS_LOB_READ_REQ = 8003, MSG_BS_LOB_READ_RES = unchecked((int)(RES_FLAG | (uint)MSG_BS_LOB_READ_REQ)),
+        MSG_BS_LOB_REMOVE_REQ = 8004, MSG_BS_LOB_REMOVE_RES = unchecked((int)(RES_FLAG | (uint)MSG_BS_LOB_REMOVE_REQ)),
+        MSG_BS_LOB_UPDATE_REQ = 8005, MSG_BS_LOB_UPDATE_RES = unchecked((int)(RES_FLAG | (uint)MSG_BS_LOB_UPDATE_REQ)),
+        MSG_BS_LOB_CLOSE_REQ = 8006, MSG_BS_LOB_CLOSE_RES = unchecked((int)(RES_FLAG | (uint)MSG_BS_LOB_CLOSE_REQ)),
+        MSG_BS_LOB_LOCK_REQ = 8007, MSG_BS_LOB_LOCK_RES = unchecked((int)(RES_FLAG | (uint)MSG_BS_LOB_LOCK_REQ)),
+        MSG_BS_LOB_TRUNCATE_REQ = 8008, MSG_BS_LOB_TRUNCATE_RES = unchecked((int)(RES_FLAG | (uint)MSG_BS_LOB_TRUNCATE_REQ)),
+        MSG_NULL                  = 9999
     };
 
     internal enum PreferInstanceType : int

@@ -44,21 +44,24 @@ namespace engine
 {
    class omHostVersion : public SDBObject
    {
-      public:
-         omHostVersion() ;
-         ~omHostVersion() ;
+   public:
+      omHostVersion() ;
+      ~omHostVersion() ;
 
-      public:
-         void    incVersion( string clusterName ) ;
-         void    removeVersion( string clusterName ) ;
-         void    getVersionMap( map< string, UINT32 > &mapClusterVersion ) ;
-         UINT32  getVersion( string clusterName ) ;
+   public:
+      void    incVersion( string clusterName ) ;
+      void    setPrivilege( string clusterName, BOOLEAN privilege ) ;
+      BOOLEAN getPrivilege( string clusterName ) ;
+      void    removeVersion( string clusterName ) ;
+      void    getVersionMap( map< string, UINT32 > &mapClusterVersion ) ;
+      UINT32  getVersion( string clusterName ) ;
 
-      private:
-         ossSpinSLatch         _lock ;
-         map< string, UINT32 > _mapClusterVersion ;
-         typedef map< string, UINT32 >::iterator _MAP_CV_ITER ;
-         typedef map< string, UINT32 >::value_type _MAP_CV_VALUETYPE ;
+   private:
+      ossSpinSLatch        _lock ;
+      map<string, UINT32>  _mapClusterVersion ;
+      map<string, BOOLEAN> _mapClusterPrivilege ;
+      typedef map<string, UINT32 >::iterator _MAP_CV_ITER ;
+      typedef map<string, UINT32 >::value_type _MAP_CV_VALUETYPE ;
    } ;
 
    struct omHostContent
@@ -82,7 +85,8 @@ namespace engine
       private:
          INT32            _updateNotifier() ;
          INT32            _notifyAgent() ;
-         INT32            _addUpdateHostReq( pmdRemoteSession *remoteSession ) ;
+         INT32            _addUpdateHostReq( pmdRemoteSession *remoteSession,
+                                             const CHAR *localHostName ) ;
          void             _clearSession( pmdRemoteSession *remoteSession ) ;
          void             _getAgentService( string &serviceName ) ;
 
@@ -92,9 +96,7 @@ namespace engine
          string                  _clusterName ;
          UINT32                  _version ;
 
-         // store all the host's info
          vector< omHostContent > _vHostTable ;
-         // store the agent's info that need to update hostname
          map< string, omHostContent > _mapTargetAgents ;
 
          typedef map< string, omHostContent >::iterator _MAPAGENT_ITER ;

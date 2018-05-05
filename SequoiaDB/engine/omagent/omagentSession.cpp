@@ -54,7 +54,6 @@ namespace engine
       _omaSession implement
    */
    BEGIN_OBJ_MSG_MAP( _omaSession, _pmdAsyncSession )
-      // msg map or event map
       ON_MSG( MSG_CM_REMOTE, _onNodeMgrReq )
       ON_MSG( MSG_AUTH_VERIFY_REQ, _onAuth )
       ON_MSG( MSG_BS_QUERY_REQ, _onOMAgentReq )
@@ -67,6 +66,7 @@ namespace engine
       _pNodeMgr   = NULL ;
       ossMemset( _detailName, 0, sizeof( _detailName ) ) ;
       sdbGetOMAgentMgr()->incSession() ;
+      _maxFileObjID = 0 ;
    }
 
    _omaSession::~_omaSession()
@@ -90,7 +90,7 @@ namespace engine
 
    EDU_TYPES _omaSession::eduType() const
    {
-      return EDU_TYPE_AGENT ;
+      return EDU_TYPE_OMAAGENT ;
    }
 
    void _omaSession::onRecieve( const NET_HANDLE netHandle, MsgHeader * msg )
@@ -107,13 +107,11 @@ namespace engine
 
       if ( sdbGetOMAgentOptions()->isStandAlone() )
       {
-         // will be release
          ret = TRUE ;
          goto done ;
       }
       else if ( curTime.time - _lastRecvTime.time > OMAGENT_SESESSION_TIMEOUT )
       {
-         // will be release
          ret = TRUE ;
          goto done ;
       }
@@ -126,8 +124,75 @@ namespace engine
    {
    }
 
+   INT32 _omaSession::newFileObj( UINT32 &fID, sptUsrFileCommon** fileObj )
+   {
+      INT32 rc = SDB_OK ;
+      sptUsrFileCommon *fileCommon =  NULL ;
+      if( NULL == fileObj )
+      {
+         rc = SDB_INVALIDARG ;
+         goto error ;
+      }
+
+      fileCommon = SDB_OSS_NEW sptUsrFileCommon ;
+      if( NULL == fileCommon )
+      {
+         rc = SDB_OOM ;
+         goto error ;
+      }
+
+      _maxFileObjID++ ;
+      fID = _maxFileObjID ;
+      _fileObjMap.insert( std::pair< UINT32,
+                                     sptUsrFileCommon* >( fID, fileCommon ) ) ;
+      *fileObj = fileCommon ;
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   void _omaSession::releaseFileObj( UINT32 fID )
+   {
+      std::map< UINT32, sptUsrFileCommon* >::iterator it ;
+      it = _fileObjMap.find( fID ) ;
+      if( it == _fileObjMap.end() )
+      {
+         PD_LOG( PDWARNING, "Failed to remove file obj, file obj not exist,"
+                 " fID: %u", fID ) ;
+      }
+      else
+      {
+         if( it->second )
+         {
+            SDB_OSS_DEL it->second ;
+            it->second = NULL ;
+         }
+         _fileObjMap.erase( it ) ;
+      }
+   }
+
+   sptUsrFileCommon* _omaSession::getFileObjByID( UINT32 fID )
+   {
+      std::map< UINT32, sptUsrFileCommon* >::iterator it ;
+      sptUsrFileCommon* pFileObj = NULL ;
+
+      it = _fileObjMap.find( fID ) ;
+      if( it == _fileObjMap.end() )
+      {
+         PD_LOG( PDWARNING, "Failed to find file obj, fID: %u", fID ) ;
+      }
+      else
+      {
+         pFileObj = it->second ;
+      }
+      return pFileObj ;
+   }
+
    void _omaSession::_onDetach()
    {
+      sdbGetOMAgentMgr()->clearScopeBySession() ;
+      _clearFileObjMap() ;
    }
 
    void _omaSession::_onAttach()
@@ -136,6 +201,7 @@ namespace engine
                    _pmdAsyncSession::sessionName(), _client.getPeerIPAddr(),
                    _client.getPeerPort() ) ;
       eduCB()->setName( _detailName ) ;
+      pmdSetEDUHook( (PMD_ON_EDU_EXIT_FUNC)sdbHookFuncOnThreadExit ) ;
       _pNodeMgr = sdbGetOMAgentMgr()->getNodeMgr() ;
    }
 
@@ -163,7 +229,6 @@ namespace engine
          goto error ;
       }
 
-      //Send message
       if ( bodyLen > 0 )
       {
          rc = routeAgent()->syncSend ( _netHandle, (MsgHeader *)header,
@@ -193,18 +258,15 @@ namespace engine
       INT32 bLen = NULL == bodyLen ?
                    0 : *bodyLen ;
 
-      //Build reply message
       _replyHeader.header.opCode = MAKE_REPLY_TYPE( pSrcReqMsg->opCode ) ;
-      _replyHeader.header.messageLength = sizeof ( MsgOpReply ) + bLen ; 
+      _replyHeader.header.messageLength = sizeof ( MsgOpReply ) + bLen ;
       _replyHeader.header.requestID = pSrcReqMsg->requestID ;
       _replyHeader.header.TID = pSrcReqMsg->TID ;
       _replyHeader.header.routeID.value = 0 ;
       _replyHeader.flags = flags ;
       _replyHeader.contextID = -1 ;
 
-      /// when we have more than one record to return,
-      /// rewrite here.
-      _replyHeader.numReturned = ( ( SINT32 )sizeof( MsgOpReply ) 
+      _replyHeader.numReturned = ( ( SINT32 )sizeof( MsgOpReply )
                                           < _replyHeader.header.messageLength )
                                  ?  1 : 0 ;
       _replyHeader.startFrom = 0 ;
@@ -234,7 +296,6 @@ namespace engine
       user = obj.getField( SDB_AUTH_USER ) ;
       pass = obj.getField( SDB_AUTH_PASSWD ) ;
 
-      // check usr and passwd
       if ( 0 != ossStrcmp( user.valuestrsafe(), SDB_OMA_USER ) )
       {
          PD_LOG( PDERROR, "User name[%s] is not support",
@@ -332,6 +393,9 @@ namespace engine
          case SDBCLEARDATA :
             rc = _pNodeMgr->clearData( arg1 ) ;
             break ;
+         case SDBTEST :
+            rc = SDB_OK ;
+            break ;
          default :
             PD_LOG( PDERROR, "Unknow remote code[%d] in session[%s]",
                     pCMReq->remoCode, sessionName() ) ;
@@ -371,11 +435,8 @@ namespace engine
       BSONObjBuilder builder ;
 
       PD_LOG ( PDDEBUG, "Omagent receive requset from omsvc" ) ;
-      // compute the time takes
       ossGetCurrentTime( tmBegin ) ;
-      // build reply massage header
       _buildReplyHeader( pMsg ) ;
-      // extract command
       rc = msgExtractQuery ( (CHAR *)pMsg, &flags, &pCollectionName,
                              &numToSkip, &numToReturn, &pQuery,
                              &pFieldSelector, &pOrderByBuffer,
@@ -388,7 +449,6 @@ namespace engine
          goto error ;
       }
 
-      // handle command
       if ( omaIsCommand ( pCollectionName ) )
       {
          PD_LOG( PDDEBUG, "Omagent receive command: %s, argument: %s",
@@ -426,23 +486,19 @@ namespace engine
          goto error ;
       }
 
-      // consturct reply
       builder.appendElements( retObj ) ;
 
    done :
-      // release command
       if ( pCommand )
       {
          omaReleaseCommand( &pCommand ) ;
       }
-      // reply
       retObj = builder.obj() ;
       _replyHeader.header.messageLength += retObj.objsize() ;
       _replyHeader.numReturned = 1 ;
       _replyHeader.flags = rc ;
 
       ossGetCurrentTime ( tmEnd ) ;
-      // time takes
       tkTime = ( tmEnd.time * 1000000 + tmEnd.microtm ) -
                ( tmBegin.time * 1000000 + tmBegin.microtm ) ;
       sec = tkTime/1000000 ;
@@ -452,24 +508,25 @@ namespace engine
       PD_LOG ( PDDEBUG, "Excute command[%s] takes %lld.%llds.",
                pCollectionName, sec, microSec ) ;
 
-      // reply message
       return _reply( &_replyHeader, retObj.objdata(), retObj.objsize() ) ;
    error :
-      // check flags
       if ( rc < -SDB_MAX_ERROR || rc > SDB_MAX_WARNING )
       {
          PD_LOG ( PDERROR, "Error code is invalid[rc:%d]", rc ) ;
          rc = SDB_SYS ;
       }
+      builder.append( OP_ERRNOFIELD, rc ) ;
+      builder.append( OP_ERRDESP_FIELD, getErrDesp( rc ) ) ;
+
       if ( eduCB()->getInfo( EDU_INFO_ERROR ) &&
            0 != *( eduCB()->getInfo( EDU_INFO_ERROR ) ) )
       {
-         builder.append( OMA_FIELD_DETAIL,
+         builder.append( OP_ERR_DETAIL,
                          eduCB()->getInfo( EDU_INFO_ERROR ) ) ;
       }
       else
       {
-         builder.append( OMA_FIELD_DETAIL, getErrDesp( rc ) ) ;
+         builder.append( OP_ERR_DETAIL, getErrDesp( rc ) ) ;
       }
 
       goto done ;
@@ -492,5 +549,20 @@ namespace engine
       return SDB_OK ;
    }
 
+   void _omaSession::_clearFileObjMap()
+   {
+      for( map< UINT32, sptUsrFileCommon* >::iterator it = _fileObjMap.begin();
+           it != _fileObjMap.end();
+           it++ )
+      {
+         if( it->second )
+         {
+            SDB_OSS_DEL it->second ;
+         }
+         it->second = NULL ;
+      }
+      _fileObjMap.clear() ;
+      _maxFileObjID = 0 ;
+   }
 } // namespace engine
 

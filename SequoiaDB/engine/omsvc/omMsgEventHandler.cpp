@@ -33,6 +33,7 @@
 #include "omMsgEventHandler.hpp"
 #include "pmdEDU.hpp"
 #include "pmdRemoteSession.hpp"
+#include "msgMessageFormat.hpp"
 
 namespace engine
 {
@@ -67,7 +68,6 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
 
-      // main cb msg
       if ( header->TID == 0 )
       {
          CHAR *pNewMsg = NULL ;
@@ -89,23 +89,20 @@ namespace engine
             goto error ;
          }
 
-         // copy msg
          ossMemcpy( pNewMsg, msg, header->messageLength ) ;
          pNewMsg[ header->messageLength ] = 0 ;
-         // push event
          _pMainCB->postEvent( pmdEDUEvent( PMD_EDU_EVENT_MSG,
                                            PMD_EDU_MEM_ALLOC,
                                            pNewMsg, (UINT64)handle ) ) ;
       }
-      // session msg
       else
       {
          SDB_ASSERT( _pRSManager, "Remote Session Manager can't be NULL" ) ;
          rc = _pRSManager->pushMessage( handle, header ) ;
          if ( rc )
          {
-            PD_LOG( PDERROR, "Push message[opCode: %d, len] failed, rc: %d",
-                    header->opCode, header->messageLength, rc ) ;
+            PD_LOG( PDERROR, "Push message[%s] failed, rc: %d",
+                    msg2String( header, MSG_MASK_ALL, 0 ).c_str(), rc ) ;
             goto error ;
          }
       }

@@ -46,7 +46,6 @@ namespace engine
    */
    _sptUsrOmaAssit::_sptUsrOmaAssit()
    {
-      _handle           = 0 ;
       _groupHandle      = 0 ;
    }
 
@@ -56,29 +55,33 @@ namespace engine
 
    INT32 _sptUsrOmaAssit::disconnect()
    {
+      INT32 rc = SDB_OK ;
+
+      rc = _sptUsrRemoteAssit::disconnect() ;
+      if( SDB_OK != rc )
+      {
+         PD_LOG( PDERROR, "Failed to disconnect, rc: %d", rc ) ;
+         goto error ;
+      }
       if ( 0 != _groupHandle )
       {
          sdbReleaseReplicaGroup( _groupHandle ) ;
          _groupHandle = 0 ;
       }
-      if ( 0 != _handle )
-      {
-         sdbDisconnect( _handle ) ;
-         _handle = 0 ;
-      }
-      return SDB_OK ;
+   done:
+      return rc ;
+   error:
+      goto done ;
    }
 
    INT32 _sptUsrOmaAssit::connect( const CHAR * pHostName,
                                    const CHAR * pServiceName )
    {
       INT32 rc = SDB_OK ;
-      rc = sdbConnect( pHostName, pServiceName, SDB_OMA_USER,
-                       SDB_OMA_USERPASSWD, &_handle ) ;
+      rc = _sptUsrRemoteAssit::connect( pHostName, pServiceName ) ;
       PD_RC_CHECK( rc, PDERROR, "Connect to %s:%s failed, rc: %d",
                    pHostName, pServiceName, rc ) ;
 
-      // get coord group
       rc = _getCoordGroupHandle( _groupHandle ) ;
       PD_RC_CHECK( rc, PDERROR, "Get group handle failed, rc: %d", rc ) ;
 
@@ -208,13 +211,12 @@ namespace engine
       handle = (ossValuePtr)r ;
 
       ossMemset( (void*)r, 0, sizeof( sdbRNStruct ) ) ;
-      // set members
       r->_handleType = SDB_HANDLE_TYPE_REPLICANODE ;
       r->_connection = s->_connection ;
       r->_sock = s->_sock ;
       r->_endianConvert = s->_endianConvert ;
       ossStrncpy( r->_serviceName, pSvcName, CLIENT_MAX_SERVICENAME ) ;
-
+      _regSocket( ( ossValuePtr )&r->_sock ) ;
    done:
       return rc ;
    error:
@@ -228,14 +230,14 @@ namespace engine
       sdbRGStruct *r                   = NULL ;
       sdbConnectionStruct *connection  = NULL ;
 
-      if ( 0 == _handle )
+      if ( 0 == getHandle() )
       {
          PD_LOG( PDERROR, "Collection handle is invalid" ) ;
          rc = SDB_INVALIDARG ;
          goto error ;
       }
 
-      connection = ( sdbConnectionStruct* )_handle ;
+      connection = ( sdbConnectionStruct* )getHandle() ;
       r = ( sdbRGStruct* )SDB_OSS_MALLOC( sizeof( sdbRGStruct ) ) ;
       if ( !r )
       {
@@ -245,19 +247,75 @@ namespace engine
       handle = (ossValuePtr)r ;
 
       ossMemset( (void*)r, 0, sizeof( sdbRGStruct ) ) ;
-      // set members
       r->_handleType = SDB_HANDLE_TYPE_REPLICAGROUP ;
-      r->_connection = _handle ;
+      r->_connection = getHandle() ;
       r->_sock = connection->_sock ;
       r->_endianConvert = connection->_endianConvert ;
       r->_isCatalog = FALSE ;
       ossStrncpy( r->_replicaGroupName, COORD_GROUPNAME, CLIENT_RG_NAMESZ ) ;
-
+      _regSocket( ( ossValuePtr )&r->_sock ) ;
    done:
       return rc ;
    error:
       goto done ;
    }
 
+   INT32 _sptUsrOmaAssit::_regSocket( ossValuePtr pSock )
+   {
+      SDB_ASSERT( 0 != pSock, "pSock can't be null" ) ;
+
+      INT32 rc        = SDB_OK ;
+      BOOLEAN hasLock = FALSE ;
+      Node *p         = NULL ;
+      Node **ptr      = NULL ;
+      sdbConnectionStruct *connection = (sdbConnectionStruct *)getHandle() ;
+
+      if ( NULL == *(Socket **)pSock )
+      {
+         goto done ;
+      }
+
+      ossMutexLock( &connection->_sockMutex ) ;
+      hasLock = TRUE ;
+
+      if ( NULL == connection->_sock )
+      {
+         goto done ;
+      }
+
+      ptr = &connection->_sockets ;
+
+      p = (Node*)SDB_OSS_MALLOC( sizeof(Node) ) ;
+      if ( !p )
+      {
+         rc = SDB_OOM ;
+         goto error ;
+      }
+      ossMemset ( p, 0, sizeof(Node) ) ;
+      p->data = pSock ;
+      p->next = NULL ;
+
+      if ( !(*ptr) )
+         *ptr = p ;
+      else
+      {
+         p->next = *ptr ;
+         *ptr = p ;
+      }
+
+      if ( SDB_OK != rc )
+      {
+         goto error ;
+      }
+
+   done :
+      if ( TRUE == hasLock )
+      {
+         ossMutexUnlock( &connection->_sockMutex ) ;
+      }
+      return rc ;
+   error :
+      goto done ;
+   }
 }
 

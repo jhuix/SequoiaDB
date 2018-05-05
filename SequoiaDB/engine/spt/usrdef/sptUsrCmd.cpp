@@ -30,17 +30,12 @@
 *******************************************************************************/
 
 #include "sptUsrCmd.hpp"
-#include "ossCmdRunner.hpp"
-#include "ossMem.hpp"
-#include "ossUtil.hpp"
-#include "utilStr.hpp"
 
 using namespace bson ;
 
 namespace engine
 {
    JS_MEMBER_FUNC_DEFINE( _sptUsrCmd, exec )
-   JS_STATIC_FUNC_DEFINE( _sptUsrCmd, help )
    JS_CONSTRUCT_FUNC_DEFINE( _sptUsrCmd, construct )
    JS_DESTRUCT_FUNC_DEFINE( _sptUsrCmd, destruct )
    JS_MEMBER_FUNC_DEFINE( _sptUsrCmd, toString )
@@ -48,22 +43,27 @@ namespace engine
    JS_MEMBER_FUNC_DEFINE( _sptUsrCmd, getLastOut )
    JS_MEMBER_FUNC_DEFINE( _sptUsrCmd, start )
    JS_MEMBER_FUNC_DEFINE( _sptUsrCmd, getCommand )
+   JS_MEMBER_FUNC_DEFINE( _sptUsrCmd, getInfo )
+   JS_MEMBER_FUNC_DEFINE( _sptUsrCmd, memberHelp )
+   JS_STATIC_FUNC_DEFINE( _sptUsrCmd, staticHelp )
 
    JS_BEGIN_MAPPING( _sptUsrCmd, "Cmd" )
-      JS_ADD_STATIC_FUNC( "help", help )
       JS_ADD_CONSTRUCT_FUNC( construct )
       JS_ADD_DESTRUCT_FUNC( destruct )
+      JS_ADD_MEMBER_FUNC_WITHATTR( "_getLastRet", getLastRet, 0 )
+      JS_ADD_MEMBER_FUNC_WITHATTR( "_getLastOut", getLastOut, 0 )
+      JS_ADD_MEMBER_FUNC_WITHATTR( "_run", exec, 0 )
+      JS_ADD_MEMBER_FUNC_WITHATTR( "_start", start, 0 )
+      JS_ADD_MEMBER_FUNC_WITHATTR( "_getCommand", getCommand, 0 )
+      JS_ADD_MEMBER_FUNC_WITHATTR( "_getInfo", getInfo, 0 )
       JS_ADD_MEMBER_FUNC( "toString", toString )
-      JS_ADD_MEMBER_FUNC( "getLastRet", getLastRet )
-      JS_ADD_MEMBER_FUNC( "getLastOut", getLastOut )
-      JS_ADD_MEMBER_FUNC( "run", exec )
-      JS_ADD_MEMBER_FUNC( "start", start )
-      JS_ADD_MEMBER_FUNC( "getCommand", getCommand )
+      JS_ADD_MEMBER_FUNC( "help", memberHelp )
+      JS_ADD_STATIC_FUNC( "help", staticHelp )
    JS_MAPPING_END()
+
 
    _sptUsrCmd::_sptUsrCmd()
    {
-      _retCode    = 0 ;
    }
 
    _sptUsrCmd::~_sptUsrCmd()
@@ -86,32 +86,98 @@ namespace engine
                                _sptReturnVal & rval,
                                BSONObj & detail )
    {
-      rval.setStringVal( "", "CommandRunner" ) ;
+      rval.getReturnVal().setValue( "CommandRunner" ) ;
       return SDB_OK ;
+   }
+
+   INT32 _sptUsrCmd::getInfo( const _sptArguments & arg,
+                              _sptReturnVal & rval,
+                              BSONObj & detail )
+   {
+      INT32 rc = SDB_OK ;
+      BSONObj remoteInfo ;
+      BSONObjBuilder builder ;
+      if ( 0 < arg.argc() )
+      {
+         rc = arg.getBsonobj( 0, remoteInfo ) ;
+         if ( SDB_OK != rc )
+         {
+            detail = BSON( SPT_ERR << "remoteInfo must be obj" ) ;
+            goto error ;
+         }
+      }
+      builder.append( "type", "Cmd" ) ;
+      builder.appendElements( remoteInfo ) ;
+
+      rval.getReturnVal().setValue( builder.obj() ) ;
+   done:
+      return rc ;
+   error:
+      goto done ;
+
    }
 
    INT32 _sptUsrCmd::getLastRet( const _sptArguments & arg,
                                  _sptReturnVal & rval,
                                  BSONObj & detail )
    {
-      rval.setNativeVal( "", NumberInt, (const void*)&_retCode ) ;
-      return SDB_OK ;
+      INT32 rc = SDB_OK ;
+      string err ;
+      UINT32 lastRet ;
+
+      rc = _cmdCommon.getLastRet( err, lastRet ) ;
+      if( SDB_OK != rc )
+      {
+         detail = BSON( SPT_ERR << err.c_str() ) ;
+         goto error ;
+      }
+      rval.getReturnVal().setValue( lastRet ) ;
+   done:
+      return rc ;
+   error:
+      goto done ;
    }
 
    INT32 _sptUsrCmd::getLastOut( const _sptArguments & arg,
                                  _sptReturnVal & rval,
                                  BSONObj & detail )
    {
-      rval.setStringVal( "", _strOut.c_str() ) ;
-      return SDB_OK ;
+      INT32 rc = SDB_OK ;
+      string err ;
+      string lastOut ;
+
+      rc = _cmdCommon.getLastOut( err, lastOut ) ;
+      if( SDB_OK != rc )
+      {
+         detail = BSON( SPT_ERR << err.c_str() ) ;
+         goto error ;
+      }
+      rval.getReturnVal().setValue( lastOut ) ;
+   done:
+      return rc ;
+   error:
+      goto done ;
    }
 
    INT32 _sptUsrCmd::getCommand( const _sptArguments & arg,
                                  _sptReturnVal & rval,
                                  BSONObj & detail )
    {
-      rval.setStringVal( "", _command.c_str() ) ;
-      return SDB_OK ;
+      INT32 rc = SDB_OK ;
+      string err ;
+      string lastCommand ;
+
+      rc = _cmdCommon.getCommand( err, lastCommand ) ;
+      if( SDB_OK != rc )
+      {
+         detail = BSON( SPT_ERR << err.c_str() ) ;
+         goto error ;
+      }
+      rval.getReturnVal().setValue( lastCommand ) ;
+   done:
+      return rc ;
+   error:
+      goto done ;
    }
 
    INT32 _sptUsrCmd::exec( const _sptArguments &arg,
@@ -122,18 +188,17 @@ namespace engine
       string ev ;
       UINT32 timeout = 0 ;
       UINT32 useShell = TRUE ;
-      ossCmdRunner runner ;
+      string command ;
+      string err ;
+      string strOut ;
 
-      _command.clear() ;
-
-      rc = arg.getString( 0, _command ) ;
+      rc = arg.getString( 0, command ) ;
       if ( SDB_OK != rc )
       {
          rc = SDB_INVALIDARG ;
          detail = BSON( SPT_ERR << "cmd must be config" ) ;
          goto error ;
       }
-      utilStrTrim( _command ) ;
 
       rc = arg.getString( 1, ev ) ;
       if ( SDB_OK != rc && SDB_OUT_OF_BOUND != rc )
@@ -141,11 +206,6 @@ namespace engine
          rc = SDB_INVALIDARG ;
          detail = BSON( SPT_ERR << "environment should be a string" ) ;
          goto error ;
-      }
-      else if ( SDB_OK == rc && !ev.empty() )
-      {
-         _command += " " ;
-         _command += ev ;
       }
 
       rc = arg.getNative( 2, (void*)&timeout, SPT_NATIVE_INT32 ) ;
@@ -157,7 +217,6 @@ namespace engine
       }
       rc = SDB_OK ;
 
-      // useShell, default : 1
       rc = arg.getNative( 3, (void*)&useShell, SPT_NATIVE_INT32 ) ;
       if ( SDB_OK != rc && SDB_OUT_OF_BOUND != rc )
       {
@@ -167,38 +226,13 @@ namespace engine
       }
       rc = SDB_OK ;
 
-      _strOut = "" ;
-      _retCode = 0 ;
-      rc = runner.exec( _command.c_str(), _retCode, FALSE,
-                        0 == timeout ? -1 : (INT64)timeout,
-                        FALSE, NULL, useShell ? TRUE : FALSE ) ;
-      if ( SDB_OK != rc )
+      rc = _cmdCommon.exec( command, ev, timeout, useShell, err, strOut ) ;
+      if( SDB_OK != rc )
       {
-         stringstream ss ;
-         ss << "run[" << _command << "] failed" ;
-         detail = BSON( SPT_ERR << ss.str() ) ;
+         detail = BSON( SPT_ERR << err.c_str() ) ;
          goto error ;
       }
-      else
-      {
-         rc = runner.read( _strOut ) ;
-         if ( rc )
-         {
-            stringstream ss ;
-            ss << "read run command[" << _command << "] result failed" ;
-            detail = BSON( SPT_ERR << ss.str() ) ;
-            goto error ;
-         }
-         else if ( SDB_OK != _retCode )
-         {
-            detail = BSON( SPT_ERR << _strOut ) ;
-            rc = _retCode ;
-            goto error ;
-         }
-
-         rval.setStringVal( "", _strOut.c_str() ) ;
-      }
-
+      rval.getReturnVal().setValue( strOut ) ;
    done:
       return rc ;
    error:
@@ -211,20 +245,20 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
       string ev ;
-      ossCmdRunner runner ;
-      UINT32 useShell = TRUE ;
-      UINT32 usePipe  = TRUE ;
+      string command ;
+      string err ;
+      INT32 pid ;
+      UINT32 useShell = 1 ;
+      UINT32 timeout  = 100 ;
+      string retStr ;
 
-      _command.clear() ;
-
-      rc = arg.getString( 0, _command ) ;
+      rc = arg.getString( 0, command ) ;
       if ( SDB_OK != rc )
       {
          rc = SDB_INVALIDARG ;
          detail = BSON( SPT_ERR << "cmd must be config" ) ;
          goto error ;
       }
-      utilStrTrim( _command ) ;
 
       rc = arg.getString( 1, ev ) ;
       if ( SDB_OK != rc && SDB_OUT_OF_BOUND != rc )
@@ -233,13 +267,7 @@ namespace engine
          detail = BSON( SPT_ERR << "environment should be a string" ) ;
          goto error ;
       }
-      else if ( SDB_OK == rc )
-      {
-         _command += " " ;
-         _command += ev ;
-      }
 
-      // useShell, default : 1
       rc = arg.getNative( 2, (void*)&useShell, SPT_NATIVE_INT32 ) ;
       if ( SDB_OK != rc && SDB_OUT_OF_BOUND != rc )
       {
@@ -249,103 +277,73 @@ namespace engine
       }
       rc = SDB_OK ;
 
-      // usePipe, default : 1
-      rc = arg.getNative( 3, (void*)&usePipe, SPT_NATIVE_INT32 ) ;
+      rc = arg.getNative( 3, (void*)&timeout, SPT_NATIVE_INT32 ) ;
       if ( SDB_OK != rc && SDB_OUT_OF_BOUND != rc )
       {
          rc = SDB_INVALIDARG ;
-         detail = BSON( SPT_ERR << "usePipe should be a number" ) ;
+         detail = BSON( SPT_ERR << "timeout should be a number" ) ;
          goto error ;
       }
       rc = SDB_OK ;
 
-      _strOut = "" ;
-      _retCode = 0 ;
-      rc = runner.exec( _command.c_str(), _retCode, TRUE, -1, FALSE, NULL,
-                        useShell ? TRUE : FALSE, usePipe ? TRUE : FALSE ) ;
-      if ( SDB_OK != rc )
+      rc = _cmdCommon.start( command, ev, useShell, timeout, err, pid, retStr ) ;
+      if( SDB_OK != rc )
       {
-         stringstream ss ;
-         ss << "run[" << _command << "] failed" ;
-         detail = BSON( SPT_ERR << ss.str() ) ;
+         detail = BSON( SPT_ERR << err.c_str() ) ;
          goto error ;
       }
-      else
-      {
-         OSSPID pid = runner.getPID() ;
-         rval.setNativeVal( "", NumberInt, (const void*)&pid ) ;
-
-         if ( usePipe )
-         {
-            ossSleep( 100 ) ;
-            if ( !ossIsProcessRunning( pid ) )
-            {
-               rc = runner.read( _strOut ) ;
-               if ( rc )
-               {
-                  stringstream ss ;
-                  ss << "read run command[" << _command << "] result failed" ;
-                  detail = BSON( SPT_ERR << ss.str() ) ;
-                  goto error ;
-               }
-            }
-         }
-      }
-
+      rval.getReturnVal().setValue( pid ) ;
    done:
       return rc ;
    error:
       goto done ;
    }
 
-   INT32 _sptUsrCmd::help( const _sptArguments & arg,
+   INT32 _sptUsrCmd::memberHelp( const _sptArguments & arg,
+                                 _sptReturnVal & rval,
+                                 BSONObj & detail )
+   {
+      stringstream ss ;
+      ss << "Cmd member functions:" << endl
+         << "   run( cmd, [args], [timeout], [useShell] )  " << endl
+         << "        timeout(ms), default 0: never timeout," << endl
+         << "        useShell 0/1, default 1" << endl
+         << "   start( cmd, [args], [useShell], [timeout] )  " << endl
+         << "          useShell 0/1, default 1" << endl
+         << "          timeout(ms), default 100" << endl
+         << "   getCommand()" << endl
+         << "   getLastRet()" << endl
+         << "   getLastOut()" << endl
+         << "   getInfo()" << endl
+         << "Remote Cmd functions:" << endl
+         << "   runJS( code )" << endl ;
+      rval.getReturnVal().setValue( ss.str() ) ;
+      return SDB_OK ;
+   }
+
+   INT32 _sptUsrCmd::staticHelp( const _sptArguments & arg,
                            _sptReturnVal & rval,
                            BSONObj & detail )
    {
       stringstream ss ;
-      ss << "Cmd functions:" << endl
+      ss << "Methods to access:" << endl
          << " var cmd = new Cmd()" << endl
+         << " var cmd = remoteObj.getCmd()" << endl
+         << "Cmd member functions:" << endl
          << "   run( cmd, [args], [timeout], [useShell] )  " << endl
          << "        timeout(ms), default 0: never timeout," << endl
          << "        useShell 0/1, default 1" << endl
-         << "   start( cmd, [args], [useShell], [usePipe] )  " << endl 
+         << "   start( cmd, [args], [useShell], [timeout] )  " << endl
          << "          useShell 0/1, default 1" << endl
-         << "          usePipe 0/1, default 1" << endl
+         << "          timeout(ms), default 100" << endl
          << "   getCommand()" << endl
          << "   getLastRet()" << endl
-         << "   getLastOut()" << endl ;
-      rval.setStringVal( "", ss.str().c_str() ) ;
+         << "   getLastOut()" << endl
+		 << "   getInfo()" << endl
+         << "Remote Cmd member functions:" << endl
+         << "   runJS( code )" << endl ;
+      rval.getReturnVal().setValue( ss.str() ) ;
       return SDB_OK ;
-   }
-
-   INT32 _sptUsrCmd::_setRVal( _ossCmdRunner *runner,
-                               _sptReturnVal &rval,
-                               BOOLEAN setToRVal,
-                               BSONObj &detail )
-   {
-      INT32 rc = SDB_OK ;
-      string outStr ;
-
-      rc = runner->read( outStr ) ;
-      if ( rc )
-      {
-         detail = BSON( SPT_ERR << "read run result failed" ) ;
-         goto error ;
-      }
-
-      if ( setToRVal )
-      {
-         rval.setStringVal( "", outStr.c_str() ) ;
-      }
-      else
-      {
-         detail = BSON( SPT_ERR << outStr ) ;
-      }
-
-   done:
-      return rc  ;
-   error:
-      goto done ;
    }
 }
 

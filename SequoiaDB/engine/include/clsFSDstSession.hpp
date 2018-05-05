@@ -56,10 +56,37 @@ namespace engine
    class _clsSyncManager ;
    class _clsShardMgr ;
 
+   /*
+      _clsCSInfoTuple define
+   */
+   struct _clsCSInfoTuple
+   {
+      INT32 pageSize ;
+      INT32 lobPageSize ;
+      DMS_STORAGE_TYPE type ;
+
+      _clsCSInfoTuple( INT32 ps, INT32 lps, DMS_STORAGE_TYPE sType )
+      :pageSize( ps ),
+       lobPageSize( lps ),
+       type( sType )
+      {
+      }
+
+      _clsCSInfoTuple()
+      :pageSize( 0 ),
+       lobPageSize( 0 ),
+       type( DMS_STORAGE_NORMAL )
+      {
+      }
+   } ;
+   typedef _clsCSInfoTuple clsCSInfoTuple ;
+
+   /*
+      _clsDataDstBaseSession define
+   */
    class _clsDataDstBaseSession : public _pmdAsyncSession
    {
       DECLARE_OBJ_MSG_MAP()
-
       public:
          _clsDataDstBaseSession ( UINT64 sessionID, _netRouteAgent *agent ) ;
          virtual ~_clsDataDstBaseSession () ;
@@ -79,10 +106,12 @@ namespace engine
          virtual INT32   _needData () const = 0 ;
          virtual INT32   _dataSessionType () const = 0 ;
          virtual BOOLEAN _isReady () = 0 ;
-         virtual void    _endLog () = 0 ;
-         virtual INT32   _onNotify () = 0 ;
+         /*
+            return FALSE, will not continue to run after
+            return TRUE, will run after code
+         */
+         virtual BOOLEAN _onNotify ( MsgClsFSNotifyRes *pMsg ) = 0 ;
 
-      //message function
       protected:
          INT32 handleMetaRes( NET_HANDLE handle, MsgHeader* header ) ;
          INT32 handleIndexRes( NET_HANDLE handle, MsgHeader* header ) ;
@@ -103,17 +132,24 @@ namespace engine
                                const MsgLobTuple *&tuple,
                                const CHAR *&data ) ;
 
-         INT32          _extractFullNames( const CHAR *names ) ;
-         INT32          _extractMeta( const CHAR *objdata, string &cs,
-                                      string &collection, UINT32 &pageSize,
-                                      UINT32 &attributes, INT32 &lobPageSize,
-                                      UTIL_COMPRESSOR_TYPE &compType ) ;
-         INT32          _extractIndex( const CHAR *objdata, vector<BSONObj> &index,
+         INT32          _extractMeta( const CHAR *objdata,
+                                      string &cs,
+                                      string &collection,
+                                      UINT32 &pageSize,
+                                      UINT32 &attributes,
+                                      INT32 &lobPageSize,
+                                      DMS_STORAGE_TYPE &csType,
+                                      UTIL_COMPRESSOR_TYPE &compType,
+                                      BSONObj &extOptions ) ;
+
+         INT32          _extractIndex( const CHAR *objdata,
+                                       vector<BSONObj> &index,
                                        BOOLEAN &noMore ) ;
 
          UINT32         _addCollection ( const CHAR *pCollectionName ) ;
          UINT32         _removeCollection ( const CHAR *pCollectionName ) ;
          UINT32         _removeCS ( const CHAR *pCSName ) ;
+         UINT32         _removeValidCLs( const vector<string> &validCLs ) ;
 
       private:
          INT32 _replayDoc( const MsgClsFSNotifyRes *msg ) ;
@@ -133,43 +169,35 @@ namespace engine
          BOOLEAN              _quit ;
          UINT64               _requestID ;
          DPS_LSN              _expectLSN ;
-         BOOLEAN              _needMoreDoc ;  /// when we begin to get lob, we do not want to sync doc any more.
-         struct pageSzTuple
-         {
-            INT32 pageSize ;
-            INT32 lobPageSize ;
-            pageSzTuple( INT32 ps, INT32 lps )
-            :pageSize( ps ),
-             lobPageSize( lps )
-            {
-
-            }
-
-            pageSzTuple()
-            :pageSize( 0 ),
-             lobPageSize( 0 )
-            {
-
-            }
-         } ;
-         typedef std::map<string, pageSzTuple> CS_PS_TUPLES ;
-         CS_PS_TUPLES _mapEmptyCS ;
+         UINT64               _lastOprLSN ;
+         BOOLEAN              _needMoreDoc ;
 
    };
 
+   /*
+      CLS_FULLSYNC_STEP define
+   */
+   enum CLS_FULLSYNC_STEP
+   {
+      CLS_FS_STEP_NONE = 0,
+      CLS_FS_STEP_LOGBEGIN,
+      CLS_FS_STEP_END
+   } ;
+
+   /*
+      _clsFSDstSession define
+   */
    class _clsFSDstSession : public _clsDataDstBaseSession
    {
+   typedef std::map<string, clsCSInfoTuple>     CS_INFO_TUPLES ;
+
    DECLARE_OBJ_MSG_MAP()
+
    public:
       _clsFSDstSession( UINT64 sessionID,
                         _netRouteAgent *agent ) ;
       virtual ~_clsFSDstSession() ;
-      enum TRANS_SYNC_STEP
-      {
-         STEP_TS_BEGIN = 0,
-         STEP_TS_ING,
-         STEP_TS_END
-      };
+
    public:
       virtual SDB_SESSION_TYPE sessionType() const ;
       virtual const CHAR*      className() const { return "FullSync-Dest" ; }
@@ -186,6 +214,9 @@ namespace engine
       virtual void      _onDetach () ;
    protected:
       void              _pullTransLog ( DPS_LSN &begin ) ;
+      INT32             _extractBeginRspBody( const BSONObj &bodyObj ) ;
+      INT32             _buildBegingBody( BSONObj &bodyObj ) ;
+
    protected:
       virtual void      _begin() ;
       virtual void      _end() ;
@@ -194,14 +225,20 @@ namespace engine
       virtual BSONObj   _keyObjE () ;
       virtual INT32     _dataSessionType () const ;
       virtual BOOLEAN   _isReady () ;
-      virtual void      _endLog () ;
-      virtual INT32     _onNotify () { return SDB_OK ; }
+      virtual BOOLEAN   _onNotify ( MsgClsFSNotifyRes *pMsg ) ;
 
    private:
-      TRANS_SYNC_STEP   _tsStep;
+      CLS_FULLSYNC_STEP    _fsStep ;
+      CS_INFO_TUPLES       _mapEmptyCS ;
+      vector<string>       _validCLs ;
+      UINT32               _repeatCount ;
+      BOOLEAN              _hasRegFullsyc ;
 
    } ;
 
+   /*
+      _clsSplitDstSession define
+   */
    class _clsSplitDstSession : public _clsDataDstBaseSession
    {
       DECLARE_OBJ_MSG_MAP ()
@@ -214,13 +251,10 @@ namespace engine
       enum SESSION_STEP
       {
          STEP_NONE      = 0,
-         STEP_START ,         // start notify to catalog
+         STEP_SYNC_DATA ,     // after sync data from peer node, and need to
+         STEP_POST_SYNC ,     // after sync the last log from peer node, and
          STEP_META ,          // when cleanup notify to catalog and catalog
-                              // split the catalog and response, begin to
-                              // update catalog in local, and check it
          STEP_END_NTY ,       // notify the peer node to update catalog and
-                              // check it
-         STEP_END_LOG,        // get the last log
          STEP_FINISH,         // notify catalog get all data, will to clean
          STEP_CLEANUP ,       // notify the peer node to clean up data
          STEP_REMOVE,         // remove notify to catalog
@@ -233,7 +267,6 @@ namespace engine
          virtual EDU_TYPES eduType () const ;
          virtual BOOLEAN canAttachMeta() const ;
 
-      //message fuction
       protected:
          INT32 handleTaskNotifyRes ( NET_HANDLE handle, MsgHeader* header ) ;
          INT32 handleBeginRes( NET_HANDLE handle, MsgHeader* header ) ;
@@ -250,8 +283,7 @@ namespace engine
          virtual void      _onDetach () ;
          virtual INT32     _dataSessionType () const ;
          virtual BOOLEAN   _isReady () ;
-         virtual void      _endLog () ;
-         virtual INT32     _onNotify () ;
+         virtual BOOLEAN   _onNotify ( MsgClsFSNotifyRes *pMsg ) ;
 
       private:
          void              _taskNotify ( INT32 msgType ) ;
@@ -268,6 +300,7 @@ namespace engine
          UINT32                  _collectionW ;
 
    };
+
 }
 
 #endif

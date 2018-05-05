@@ -42,14 +42,31 @@
 #include "jsapi.h"
 #include "../client/bson/bson.h"
 #include <string>
+using namespace std ;
 
+typedef enum _SPT_CONVERT_MODE
+{
+   SPT_CONVERT_NORMAL = 0,
+   SPT_CONVERT_MATCHER,
+   SPT_CONVERT_AGGREGATE
+} SPT_CONVERT_MODE ;
+
+/*
+   sptConvertor
+*/
 class sptConvertor
 {
 public:
-   sptConvertor( JSContext *cx )
-   :_cx( cx )
+   sptConvertor( JSContext *cx, SPT_CONVERT_MODE mode = SPT_CONVERT_NORMAL )
+   : _hasSetErrMsg( FALSE ),
+     _inMatcher( FALSE ),
+     _mode( mode ),
+     _cx( cx )
    {
-
+      if ( SPT_CONVERT_MATCHER == _mode )
+      {
+         _inMatcher = TRUE ;
+      }
    }
 
    ~sptConvertor()
@@ -62,6 +79,8 @@ public:
 
    INT32 toBson( JSObject *obj, bson *bs ) ;
 
+   const CHAR* getErrorMsg() ;
+
    static INT32 toString( JSContext *cx,
                           const jsval &val,
                           std::string &str ) ;
@@ -73,6 +92,8 @@ private:
                         const jsval &val,
                         bson *bs ) ;
 
+   INT32 _getDecimalPrecision( const CHAR *precisionStr, 
+                               INT32 *precision, INT32 *scale ) ;
    INT32 _addSpecialObj( JSObject *obj,
                          const CHAR *key,
                          bson *bs ) ;
@@ -118,6 +139,9 @@ private:
                      const CHAR *key,
                      bson *bs ) ;
 
+   INT32 _getNumberLongValue( JSObject *obj,
+                              INT64 &value ) ;
+
    INT32 _addNumberLong( JSObject *obj,
                          const CHAR *key,
                          bson *bs) ;
@@ -125,11 +149,16 @@ private:
    INT32 _addSdbDate( JSObject *obj,
                       const CHAR *key,
                       bson *bs) ;
+   void _setErrorMsg( const CHAR *pErrMsg, BOOLEAN isReplace ) ;
 private:
-   BOOLEAN _isValidOid( const CHAR *value ) ;
+   BOOLEAN _isValidNumberLong( const CHAR *value ) ;
 
 private:
+   BOOLEAN _hasSetErrMsg ;
+   BOOLEAN _inMatcher ;
+   SPT_CONVERT_MODE _mode ;
    JSContext *_cx ;
+   string _errorMsg ;
 } ;
 
 

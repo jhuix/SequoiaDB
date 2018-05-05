@@ -37,27 +37,27 @@
 *******************************************************************************/
 #include "ossUtil.c"
 #include "ossUtil.hpp"
-#include "ossLatch.hpp"
 #include "pd.hpp"
 #include "pdTrace.hpp"
 #include "ossTrace.hpp"
 #if defined (_LINUX) || defined (_AIX)
 #include <sys/statvfs.h>
 #include <sys/utsname.h>
+#include <dirent.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <mntent.h>
 #elif defined (_WINDOWS)
 #include "Psapi.h"
 #endif
-// Wrapper of localtime, convert a time value and correct for the local time
-// zone. The input pTime represents the seconds elapsed since the Epoch,
-// midnight (00:00:00), January 1, 1970, UTC
+#include <sstream>
+
 void ossLocalTime ( time_t &Time, struct tm &TM )
 {
 #if defined (_LINUX ) || defined (_AIX)
    localtime_r( &Time, &TM ) ;
 #elif defined (_WINDOWS)
-   // The Time represents the seconds elapsed since midnight (00:00:00),
-   // January 1, 1970, UTC. This value is usually obtained from the time
-   // function.
    localtime_s( &TM, &Time ) ;
 #endif
 }
@@ -77,29 +77,19 @@ BOOLEAN ossIsPowerOf2( UINT32 num, UINT32 * pSquare )
    return bPowered ;
 }
 
-//  Wrapper of gmtime, converts a time value to a broken-down time structure.
-//  The Time is represented as seconds elapsed since the Epoch.
 void ossGmtime ( time_t &Time, struct tm &TM )
 {
 #if defined (_LINUX ) || defined (_AIX)
    gmtime_r( &Time, &TM ) ;
 #elif defined (_WINDOWS)
-   // Time is represented as seconds elapsed since midnight (00:00:00),
-   // January 1, 1970, UTC.
-   // The TM of the returned structure hold the evaluated value of the
-   // timer argument in UTC rather than in local time.
    gmtime_s( &TM, &Time ) ;
 #endif
 }
 
-//
-// convert ossTimestamp to string
 // PD_TRACE_DECLARE_FUNCTION ( SDB_OSSTS2STR, "ossTimestampToString" )
 void ossTimestampToString( ossTimestamp &Tm, CHAR * pStr )
 {
    PD_TRACE_ENTRY ( SDB_OSSTS2STR );
-   // The following format is used for timestamp:
-   //   yyyy-mm-dd-hh.mm.ss.uuuuuu
    CHAR szFormat[] = "%04d-%02d-%02d-%02d.%02d.%02d.%06d" ;
    CHAR szTimestmpStr[ OSS_TIMESTAMP_STRING_LEN + 1 ] = { 0 } ;
    struct tm tmpTm ;
@@ -128,13 +118,28 @@ void ossTimestampToString( ossTimestamp &Tm, CHAR * pStr )
    PD_TRACE_EXIT ( SDB_OSSTS2STR );
 }
 
+// PD_TRACE_DECLARE_FUNCTION ( SDB_STR2OSSTS, "ossStringToTimestamp" )
+void ossStringToTimestamp( const CHAR * pStr, ossTimestamp &Tm )
+{
+   PD_TRACE_ENTRY ( SDB_STR2OSSTS );
+   struct tm tmp ;
+   CHAR format[] = "%04d-%02d-%02d-%02d.%02d.%02d.%06d" ;
+
+   ossSscanf( pStr, format, &tmp.tm_year, &tmp.tm_mon, &tmp.tm_mday,
+              &tmp.tm_hour, &tmp.tm_min, &tmp.tm_sec, &Tm.microtm ) ;
+   tmp.tm_year -= 1900 ;
+   tmp.tm_mon  -= 1 ;
+
+   Tm.time = mktime( &tmp ) ;
+
+   PD_TRACE_EXIT ( SDB_STR2OSSTS );
+}
+
 void ossGetCurrentTime( ossTimestamp &TM )
 {
 #if defined (_LINUX) || defined (_AIX)
    struct timeval tv ;
 
-   // obtain the current time, expressed as seconds and microseconds since
-   // the Epoch
    if ( -1 == gettimeofday( &tv, NULL ) )
    {
        TM.time    = 0 ;
@@ -151,21 +156,29 @@ void ossGetCurrentTime( ossTimestamp &TM )
 
    GetSystemTimeAsFileTime( &fileTime ) ;
 
-   //convert FILETIME into ULARGER_INTEGER
    uLargeIntegerTime.LowPart  = fileTime.dwLowDateTime ;
    uLargeIntegerTime.HighPart = fileTime.dwHighDateTime ;
 
-   // FILETIME contains a 64-bit value representing the number of
-   // 100-nanosecond intervals since January 1, 1601 (UTC).
    uLargeIntegerTime.QuadPart -= ( DELTA_EPOCH_IN_MICROSECS * 10 ) ;
 
-   // 1 FILETIME = 100 ns
    TM.time    = ( uLargeIntegerTime.QuadPart / OSS_TEN_MILLION ) ;
    TM.microtm = ( uLargeIntegerTime.QuadPart % OSS_TEN_MILLION ) / 10 ;
 #endif
 }
 
-// Get CPU usage for current process
+UINT64 ossGetCurrentMicroseconds()
+{
+   ossTimestamp current ;
+   ossGetCurrentTime( current ) ;
+
+   return ( (UINT64)current.time ) * 1000000L + current.microtm ;
+}
+
+UINT64 ossGetCurrentMilliseconds()
+{
+   return ossGetCurrentMicroseconds() / 1000L ;
+}
+
 #define OSS_PROC_FIELD_TO_SKIP_FOR_UTIME 13
 #define OSS_PROC_PATH_LEN_MAX 255
 // PD_TRACE_DECLARE_FUNCTION ( SDB_OSSGETCPUUSG, "ossGetCPUUsage" )
@@ -190,7 +203,6 @@ SINT32 ossGetCPUUsage
       sTemp.LowPart  = kernelTime.dwLowDateTime ;
       sTemp.HighPart = kernelTime.dwHighDateTime ;
 
-      // 1 FILETIME = 100 ns
       usrTime.seconds  = (UINT32)( uTemp.QuadPart / OSS_TEN_MILLION ) ;
       usrTime.microsec = (UINT32)((uTemp.QuadPart % OSS_TEN_MILLION ) / 10) ;
       sysTime.seconds  = (UINT32)( sTemp.QuadPart / OSS_TEN_MILLION ) ;
@@ -221,8 +233,6 @@ SINT32 ossGetCPUUsage
    static int clkTck = 0 ;
    static int numMicrosecPerClkTck  = 0 ;
 
-   // On Linux, utime and stime use "jiffies" as unit of measurement.
-   // Normally there are 100 jiffies per seconds.
    if ( 0 == clkTck )
    {
       clkTck = sysconf( _SC_CLK_TCK ) ;
@@ -231,23 +241,15 @@ SINT32 ossGetCPUUsage
          clkTck = OSS_CLK_TCK ;
       }
 
-      // in time.h, CLOCKS_PER_SEC is required to be 1 million on all
-      // XSI-conformant systems
       numMicrosecPerClkTck = OSS_ONE_MILLION / clkTck ;
    }
 
-   // read /proc/pid//stat can get both user and system times
-   // however it is relatively expensive, it calls fopen, fgets, fscanf.
-   // Thus, this function should not be called in a signal handler,
-   // since these functions are not aync-signal-safe.
    ossSnprintf( pathName, sizeof(pathName), "/proc/%d/stat",
                 getpid() ) ;
 
    fp = fopen( pathName, "r" ) ;
    if ( fp )
    {
-      // skip first 13 fields, since the utime and stime are the 14th and
-      // 15th fields in /proc/pid/task/tid/stat
       while (  ( cntr < OSS_PROC_FIELD_TO_SKIP_FOR_UTIME ) &&
                ( EOF != ( tmpChr = fgetc(fp) ) ) )
       {
@@ -313,7 +315,6 @@ SINT32 ossGetCPUUsage
       sTemp.LowPart  = kernelTime.dwLowDateTime ;
       sTemp.HighPart = kernelTime.dwHighDateTime ;
 
-      // 1 FILETIME = 100 ns
       usrTime.seconds  = (UINT32)( uTemp.QuadPart / OSS_TEN_MILLION ) ;
       usrTime.microsec = (UINT32)((uTemp.QuadPart % OSS_TEN_MILLION ) / 10) ;
       sysTime.seconds  = (UINT32)( sTemp.QuadPart / OSS_TEN_MILLION ) ;
@@ -344,8 +345,6 @@ SINT32 ossGetCPUUsage
    static int clkTck = 0 ;
    static int numMicrosecPerClkTck  = 0 ;
 
-   // On Linux, utime and stime use "jiffies" as unit of measurement.
-   // Normally there are 100 jiffies per seconds.
    if ( 0 == clkTck )
    {
       clkTck = sysconf( _SC_CLK_TCK ) ;
@@ -354,15 +353,9 @@ SINT32 ossGetCPUUsage
          clkTck = OSS_CLK_TCK ;
       }
 
-      // in time.h, CLOCKS_PER_SEC is required to be 1 million on all
-      // XSI-conformant systems
       numMicrosecPerClkTck = OSS_ONE_MILLION / clkTck ;
    }
 
-   // read /proc/pid/task/tid/stat can get both user and system times
-   // however it is relatively expensive, it calls fopen, fgets, fscanf.
-   // Thus, this function should not be called in a signal handler,
-   // since these functions are not aync-signal-safe.
    ossSnprintf( pathName, sizeof(pathName), "/proc/%d/task/%lu/stat",
                 getpid(),
                (unsigned long)tid ) ;
@@ -370,8 +363,6 @@ SINT32 ossGetCPUUsage
    fp = fopen( pathName, "r" ) ;
    if ( fp )
    {
-      // skip first 13 fields, since the utime and stime are the 14th and
-      // 15th fields in /proc/pid/task/tid/stat
       while (  ( cntr < OSS_PROC_FIELD_TO_SKIP_FOR_UTIME ) &&
                ( EOF != ( tmpChr = fgetc(fp) ) ) )
       {
@@ -445,6 +436,17 @@ INT32 ossGetOSInfo( ossOSInfo &info )
          else
          {
             ossStrcpy( info._distributor, "Windows Server 2008" ) ;
+         }
+      }
+      if ( OSVerInfo.dwMinorVersion == 2 )
+      {
+         if ( OSVerInfo.wProductType == VER_NT_WORKSTATION )
+         {
+            ossStrcpy( info._distributor, "Windows 8 or later" ) ;
+         }
+         else
+         {
+            ossStrcpy( info._distributor, "Windows Server 2012 or later" ) ;
          }
       }
    }
@@ -523,52 +525,68 @@ INT32 ossGetOSInfo( ossOSInfo &info )
    return SDB_OK ;
 }
 
-static SINT32 g_tickConversionFactorInitialized = 0 ;
-static ossSpinXLatch g_tickConversionFactorLatch ;
-static ossTickConversionFactor g_tickConversionFactor ;
-
-// PD_TRACE_DECLARE_FUNCTION ( SDB_OSSTCF_INIT, "ossTickConversionFactor::initialize" )
-void ossTickConversionFactor::initialize(void)
+static UINT64 g_tickFactor = 1 ;
+static void ossInitTickFactor()
 {
-   PD_TRACE_ENTRY ( SDB_OSSTCF_INIT );
-   if ( 0 == g_tickConversionFactorInitialized )
-   {
-      g_tickConversionFactorLatch.get() ;
-      if ( 0 == g_tickConversionFactorInitialized )
+   #if defined (_WINDOWS)
+      LARGE_INTEGER countsPerSecond ;
+      if ( ! QueryPerformanceFrequency(&countsPerSecond) )
       {
-         g_tickConversionFactor.oneTimeInitialization() ;
-         g_tickConversionFactorInitialized = 1 ;
+         g_tickFactor = 1 ;
       }
-      g_tickConversionFactorLatch.release() ;
-   }
-   else
-   {
-      *this = g_tickConversionFactor ;
-   }
-   PD_TRACE_EXIT ( SDB_OSSTCF_INIT );
+      g_tickFactor = countsPerSecond.QuadPart ;
+   #elif defined (_LINUX) || defined (_AIX)
+      g_tickFactor = 1 ;
+   #endif
 }
 
-static BOOLEAN g_isSrand = FALSE ;
-static ossSpinXLatch g_randLatch ;
+ossTickConversionFactor::ossTickConversionFactor()
+{
+   static ossOnce s_control = OSS_ONCE_INIT ;
+   ossOnceRun( &s_control, ossInitTickFactor ) ;
+   factor = g_tickFactor ;
+}
+
 #if defined (_LINUX) || defined (_AIX)
 static UINT32 g_randSeed = 0 ;
+static ossMutex g_randMutex ;
 #endif
+
 // PD_TRACE_DECLARE_FUNCTION ( SDB_OSSSRAND, "ossSrand" )
 static void ossSrand()
 {
-   PD_TRACE_ENTRY ( SDB_OSSSRAND );
-   g_randLatch.get() ;
-   if ( !g_isSrand )
-   {
+   PD_TRACE_ENTRY ( SDB_OSSSRAND ) ;
 #if defined (_WINDOWS)
       srand ( (UINT32) time ( NULL ) ) ;
 #elif defined (_LINUX) || defined (_AIX)
       g_randSeed = time ( NULL ) ;
 #endif
-      g_isSrand = TRUE ;
-   }
-   g_randLatch.release() ;
    PD_TRACE_EXIT ( SDB_OSSSRAND );
+}
+
+class ossRandAssit
+{
+   public:
+      ossRandAssit()
+      {
+         ossSrand() ;
+#if defined (_LINUX) || defined (_AIX)
+         ossMutexInit( &g_randMutex ) ;
+#endif
+      }
+      ~ossRandAssit()
+      {
+#if defined (_LINUX) || defined (_AIX)
+         ossMutexDestroy( &g_randMutex ) ;
+#endif
+      }
+      void done() {}
+} ;
+
+static ossRandAssit* _ossGetRandAssit()
+{
+   static ossRandAssit s_randAssit ;
+   return &s_randAssit ;
 }
 
 // PD_TRACE_DECLARE_FUNCTION ( SDB_OSSRAND, "ossRand" )
@@ -576,14 +594,15 @@ UINT32 ossRand ()
 {
    PD_TRACE_ENTRY ( SDB_OSSRAND );
    UINT32 randVal = 0 ;
-   if ( !g_isSrand )
-      ossSrand () ;
+
+   _ossGetRandAssit()->done() ;
+
 #if defined (_WINDOWS)
    rand_s ( &randVal ) ;
 #elif defined (_LINUX) || defined (_AIX)
-   g_randLatch.get() ;
+   ossMutexLock( &g_randMutex ) ;
    randVal = rand_r ( &g_randSeed ) ;
-   g_randLatch.release() ;
+   ossMutexUnlock( &g_randMutex ) ;
 #endif
    PD_TRACE_EXIT ( SDB_OSSRAND );
    return randVal ;
@@ -825,20 +844,25 @@ exit :
 }
 
 #if defined (_LINUX) || defined (_AIX)
-#define OSS_GET_MEM_INFO_FILE      "/proc/meminfo"
-#define OSS_GET_MEM_INFO_MEMTOTAL  "MemTotal"
-#define OSS_GET_MEM_INFO_MEMFREE   "MemFree"
-#define OSS_GET_MEM_INFO_SWAPTOTAL "SwapTotal"
-#define OSS_GET_MEM_INFO_SWAPFREE  "SwapFree"
-#define OSS_GET_MEM_INFO_AMPLIFIER 1024ll
+#define OSS_GET_MEM_INFO_FILE             "/proc/meminfo"
+#define OSS_GET_MEM_INFO_OVERCOMMIT_FILE  "/proc/sys/vm/overcommit_memory"
+#define OSS_GET_MEM_INFO_MEMTOTAL         "MemTotal"
+#define OSS_GET_MEM_INFO_MEMFREE          "MemFree"
+#define OSS_GET_MEM_INFO_SWAPTOTAL        "SwapTotal"
+#define OSS_GET_MEM_INFO_SWAPFREE         "SwapFree"
+#define OSS_GET_MEM_INFO_COMMITLIM        "CommitLimit"
+#define OSS_GET_MEM_INFO_COMMITTED        "Committed_AS"
+#define OSS_GET_MEM_INFO_AMPLIFIER        1024ll
 #elif defined (_WINDOWS)
-#define OSS_GET_MEM_INFO_AMPLIFIER 1024LL
+#define OSS_GET_MEM_INFO_AMPLIFIER        1024LL
 #endif
 // PD_TRACE_DECLARE_FUNCTION ( SDB_OSSGETMEMINFO, "ossGetMemoryInfo" )
 INT32 ossGetMemoryInfo ( INT32 &loadPercent,
-                         INT64 &totalPhys,   INT64 &availPhys,
-                         INT64 &totalPF,     INT64 &availPF,
-                         INT64 &totalVirtual, INT64 &availVirtual )
+                         INT64 &totalPhys,    INT64 &availPhys,
+                         INT64 &totalPF,      INT64 &availPF,
+                         INT64 &totalVirtual, INT64 &availVirtual,
+                         INT32 &overCommitMode,
+                         INT64 &commitLimit,  INT64 &committedAS )
 {
    INT32 rc     = SDB_OK ;
    PD_TRACE_ENTRY ( SDB_OSSGETMEMINFO );
@@ -850,6 +874,9 @@ INT32 ossGetMemoryInfo ( INT32 &loadPercent,
    totalVirtual = -1 ;
    availVirtual = -1 ;
    loadPercent  = -1 ;
+   commitLimit  = -1 ;
+   committedAS  = -1 ;
+   overCommitMode = -1 ;
 #if defined (_WINDOWS)
    MEMORYSTATUSEX statex ;
    statex.dwLength = sizeof(statex) ;
@@ -869,6 +896,7 @@ INT32 ossGetMemoryInfo ( INT32 &loadPercent,
       rc = SDB_SYS ;
       goto error ;
    }
+   overCommitMode = 0 ;
 #elif defined (_LINUX) || defined (_AIX)
    CHAR pathName[OSS_PROC_PATH_LEN_MAX + 1] = {0} ;
    CHAR lineBuffer [OSS_PROC_PATH_LEN_MAX+1] = {0} ;
@@ -882,19 +910,19 @@ INT32 ossGetMemoryInfo ( INT32 &loadPercent,
       rc = SDB_SYS ;
       goto error ;
    }
-   // loop until hitting end of the file or 4 variables are read
    while ( fgets ( lineBuffer, OSS_PROC_PATH_LEN_MAX, fp ) &&
-           ( totalPhys == -1 ||
-             availPhys == -1 ||
-             totalPF   == -1 ||
-             availPF   == -1 )
+           ( totalPhys   == -1 ||
+             availPhys   == -1 ||
+             totalPF     == -1 ||
+             availPF     == -1 ||
+             commitLimit == -1 ||
+             committedAS == -1 )
           )
    {
       if ( ossStrncmp ( lineBuffer,
                         OSS_GET_MEM_INFO_MEMTOTAL,
                         ossStrlen ( OSS_GET_MEM_INFO_MEMTOTAL ) ) == 0 )
       {
-         // +1 to skip ":"
          sscanf ( &lineBuffer[ossStrlen ( OSS_GET_MEM_INFO_MEMTOTAL )+1],
                   "%d", &inputNum ) ;
          totalPhys = OSS_GET_MEM_INFO_AMPLIFIER * inputNum ;
@@ -923,9 +951,26 @@ INT32 ossGetMemoryInfo ( INT32 &loadPercent,
                   "%d", &inputNum ) ;
          availPF = OSS_GET_MEM_INFO_AMPLIFIER * inputNum ;
       }
+      else if (  ossStrncmp ( lineBuffer,
+                              OSS_GET_MEM_INFO_COMMITLIM,
+                              ossStrlen ( OSS_GET_MEM_INFO_COMMITLIM ) ) == 0 )
+      {
+         sscanf ( &lineBuffer[ossStrlen ( OSS_GET_MEM_INFO_COMMITLIM )+1],
+                  "%d", &inputNum ) ;
+         commitLimit = OSS_GET_MEM_INFO_AMPLIFIER * inputNum ;
+      }
+      else if (  ossStrncmp ( lineBuffer,
+                              OSS_GET_MEM_INFO_COMMITTED,
+                              ossStrlen ( OSS_GET_MEM_INFO_COMMITTED ) ) == 0 )
+      {
+         sscanf ( &lineBuffer[ossStrlen ( OSS_GET_MEM_INFO_COMMITTED )+1],
+                  "%d", &inputNum ) ;
+         committedAS = OSS_GET_MEM_INFO_AMPLIFIER * inputNum ;
+      }
       ossMemset ( lineBuffer, 0, sizeof(lineBuffer) ) ;
    }
    fclose ( fp ) ;
+
    totalVirtual = totalPhys + totalPF ;
    availVirtual = availPhys + availPF ;
    if ( totalPhys != 0 )
@@ -935,7 +980,35 @@ INT32 ossGetMemoryInfo ( INT32 &loadPercent,
       loadPercent = loadPercent < 0? 0:loadPercent ;
    }
    else
+   {
       loadPercent = 0 ;
+   }
+
+   fp = NULL ;
+   fp = fopen ( OSS_GET_MEM_INFO_OVERCOMMIT_FILE, "r" ) ;
+   if ( !fp )
+   {
+      ossErr = ossGetLastError () ;
+      rc = SDB_SYS ;
+      goto error ;
+   }
+   if ( !fgets ( lineBuffer, OSS_PROC_PATH_LEN_MAX, fp ) )
+   {
+      ossErr = ossGetLastError () ;
+      fclose ( fp ) ;
+      rc = SDB_SYS ;
+      goto error ;
+   }
+   sscanf ( &lineBuffer[0], "%d", &inputNum ) ;
+   if( 0 == inputNum || 1 == inputNum || 2 == inputNum )
+   {
+      overCommitMode = inputNum ;
+   }
+   else
+   {
+      overCommitMode = 0 ; // defalut mode
+   }
+   fclose ( fp ) ;
 #endif
 done :
    PD_TRACE_EXITRC ( SDB_OSSGETMEMINFO, rc );
@@ -946,55 +1019,138 @@ error :
    goto done ;
 }
 
+INT32 ossGetMemoryInfo ( INT32 &loadPercent,
+                         INT64 &totalPhys,    INT64 &availPhys,
+                         INT64 &totalPF,      INT64 &availPF,
+                         INT64 &totalVirtual, INT64 &availVirtual )
+{
+   INT32 overCommitMode = 0 ;
+   INT64 commitLimit = 0 ;
+   INT64 committedAS = 0 ;
+
+   return ossGetMemoryInfo ( loadPercent,
+                             totalPhys, availPhys,
+                             totalPF, availPF,
+                             totalVirtual, availVirtual,
+                             overCommitMode,
+                             commitLimit, committedAS ) ;
+}
+
+#if defined (_LINUX) || defined (_AIX)
+#define OSS_GET_DISK_INFO_FILE      "/etc/mtab"
+#endif
+
 // PD_TRACE_DECLARE_FUNCTION ( SDB_OSSGETDISKINFO, "ossGetDiskInfo" )
-INT32 ossGetDiskInfo ( const CHAR *pPath,
-                       INT64 &totalBytes,
-                       INT64 &freeBytes )
+INT32 ossGetDiskInfo ( const CHAR *pPath, INT64 &totalBytes, INT64 &freeBytes,
+                       CHAR* fsName, INT32 fsNameSize )
 {
    INT32 rc                = SDB_OK ;
    PD_TRACE_ENTRY ( SDB_OSSGETDISKINFO );
-   INT32 ossErr            = 0 ;
 #if defined (_WINDOWS)
    LPWSTR pszWString       = NULL ;
+   LPSTR lpszVolumePath    = NULL ;
    DWORD dwString          = 0 ;
-   BOOL success            = 0 ;
+   BOOL success            = FALSE ;
    DWORD sectorsPerCluster = 0 ;
    DWORD bytesPerSector    = 0 ;
    DWORD freeClusters      = 0 ;
    DWORD totalClusters     = 0 ;
    INT64 availBytes        = 0 ;
+   WCHAR volumePath[ OSS_MAX_PATHSIZE ] = L"" ;
+
    rc = ossANSI2WC ( pPath, &pszWString, &dwString ) ;
-   if ( rc )
-   {
-      PD_LOG ( PDERROR, "Failed to convert ansi to wc, rc = %d", rc ) ;
-      goto done ;
-   }
+   PD_RC_CHECK( rc, PDERROR, "Failed to convert ansi to wc, rc = %d", rc );
+
    success = GetDiskFreeSpaceEx ( pszWString, (PULARGE_INTEGER) &availBytes,
                                  (PULARGE_INTEGER) &totalBytes,
                                  (PULARGE_INTEGER) &freeBytes ) ;
-   if ( !success )
+
+   PD_CHECK( success, SDB_SYS, error, PDERROR, "Failed to get disk space"
+             ", errno: %d, rc = %d", ossGetLastError(), rc );
+
+   success = GetDiskFreeSpace ( pszWString, &sectorsPerCluster, &bytesPerSector,
+                                &freeClusters, &totalClusters ) ;
+   PD_CHECK( success, SDB_SYS, error, PDERROR, "Failed to get disk free"
+             "space , errno: %d, rc = %d", ossGetLastError(), rc );
+
+   freeBytes = freeClusters * sectorsPerCluster * bytesPerSector ;
+   totalBytes = totalClusters * sectorsPerCluster * bytesPerSector ;
+
+   if ( NULL == fsName )
    {
-      success = GetDiskFreeSpace ( pszWString, &sectorsPerCluster,
-                                   &bytesPerSector,
-                                   &freeClusters,
-                                   &totalClusters ) ;
-      freeBytes = freeClusters * sectorsPerCluster * bytesPerSector ;
-      totalBytes = totalClusters * sectorsPerCluster * bytesPerSector ;
+      goto done ;
    }
-   if ( !success )
-   {
-      ossErr = ossGetLastError () ;
-      goto error ;
-   }
+
+   success = GetVolumePathName ( pszWString, volumePath, OSS_MAX_PATHSIZE+1) ;
+   PD_CHECK( success, SDB_SYS, error, PDERROR, "Failed to get disk name"
+             ", errno: %d, rc = %d", ossGetLastError(), rc );
+
+   rc = ossWC2ANSI ( volumePath, &lpszVolumePath, NULL ) ;
+   PD_RC_CHECK( rc, PDERROR, "Failed to convert ansi to wc, rc = %d", rc );
+
+   ossStrncpy ( fsName, lpszVolumePath, fsNameSize - 1 ) ;
+   fsName[ fsNameSize ] = '\0' ;
+
 #elif defined (_LINUX) || defined (_AIX)
    struct statvfs vfs ;
-   if ( statvfs ( pPath, &vfs ) )
+   FILE *fp = NULL ;
+   struct mntent *me = NULL ;
+   struct mntent dummy ;
+   CHAR tmpBuff[ OSS_MAX_PATHSIZE + 1 ] = { 0 } ;
+   struct stat pathStat ;
+   INT32 retcode = 0 ;
+   BOOLEAN findOut = FALSE ;
+   dev_t pathDevID ;
+
+   retcode = statvfs ( pPath, &vfs ) ;
+   PD_CHECK( 0 == retcode, SDB_SYS, error, PDERROR, "Failed to statvfs"
+             ", errno: %d, rc = %d", ossGetLastError (), rc );
+
+   totalBytes = vfs.f_frsize * vfs.f_blocks ;
+   freeBytes = vfs.f_bsize * vfs.f_bfree ;
+
+   if ( NULL == fsName )
    {
-      ossErr = ossGetLastError () ;
-      goto error ;
+      goto done ;
    }
-   totalBytes = vfs.f_bsize * vfs.f_blocks ;
-   freeBytes = vfs.f_bsize * vfs.f_bavail ;
+
+   retcode = stat ( pPath, &pathStat );
+   PD_CHECK( 0 == retcode, SDB_SYS, error, PDERROR, "Failed to stat"
+             ", errno: %d, rc = %d", ossGetLastError (), rc );
+   pathDevID = pathStat.st_dev ;
+
+   fp = setmntent ( OSS_GET_DISK_INFO_FILE, "r" ) ;
+   PD_CHECK( NULL != fp, SDB_SYS, error, PDERROR, "Failed to set mnt entry"
+             ", errno: %d, rc = %d", ossGetLastError (), rc );
+
+   while ( NULL != ( me = getmntent_r ( fp, &dummy, tmpBuff, OSS_MAX_PATHSIZE ) ) )
+   {
+      struct stat fsStat ;
+      INT32 retcode = stat ( me->mnt_fsname, &fsStat );
+      if ( -1 == retcode )
+      {
+         PD_LOG ( PDINFO, "Failed to stat %s, errno: %d, rc = %d",
+                  me->mnt_fsname, errno, rc ) ;
+      }
+      else
+      {
+         dev_t devID = fsStat.st_rdev ;
+         if ( pathDevID == devID )
+         {
+            ossStrncpy( fsName, me->mnt_fsname, fsNameSize -1 ) ;
+            fsName[ fsNameSize ] = '\0' ;
+            findOut = TRUE ;
+            break ;
+         }
+      }
+   }
+
+   if ( FALSE == findOut )
+   {
+      ossStrncpy( fsName, "unknown-disk", fsNameSize -1 ) ;
+      fsName[ fsNameSize ] = '\0' ;
+   }
+
 #endif
 done :
 #if defined (_WINDOWS)
@@ -1003,12 +1159,265 @@ done :
       SDB_OSS_FREE ( pszWString ) ;
       pszWString = NULL ;
    }
+   if ( lpszVolumePath )
+   {
+      SDB_OSS_FREE ( lpszVolumePath ) ;
+      lpszVolumePath = NULL ;
+   }
+#elif defined (_LINUX) || defined (_AIX)
+   if ( NULL != fp )
+   {
+      endmntent( fp ) ;
+   }
 #endif
    PD_TRACE_EXITRC ( SDB_OSSGETDISKINFO, rc );
    return rc ;
 error :
-   PD_LOG ( PDERROR, "Failed to get disk info, error = %d",
-            ossErr ) ;
+   goto done ;
+}
+
+/*
+   ossGetFDNum implement
+   get the number of file description / open files
+*/
+// PD_TRACE_DECLARE_FUNCTION ( SDB_OSSGETFILEDESP, "ossGetFileDesp" )
+INT32 ossGetFileDesp ( INT64 &usedNum )
+{
+   PD_TRACE_ENTRY ( SDB_OSSGETFILEDESP ) ;
+   INT32 rc = SDB_OK ;
+
+#if defined (_LINUX) || defined (_AIX)
+
+   CHAR pathName[ OSS_PROC_PATH_LEN_MAX + 1 ] = { 0 } ;
+   DIR *dp = NULL ;
+   struct dirent *dir = NULL ;
+   INT32 ossErr = 0 ;
+   BOOLEAN isOpen = FALSE;
+
+   ossSnprintf( pathName, sizeof(pathName), "/proc/%d/fd", getpid() ) ;
+   dp = opendir( pathName ) ;
+   if( dp == NULL )
+   {
+      ossErr = ossGetLastError() ;
+      if ( EMFILE == ossErr )
+      {
+         rc = SDB_TOO_MANY_OPEN_FD ;
+      }
+      else
+      {
+         rc = SDB_SYS ;
+      }
+      PD_LOG( PDERROR, "Failed to open dir: %s, errno: %d, rc = %d",
+              pathName, ossErr, rc );
+      goto error ;
+   }
+   isOpen = TRUE ;
+
+   usedNum = 0 ;
+   while ( ( dir = readdir(dp) ) != NULL )
+   {
+      if ( 0 != ossStrcmp( dir->d_name, "." ) &&
+           0 != ossStrcmp( dir->d_name, ".." ) )
+      {
+         usedNum++ ;
+      }
+   }
+   closedir( dp ) ;
+
+#elif defined (_WINDOWS)
+
+   INT32 retcode = 0 ;
+   retcode = GetProcessHandleCount( GetCurrentProcess(), ( PDWORD )&usedNum ) ;
+   PD_CHECK( retcode != 0, SDB_SYS, error, PDERROR, "Failed to get handle count"
+             "of current process, errno: %d, rc = %d", ossGetLastError(), rc );
+#endif
+
+done :
+   PD_TRACE_EXITRC( SDB_OSSGETFILEDESP, rc ) ;
+   return rc ;
+error :
+
+#if defined (_LINUX) || defined (_AIX)
+   if( isOpen )
+   {
+      closedir( dp ) ;
+   }
+#endif
+   goto done ;
+}
+
+#if defined (_LINUX) || defined (_AIX)
+#define OSS_GET_PROC_MEM_VMSIZE   "VmSize"
+#define OSS_GET_PROC_MEM_VMRSS    "VmRSS"
+#endif
+
+INT32 ossGetProcessMemory( OSSPID pid, INT64 &vmRss, INT64 &vmSize )
+{
+   INT32 rc = SDB_OK ;
+   INT32 ossErr = 0 ;
+   vmSize = -1 ;
+   vmRss = -1 ;
+
+#if defined (_WINDOWS)
+   PROCESS_MEMORY_COUNTERS pmc ;
+   if ( GetProcessMemoryInfo ( GetCurrentProcess(), &pmc, sizeof(pmc) ) )
+   {
+      vmRss  = pmc.WorkingSetSize ;
+      vmSize = pmc.WorkingSetSize + pmc.PagefileUsage ;
+   }
+   else
+   {
+      ossErr = ossGetLastError () ;
+      rc = SDB_SYS ;
+      goto error ;
+   }
+
+#elif defined (_LINUX) || defined (_AIX)
+   CHAR pathName[OSS_PROC_PATH_LEN_MAX + 1] = {0} ;
+   CHAR lineBuffer [OSS_PROC_PATH_LEN_MAX+1] = {0} ;
+   INT32 inputNum = 0 ;
+   FILE *fp = NULL ;
+   ossSnprintf( pathName, sizeof(pathName), "/proc/%d/status", pid ) ;
+   fp = fopen ( pathName, "r" ) ;
+   if ( !fp )
+   {
+      ossErr = ossGetLastError () ;
+      rc = SDB_SYS ;
+      goto error ;
+   }
+   while ( fgets ( lineBuffer, OSS_PROC_PATH_LEN_MAX, fp ) &&
+           ( vmSize == -1 || vmRss == -1 ) )
+   {
+      if ( ossStrncmp ( lineBuffer, OSS_GET_PROC_MEM_VMSIZE,
+                        ossStrlen ( OSS_GET_PROC_MEM_VMSIZE ) ) == 0 )
+      {
+         sscanf ( &lineBuffer[ ossStrlen( OSS_GET_PROC_MEM_VMSIZE ) + 1 ],
+                  "%d", &inputNum ) ;
+         vmSize = OSS_GET_MEM_INFO_AMPLIFIER * inputNum ;
+      }
+      else if ( ossStrncmp ( lineBuffer, OSS_GET_PROC_MEM_VMRSS,
+                             ossStrlen ( OSS_GET_PROC_MEM_VMRSS ) ) == 0 )
+      {
+         sscanf ( &lineBuffer[ ossStrlen( OSS_GET_PROC_MEM_VMRSS ) + 1 ],
+                  "%d", &inputNum ) ;
+         vmRss = OSS_GET_MEM_INFO_AMPLIFIER * inputNum ;
+      }
+      ossMemset ( lineBuffer, 0, sizeof(lineBuffer) ) ;
+   }
+   fclose ( fp ) ;
+
+#endif
+
+done :
+   return rc ;
+error :
+   PD_LOG ( PDERROR, "Failed to get memory info, error = %d", ossErr ) ;
+   goto done ;
+}
+
+// PD_TRACE_DECLARE_FUNCTION ( SDB_OSSREADLINK, "ossReadlink" )
+INT32 ossReadlink ( const CHAR *pPath, CHAR *pLinkedPath, INT32 maxLen )
+{
+   INT32 rc = SDB_OK ;
+
+   PD_TRACE_ENTRY ( SDB_OSSREADLINK ) ;
+
+#if defined (_LINUX) || defined (_AIX)
+   INT32 len = readlink( pPath, pLinkedPath, maxLen ) ;
+   if ( len <= 0 || len >= maxLen )
+   {
+      rc = SDB_INVALIDARG ;
+      goto error ;
+   }
+   pLinkedPath[len] = '\0' ;
+#endif
+
+done :
+   PD_TRACE_EXITRC( SDB_OSSREADLINK, rc ) ;
+   return rc ;
+error :
+   goto done ;
+}
+
+#if defined (_LINUX) || defined (_AIX)
+#define OSS_DISK_IO_STAT_FILE "/proc/diskstats"
+#endif
+
+// PD_TRACE_DECLARE_FUNCTION ( SDB_OSSGETDISKIOSTAT, "ossGetDiskIOStat" )
+INT32 ossGetDiskIOStat ( const CHAR *pDriverName, ossDiskIOStat &ioStat )
+{
+   INT32 rc = SDB_OK ;
+
+   PD_TRACE_ENTRY ( SDB_OSSGETDISKIOSTAT ) ;
+
+#if defined (_LINUX) || defined (_AIX)
+   INT32 ossErr = 0 ;
+   CHAR pathName[ OSS_PROC_PATH_LEN_MAX + 1 ] = {0} ;
+   CHAR lineBuffer[ OSS_PROC_PATH_LEN_MAX + 1 ] = {0} ;
+   CHAR driverName[ OSS_PROC_PATH_LEN_MAX + 1 ] = {0} ;
+   FILE *fp = NULL ;
+
+   ossSnprintf ( pathName, sizeof( pathName ), OSS_DISK_IO_STAT_FILE ) ;
+   fp = fopen ( pathName, "r" ) ;
+   if ( !fp )
+   {
+      ossErr = ossGetLastError () ;
+      PD_LOG ( PDERROR, "Failed to open disk stat file, error = %d",
+               ossErr ) ;
+      rc = SDB_SYS ;
+      goto error ;
+   }
+
+   while ( fgets( lineBuffer, sizeof( lineBuffer ), fp) != NULL ) {
+      INT32 fieldRead = 0 ;
+
+      UINT32 major, minor ;
+      UINT32 ios_pgr, tot_ticks, rq_ticks, wr_ticks ;
+      UINT64 rd_ios, rd_merges_or_rd_sec, wr_ios, wr_merges ;
+      UINT64 rd_sec_or_wr_ios, wr_sec, rd_ticks_or_wr_sec ;
+      fieldRead = sscanf( lineBuffer,
+                          "%u %u %s %llu %llu %llu %llu %llu %llu %llu %u %u %u %u",
+                          &major, &minor, driverName,
+                          &rd_ios, &rd_merges_or_rd_sec, &rd_sec_or_wr_ios,
+                          &rd_ticks_or_wr_sec, &wr_ios, &wr_merges, &wr_sec,
+                          &wr_ticks, &ios_pgr, &tot_ticks, &rq_ticks) ;
+      if ( 0 != ossStrcmp( pDriverName, driverName ) )
+      {
+         continue ;
+      }
+      if ( fieldRead == 14 )
+      {
+         /* Device or partition */
+         ioStat.rdIos     = rd_ios ;
+         ioStat.rdMerges  = rd_merges_or_rd_sec ;
+         ioStat.rdSectors = rd_sec_or_wr_ios ;
+         ioStat.rdTicks   = (unsigned int) rd_ticks_or_wr_sec ;
+         ioStat.wrIos     = wr_ios ;
+         ioStat.wrMerges  = wr_merges ;
+         ioStat.wrSectors = wr_sec ;
+         ioStat.wrTicks   = wr_ticks ;
+         ioStat.iosPgr    = ios_pgr ;
+         ioStat.totTicks  = tot_ticks ;
+         ioStat.rqTicks   = rq_ticks ;
+      }
+      else if ( fieldRead == 7 ) {
+         /* Partition without extended statistics */
+         ioStat.rdIos      = rd_ios;
+         ioStat.rdSectors  = rd_merges_or_rd_sec ;
+         ioStat.wrIos      = rd_sec_or_wr_ios ;
+         ioStat.wrSectors  = rd_ticks_or_wr_sec ;
+      }
+      break ;
+   }
+
+   fclose( fp ) ;
+#endif
+
+done :
+   PD_TRACE_EXITRC ( SDB_OSSGETDISKIOSTAT, rc ) ;
+   return rc ;
+
+error :
    goto done ;
 }
 
@@ -1036,7 +1445,6 @@ typedef NTSTATUS (__stdcall *NTQUERYSYSTEMINFORMATION)
 #define OSS_GET_CPU_INFO_FILE      "/proc/stat"
 #define OSS_GET_CPU_INFO_PATTERN   "%lld%lld%lld%lld%lld%lld%lld"
 #endif
-// output is based on milliseconds
 // PD_TRACE_DECLARE_FUNCTION ( SDB_OSSGETCPUINFO, "ossGetCPUInfo" )
 INT32 ossGetCPUInfo ( SINT64 &user, SINT64 &sys,
                       SINT64 &idle, SINT64 &other )
@@ -1053,11 +1461,9 @@ INT32 ossGetCPUInfo ( SINT64 &user, SINT64 &sys,
       rc = SDB_SYS ;
       goto error ;
    }
-   // GetSystemTimes returns 100-nanosecond-based time
    other = 0 ;
    idle /= 10000 ;
    sys /= 10000 ;
-   // sys time also includes idle time
    sys -= idle ;
    user /= 10000 ;
 #elif defined (_LINUX) || defined (_AIX)
@@ -1074,8 +1480,6 @@ INT32 ossGetCPUInfo ( SINT64 &user, SINT64 &sys,
    FILE *fp = NULL ;
    static int clkTck = 0 ;
    static int numMicrosecPerClkTck = 0 ;
-   // On Linux, utime and stime use "jiffies" as unit of measurement.
-   // Normally there are 100 jiffies per second
    if ( 0 == clkTck )
    {
       clkTck = sysconf ( _SC_CLK_TCK ) ;
@@ -1083,15 +1487,12 @@ INT32 ossGetCPUInfo ( SINT64 &user, SINT64 &sys,
       {
          clkTck = OSS_CLK_TCK ;
       }
-      // in time.h, CLOCKS_PER_SEC is required to be 1 million on all
-      // XSI-conformant systems
       numMicrosecPerClkTck = OSS_ONE_MILLION / clkTck ;
    }
    ossSnprintf ( pathName, sizeof(pathName), OSS_GET_CPU_INFO_FILE ) ;
    fp = fopen ( pathName, "r" ) ;
    if ( fp )
    {
-      // read first line
       if ( !fgets ( buffer, OSS_PROC_PATH_LEN_MAX, fp ) )
       {
          ossErr = ossGetLastError () ;
@@ -1099,7 +1500,6 @@ INT32 ossGetCPUInfo ( SINT64 &user, SINT64 &sys,
          rc = SDB_SYS ;
          goto error ;
       }
-      // 4 means skip "cpu"
       sscanf ( &buffer[4], OSS_GET_CPU_INFO_PATTERN,
                &userTime, &nicedTime, &systemTime,
                &idleTime, &waitTime, &irqTime, &softirqTime ) ;
@@ -1135,7 +1535,6 @@ INT32 ossGetProcMemInfo( ossProcMemInfo &memInfo,
                          OSSPID pid )
 {
    INT32 rc = SDB_OK ;
-   // PD_TRACE_ENTRY ( SDB_OSSGETPROCMEMINFO );
 #if defined (_WINDOWS)
    HANDLE handle = GetCurrentProcess() ;
    PROCESS_MEMORY_COUNTERS pmc ;
@@ -1163,7 +1562,6 @@ INT32 ossGetProcMemInfo( ossProcMemInfo &memInfo,
                "the OS is not supported!" ) ;
 #endif
 done:
-   // PD_TRACE_EXITRC (SDB_OSSGETPROCMEMINFO, rc );
    return rc;
 error:
    goto done;
@@ -1264,7 +1662,6 @@ INT32 ossIPInfo::_init()
       goto error ;
    }
 
-   // get actual ifc_len
    rc = ioctl( sock, SIOCGIFCONF, &ifc ) ;
    if ( 0 != rc )
    {
@@ -1277,7 +1674,6 @@ INT32 ossIPInfo::_init()
       goto done ;
    }
 
-   // alloc mem for ifreq
    buf = (struct ifreq*)SDB_OSS_MALLOC( ifc.ifc_len ) ;
    if ( NULL == buf )
    {
@@ -1285,7 +1681,6 @@ INT32 ossIPInfo::_init()
       goto error ;
    }
 
-   // get ip info with buf
    ifc.ifc_req = buf ;
    rc = ioctl( sock, SIOCGIFCONF, &ifc ) ;
    if ( 0 != rc )
@@ -1294,7 +1689,6 @@ INT32 ossIPInfo::_init()
       goto error ;
    }
 
-   // alloc mem for ip info
    _ipNum = ifc.ifc_len / sizeof( struct ifreq ) ;
    _ips = (ossIP*)SDB_OSS_MALLOC( _ipNum * sizeof(ossIP) ) ;
    if ( NULL == _ips )
@@ -1304,7 +1698,6 @@ INT32 ossIPInfo::_init()
    }
    ossMemset( _ips, 0, _ipNum * sizeof(ossIP) ) ;
 
-   // copy ip info
    ifr = buf ;
    for ( INT32 i = 0; i < _ipNum; i++ )
    {
@@ -1345,7 +1738,6 @@ INT32 ossIPInfo::_init()
       goto error ;
    }
 
-   // first call GetAdapterInfo to get actual bufLen size
    retVal = GetAdaptersInfo( adapterInfo, &bufLen ) ;
    if ( ERROR_BUFFER_OVERFLOW == retVal )
    {
@@ -1367,7 +1759,6 @@ INT32 ossIPInfo::_init()
       goto error ;
    }
 
-   // alloc mem for ip info
    _ipNum = bufLen / sizeof( IP_ADAPTER_INFO ) ;
    _ips = (ossIP*)SDB_OSS_MALLOC( _ipNum * sizeof(ossIP) ) ;
    if ( NULL == _ips )
@@ -1377,7 +1768,6 @@ INT32 ossIPInfo::_init()
    }
    ossMemset( _ips, 0, _ipNum * sizeof(ossIP) ) ;
 
-   // copy ip info
    PIP_ADAPTER_INFO adapter = adapterInfo ;
    for ( INT32 i = 0; adapter != NULL; i++ )
    {
@@ -1405,6 +1795,15 @@ error:
 #error "unsupported os"
 #endif
 
+ossProcLimits::ossProcLimits()
+{
+   INT32 rc = init();
+   if ( SDB_OK != rc )
+   {
+      PD_LOG( PDWARNING, "Init limit info failed, rc:%d", rc ) ;
+   }
+}
+
 #if defined (_LINUX) || defined (_AIX)
 #include <sys/resource.h>
 
@@ -1423,18 +1822,19 @@ std::string ossProcLimits::str()const
 INT32 ossProcLimits::init()
 {
    INT32 rc = SDB_OK ;
-   _initRLimit( RLIMIT_AS, OSS_LIMIT_VIRTUAL_MEM ) ; 
-   _initRLimit( RLIMIT_CORE, OSS_LIMIT_CORE_SZ ) ; 
-   _initRLimit( RLIMIT_CPU, OSS_LIMIT_CPU_TIME ) ; 
-   _initRLimit( RLIMIT_DATA, OSS_LIMIT_DATA_SEG_SZ ) ; 
-   _initRLimit( RLIMIT_FSIZE, OSS_LIMIT_FILE_SZ ) ;  
-   _initRLimit( RLIMIT_STACK, OSS_LIMIT_STACK_SIZE ) ;
-   _initRLimit( RLIMIT_NOFILE, OSS_LIMIT_OPEN_FILE ) ;
+   _initRLimit( RLIMIT_AS,       OSS_LIMIT_VIRTUAL_MEM ) ;
+   _initRLimit( RLIMIT_CORE,     OSS_LIMIT_CORE_SZ ) ;
+   _initRLimit( RLIMIT_CPU,      OSS_LIMIT_CPU_TIME ) ;
+   _initRLimit( RLIMIT_DATA,     OSS_LIMIT_DATA_SEG_SZ ) ;
+   _initRLimit( RLIMIT_FSIZE,    OSS_LIMIT_FILE_SZ ) ;
+   _initRLimit( RLIMIT_STACK,    OSS_LIMIT_STACK_SIZE ) ;
+   _initRLimit( RLIMIT_NOFILE,   OSS_LIMIT_OPEN_FILE ) ;
 #if !defined (_AIX)
-   _initRLimit( RLIMIT_LOCKS, OSS_LIMIT_FILE_LOCK ) ; 
-   _initRLimit( RLIMIT_MEMLOCK, OSS_LIMIT_MEM_LOCK ) ; 
-   _initRLimit( RLIMIT_MSGQUEUE, OSS_LIMIT_MSG_QUEUE ) ; 
-   _initRLimit( RLIMIT_RTPRIO, OSS_LIMIT_SCHE_PRIO) ;
+   _initRLimit( RLIMIT_LOCKS,    OSS_LIMIT_FILE_LOCK ) ;
+   _initRLimit( RLIMIT_MEMLOCK,  OSS_LIMIT_MEM_LOCK ) ;
+   _initRLimit( RLIMIT_MSGQUEUE, OSS_LIMIT_MSG_QUEUE ) ;
+   _initRLimit( RLIMIT_RTPRIO,   OSS_LIMIT_SCHE_PRIO ) ;
+   _initRLimit( RLIMIT_NPROC,    OSS_LIMIT_PROC_NUM ) ;
 #endif  //_AIX
    return rc ;
 }
@@ -1477,6 +1877,86 @@ BOOLEAN ossProcLimits::getLimit( const CHAR *str,
     }
 }
 
+INT32 ossProcLimits::setLimit( const CHAR *str, INT64 soft, INT64 hard )
+{
+   INT32 rc = 0 ;
+   soft = ( -1 == soft ) ? RLIM_INFINITY : soft ;
+   hard = ( -1 == hard ) ? RLIM_INFINITY : hard ;
+   struct rlimit lim = { soft, hard } ;
+   INT32 resource = 0 ;
+
+   if ( ossStrcmp( str, OSS_LIMIT_VIRTUAL_MEM ) == 0 )
+   {
+      resource = RLIMIT_AS ;
+   }
+   else if ( ossStrcmp( str, OSS_LIMIT_CORE_SZ ) == 0 )
+   {
+      resource = RLIMIT_CORE ;
+   }
+   else if ( ossStrcmp( str, OSS_LIMIT_CPU_TIME ) == 0 )
+   {
+      resource = RLIMIT_CPU ;
+   }
+   else if ( ossStrcmp( str, OSS_LIMIT_DATA_SEG_SZ ) == 0 )
+   {
+      resource = RLIMIT_DATA ;
+   }
+   else if ( ossStrcmp( str, OSS_LIMIT_FILE_SZ ) == 0 )
+   {
+      resource = RLIMIT_FSIZE ;
+   }
+   else if ( ossStrcmp( str, OSS_LIMIT_STACK_SIZE ) == 0 )
+   {
+      resource = RLIMIT_STACK ;
+   }
+   else if ( ossStrcmp( str, OSS_LIMIT_OPEN_FILE ) == 0 )
+   {
+      resource = RLIMIT_NOFILE ;
+   }
+   else if ( ossStrcmp( str, OSS_LIMIT_FILE_LOCK ) == 0 )
+   {
+      resource = RLIMIT_LOCKS ;
+   }
+   else if ( ossStrcmp( str, OSS_LIMIT_MEM_LOCK ) == 0 )
+   {
+      resource = RLIMIT_MEMLOCK ;
+   }
+   else if ( ossStrcmp( str, OSS_LIMIT_MSG_QUEUE ) == 0 )
+   {
+      resource = RLIMIT_MSGQUEUE ;
+   }
+   else if ( ossStrcmp( str, OSS_LIMIT_SCHE_PRIO ) == 0 )
+   {
+      resource = RLIMIT_RTPRIO ;
+   }
+   else if ( ossStrcmp( str, OSS_LIMIT_PROC_NUM ) == 0 )
+   {
+      resource = RLIMIT_NPROC ;
+   }
+   else
+   {
+      rc = SDB_SYS ;
+      goto error ;
+   }
+
+   rc = ::setrlimit( resource, &lim ) ;
+   if( rc != 0 )
+   {
+      rc = ossGetLastError() ;
+      PD_LOG( PDERROR, "failed to set limit of [%s], errno:%d", str, rc ) ;
+      goto error ;
+   }
+   else
+   {
+      _initRLimit( resource, str ) ;
+   }
+
+done :
+   return rc ;
+error :
+   goto done ;
+}
+
 #else
 INT32 ossProcLimits::init()
 {
@@ -1493,6 +1973,11 @@ BOOLEAN ossProcLimits::getLimit( const CHAR *str,
                                  INT64 &hard ) const
 {
    return TRUE ;
+}
+
+INT32 ossProcLimits::setLimit( const CHAR *str, INT64 soft, INT64 hard )
+{
+   return SDB_OK ;
 }
 
 std::string ossProcLimits::str()const
@@ -1539,4 +2024,43 @@ BOOLEAN ossNetIpIsValid( const CHAR *ip, INT32 len )
    }
    return FALSE ;
 
+}
+
+BOOLEAN& ossGetSignalShieldFlag()
+{
+   static OSS_THREAD_LOCAL BOOLEAN s_signalShieldFlag = FALSE ;
+   return s_signalShieldFlag ;
+}
+
+INT32& ossGetPendingSignal()
+{
+   static OSS_THREAD_LOCAL INT32 s_pendingSignal = 0 ;
+   return s_pendingSignal ;
+}
+
+/*
+   ossSignalShield implement
+*/
+ossSignalShield::ossSignalShield()
+{
+   ossGetSignalShieldFlag() = TRUE ;
+}
+
+ossSignalShield::~ossSignalShield()
+{
+   close() ;
+}
+
+void ossSignalShield::close()
+{
+   ossGetSignalShieldFlag() = FALSE ;
+
+#if defined (_LINUX)
+   if ( ossGetPendingSignal() > 0 &&
+        SIGPIPE != ossGetPendingSignal() )
+   {
+      ossPThreadKill( ossPThreadSelf(), ossGetPendingSignal() ) ;
+   }
+#endif // _LINUX
+   ossGetPendingSignal() = 0 ;
 }

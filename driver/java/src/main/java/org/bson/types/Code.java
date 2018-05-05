@@ -1,4 +1,3 @@
-// Code.java
 
 /**
  *      Copyright (C) 2008 10gen Inc.
@@ -19,9 +18,6 @@
 package org.bson.types;
 
 import java.io.Serializable;
-import java.util.*;
-
-import org.bson.*;
 
 /** 
  * for using the Code type

@@ -38,6 +38,36 @@
 
 namespace engine
 {
+
+   /*
+      _sptSPResultVal define
+   */
+   class _sptSPResultVal : public _sptResultVal
+   {
+      public:
+         _sptSPResultVal() ;
+         virtual ~_sptSPResultVal() ;
+
+         virtual const void*     rawPtr() const ;
+         virtual bson::BSONObj   toBSON() const ;
+
+         void    reset( JSContext *ctx ) ;
+
+      protected:
+         INT32  _rval2obj( JSContext *cx,
+                           const jsval &jsrval,
+                           bson::BSONObj &rval ) const ;
+
+      protected:
+         jsval             _value ;
+         JSContext         *_ctx ;
+
+   } ;
+   typedef _sptSPResultVal sptSPResultVal ;
+
+   /*
+      _sptSPScope define
+   */
    class _sptSPScope : public _sptScope
    {
    public:
@@ -53,7 +83,7 @@ namespace engine
       }
 
    public:
-      virtual INT32 start() ;
+      virtual INT32 start( UINT32 loadMask = SPT_OBJ_MASK_ALL ) ;
 
       virtual void shutdown() ;
 
@@ -72,25 +102,45 @@ namespace engine
                          const CHAR *filename,
                          UINT32 lineno,
                          INT32 flag,
-                         bson::BSONObj &rval,
-                         bson::BSONObj &detail ) ;
+                         const sptResultVal **ppRval ) ;
+
+      virtual void   getGlobalFunNames( set<string> &setFunc,
+                                        BOOLEAN showHide = FALSE ) ;
+
+      virtual void   getObjStaticFunNames( const string &objName,
+                                           set<string> &setFunc,
+                                           BOOLEAN showHide = FALSE ) ;
+
+      virtual void   getObjFunNames( const void *pObj,
+                                     set<string> &setFunc,
+                                     BOOLEAN showHide = FALSE ) ;
+
+      virtual void   getObjPropNames( const void *pObj,
+                                      set<string> &setProp ) ;
+
+      virtual BOOLEAN   isInstanceOf( const void *pObj,
+                                      const string &objName ) ;
+
+      virtual string getObjClassName( const void *pObj ) ;
 
    private:
       virtual INT32 _loadUsrDefObj( _sptObjDesc *desc ) ;
 
+      INT32 _loadObj( UINT32 loadMask ) ;
+
       INT32 _loadUsrClass( _sptObjDesc *desc ) ;
 
       INT32 _loadGlobal( _sptObjDesc *desc ) ;
-
+         
       INT32 _rval2obj( JSContext *cx,
                        const jsval &jsrval,
                        bson::BSONObj &rval ) ;
-
    private:
       JSRuntime *_runtime ;
       JSContext *_context ;
       JSObject *_global ;
-      JSErrorReporter _errReporter ;
+      sptSPResultVal _rval ;
+
    } ;
    typedef class _sptSPScope sptSPScope ;
 }

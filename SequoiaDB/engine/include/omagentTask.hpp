@@ -50,13 +50,15 @@
 using namespace std ;
 using namespace bson ;
 
-#define OMA_TASK_NAME_ADD_HOST                "add host task"
-#define OMA_TASK_NAME_REMOVE_HOST             "remove host task"
-#define OMA_TASK_NAME_INSTALL_DB_BUSINESS     "install db business task"
-#define OMA_TASK_NAME_REMOVE_DB_BUSINESS      "remove db business task"
-#define OMA_TASK_NAME_INSTALL_ZN_BUSINESS     "install zn business task"
-#define OMA_TASK_NAME_REMOVE_ZN_BUSINESS      "remove zn business task"
-#define OMA_TASK_NAME_SSQL_EXEC               "ssql exec task"
+#define OMA_TASK_NAME_ADD_HOST                     "add host task"
+#define OMA_TASK_NAME_REMOVE_HOST                  "remove host task"
+#define OMA_TASK_NAME_INSTALL_DB_BUSINESS          "install db business task"
+#define OMA_TASK_NAME_REMOVE_DB_BUSINESS           "remove db business task"
+#define OMA_TASK_NAME_INSTALL_ZN_BUSINESS          "install zn business task"
+#define OMA_TASK_NAME_REMOVE_ZN_BUSINESS           "remove zn business task"
+#define OMA_TASK_NAME_INSTALL_SSQL_OLAP_BUSINESS   "install sequoiasql olap task"
+#define OMA_TASK_NAME_REMOVE_SSQL_OLAP_BUSINESS    "remove sequoiasql olap task"
+#define OMA_TASK_NAME_SSQL_EXEC                    "ssql exec task"
 
 
 namespace engine
@@ -93,11 +95,8 @@ namespace engine
          void _setRetErr( INT32 errNum ) ;
 
       private:
-         // add host raw info
          BSONObj                           _addHostRawInfo ;
-         // add host info
          vector<AddHostInfo>               _addHostInfo ;
-         // result
          map< INT32, AddHostResultInfo >   _addHostResult ;
 
          ossSpinSLatch                     _taskLatch ;
@@ -138,11 +137,8 @@ namespace engine
          void _setRetErr( INT32 errNum ) ;
 
       private:
-         // remove host raw info
          BSONObj                            _removeHostRawInfo ;
-         // remove host info
          vector<RemoveHostInfo>             _removeHostInfo ;
-         // result
          map< INT32, RemoveHostResultInfo > _removeHostResult ;
 
          ossSpinSLatch                      _taskLatch ;
@@ -215,13 +211,11 @@ namespace engine
       private:
          BSONObj                                _instDBBusRawInfo ;
          vector< pair<string, string> >         _resultOrder ;
-         // install and result info
          vector<InstDBBusInfo>                  _standalone ;
          vector<InstDBBusInfo>                  _catalog ;
          vector<InstDBBusInfo>                  _coord ;
          map< string, vector<InstDBBusInfo> >   _mapGroups ;                        
          
-         // temporary coord info
          string                                 _tmpCoordSvcName ;
          BSONObj                                _tmpCoordCfgObj ;
 
@@ -237,12 +231,11 @@ namespace engine
          INT32                                  _errno ;
          CHAR                                   _detail[OMA_BUFF_SIZE + 1] ;
 
-         // groups have been created
          set<string>                       _existGroups ;
          
    } ;
    typedef _omaInstDBBusTask omaInstDBBusTask ;
-   
+
    /*
       remove db business task
    */
@@ -291,17 +284,14 @@ namespace engine
          BSONObj                           _removeDBBusRawInfo ;
          BOOLEAN                           _isStandalone ;
          vector< pair<string, string> >    _resultOrder ;
-         // uninstall and result info
          vector<RemoveDBBusInfo>           _standalone ;
          vector<RemoveDBBusInfo>           _catalog ;
          vector<RemoveDBBusInfo>           _coord ;
          vector<RemoveDBBusInfo>           _data ;
 
       private:
-         // temporary coord info
          string                            _tmpCoordSvcName ;
          BSONObj                           _tmpCoordCfgObj ;
-         // auth info
          BSONObj                           _authInfo ;
          
       private:
@@ -358,11 +348,8 @@ namespace engine
          void    _setResultToFail() ;
 
       protected:
-         // znode raw info
          BSONObj                           _ZNRawInfo ;
-         // znode info
          vector<ZNInfo>                    _ZNInfo ;
-         // result
          map< INT32, ZNResultInfo >        _ZNResult ;
          
          BOOLEAN                           _isTaskFail ;
@@ -417,6 +404,117 @@ namespace engine
          INT32 _removeZNodes() ;
    } ;
    typedef _omaRemoveZNBusTask omaRemoveZNBusTask ;
+
+   struct omaSsqlOlapNodeInfo
+   {
+      BSONObj           config ;
+      string            hostName ;
+      string            role ;
+      BOOLEAN           handled ;
+      OMA_TASK_STATUS   status ;
+      string            statusDesc ;
+      INT32             errcode ;
+      string            detail ;
+      vector<string>    flow ;
+
+      omaSsqlOlapNodeInfo()
+      {
+         handled = FALSE ;
+         status = OMA_TASK_STATUS_INIT ;
+         statusDesc = OMA_TASK_STATUS_DESC_INIT ;
+         errcode = SDB_OK ;
+      }
+   } ;
+
+   class _omaSsqlOlapBusBase: public _omaTask
+   {
+      public:
+         _omaSsqlOlapBusBase( INT64 taskID ) ;
+         virtual ~_omaSsqlOlapBusBase() ;
+
+      public:
+         void    setTaskFailed() ;
+         BOOLEAN isTaskFailed() ;
+         void    setErrInfo( INT32 errcode, const string& detail ) ;
+         void    notifyUpdateProgress( ) ;
+         INT32   updateProgressToTask( BOOLEAN notify = FALSE ) ;
+         omaSsqlOlapNodeInfo* getNodeInfo() ;
+         omaSsqlOlapNodeInfo* getMasterNodeInfo() ;
+         const BSONObj& getSysInfo() const { return _sysInfo ; }
+
+      protected:
+         virtual INT32 _calculateProgress() ;
+         INT32   _initInfo( const BSONObj& info, BOOLEAN install = TRUE ) ;
+         void    _buildUpdateTaskObj( BSONObj &retObj ) ; 
+         INT32   _updateProgressToOM() ;
+         void    _setAllNodesStatus( OMA_TASK_STATUS status,
+                                     const string& statusDesc,
+                                     INT32 errcode,
+                                     const string& detail,
+                                     const string& flow ) ;
+         void    _setResultToFail() ;
+         void    _setRetErr( INT32 errcode ) ;
+         INT32   _waitAndUpdateProgress() ;
+         BOOLEAN _isTaskFinish() ;
+         INT32   _removeNode( omaSsqlOlapNodeInfo& nodeInfo ) ;
+
+      protected:
+         BSONObj                       _rawInfo ;
+         BSONObj                       _sysInfo ;
+         set<string>                   _hosts ;
+         vector<omaSsqlOlapNodeInfo>   _nodeInfos ;
+
+         ossSpinSLatch                 _taskLatch ;
+         ossEvent                      _taskEvent ;
+         UINT64                        _eventID ;
+         BOOLEAN                       _isTaskFailed ;
+
+         INT32                         _progress ;
+         INT32                         _errno ;
+         string                        _detail ;
+   } ;
+
+   class _omaInstallSsqlOlapBusTask: public _omaSsqlOlapBusBase
+   {
+      public:
+         _omaInstallSsqlOlapBusTask( INT64 taskID ) ;
+         virtual ~_omaInstallSsqlOlapBusTask() ;
+
+      public:
+         INT32 init( const BSONObj &info, void *ptr = NULL ) ;
+         INT32 doit() ;
+
+      private:
+         virtual INT32 _calculateProgress() ;
+         INT32    _checkNodeEnv( omaSsqlOlapNodeInfo& nodeInfo ) ;
+         INT32    _checkEnv() ;
+         INT32    _install() ;
+         BOOLEAN  _needToRollback() ;
+         INT32    _establishTrust() ;
+         INT32    _rollback( BOOLEAN isRestart ) ;
+         INT32    _checkHdfs() ;
+         INT32    _initCluster() ;
+
+      private:
+         BOOLEAN _removeIfFailed ;
+         BOOLEAN _checked ;
+         BOOLEAN _trusted ;
+         BOOLEAN _started ;
+   } ;
+
+   class _omaRemoveSsqlOlapBusTask: public _omaSsqlOlapBusBase
+   {
+      public:
+         _omaRemoveSsqlOlapBusTask( INT64 taskID ) ;
+         virtual ~_omaRemoveSsqlOlapBusTask() ;
+
+      public:
+         INT32 init( const BSONObj &info, void *ptr = NULL ) ;
+         INT32 doit() ;
+
+      private:
+         INT32 _remove() ;
+   } ;
 
    /*
       ssql execute task
@@ -485,6 +583,35 @@ namespace engine
    } ;
    typedef _omaSsqlExecTask omaSsqlExecTask ;
 
+   /*
+      start plugins task
+   */
+   class _omaStartPluginsTask : public _omaTask
+   {
+   public:
+      _omaStartPluginsTask( INT64 taskID ) ;
+      virtual ~_omaStartPluginsTask() ;
+
+   public:
+      INT32 init( const BSONObj &info, void *ptr = NULL ) ;
+      INT32 doit() ;
+   } ;
+   typedef _omaStartPluginsTask omaStartPluginsTask ;
+
+   /*
+      stop plugins task
+   */
+   class _omaStopPluginsTask : public _omaTask
+   {
+   public:
+      _omaStopPluginsTask( INT64 taskID ) ;
+      virtual ~_omaStopPluginsTask() ;
+
+   public:
+      INT32 init( const BSONObj &info, void *ptr = NULL ) ;
+      INT32 doit() ;
+   } ;
+   typedef _omaStopPluginsTask omaStopPluginsTask ;
 }
 
 

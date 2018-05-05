@@ -94,8 +94,15 @@ namespace engine
                                              const MsgHeader *header ) ;
 
          virtual void         onSessionDisconnect( pmdAsyncSession *pSession ) ;
+         virtual void         onNoneSessionDisconnect( UINT64 sessionID ) ;
          virtual void         onSessionHandleClose( pmdAsyncSession *pSession ) ;
          virtual void         onSessionDestoryed( pmdAsyncSession *pSession ) ;
+
+         virtual INT32        onErrorHanding( INT32 rc,
+                                              const MsgHeader *pReq,
+                                              const NET_HANDLE &handle,
+                                              UINT64 sessionID,
+                                              pmdAsyncSession *pSession ) ;
 
       protected:
          /*
@@ -107,9 +114,7 @@ namespace engine
 
          virtual BOOLEAN      _canReuse( SDB_SESSION_TYPE sessionType ) ;
          virtual UINT32       _maxCacheSize() const ;
-         virtual void         _onPushMsgFailed( INT32 rc, const MsgHeader *pReq,
-                                                const NET_HANDLE &handle,
-                                                pmdAsyncSession *pSession ) ;
+
          /*
             Create session
          */
@@ -117,6 +122,8 @@ namespace engine
                                                    INT32 startType,
                                                    UINT64 sessionID,
                                                    void *data = NULL ) ;
+
+         virtual void         _onSessionNew( pmdAsyncSession *pSession ) ;
 
       protected:
          void                    _checkUnShardSessions( UINT32 interval ) ;
@@ -144,6 +151,12 @@ namespace engine
          virtual UINT64       makeSessionID( const NET_HANDLE &handle,
                                              const MsgHeader *header ) ;
 
+         virtual INT32        onErrorHanding( INT32 rc,
+                                              const MsgHeader *pReq,
+                                              const NET_HANDLE &handle,
+                                              UINT64 sessionID,
+                                              pmdAsyncSession *pSession ) ;
+
       protected:
          /*
             Parse the session type
@@ -154,9 +167,7 @@ namespace engine
 
          virtual BOOLEAN      _canReuse( SDB_SESSION_TYPE sessionType ) ;
          virtual UINT32       _maxCacheSize() const ;
-         virtual void         _onPushMsgFailed( INT32 rc, const MsgHeader *pReq,
-                                                const NET_HANDLE &handle,
-                                                pmdAsyncSession *pSession ) ;
+
          /*
             Create session
          */
@@ -174,8 +185,7 @@ namespace engine
    /*
       _clsMgr define
    */
-   class _clsMgr : public _pmdObjBase, public _IControlBlock,
-                   public _IEventHolder
+   class _clsMgr : public _pmdObjBase, public _IControlBlock
    {
       friend class _clsShardSessionMgr ;
       friend class _clsReplSessionMgr ;
@@ -184,8 +194,6 @@ namespace engine
 
       typedef std::vector<_innerSessionInfo>    VECINNERPARAM ;
       typedef std::map<UINT64, BSONObj>         MAPTASKQUERY ;
-
-      typedef std::vector< IEventHander* >      VEC_EVENTHANDLER ;
 
       public:
          _clsMgr() ;
@@ -199,8 +207,6 @@ namespace engine
          virtual INT32  deactive () ;
          virtual INT32  fini () ;
          virtual void   onConfigChange() ;
-
-         virtual void* queryInterface( SDB_INTERFACE_TYPE type ) ;
 
          virtual void   attachCB( _pmdEDUCB *cb ) ;
          virtual void   detachCB( _pmdEDUCB *cb ) ;
@@ -230,9 +236,6 @@ namespace engine
          INT32  stopTask ( UINT64 taskID ) ;
          INT32  removeTask( UINT64 taskID ) ;
 
-         virtual INT32  regEventHandler( IEventHander *pHandler ) ;
-         virtual void   unregEventHandler( IEventHander *pHandler ) ;
-
          _netRouteAgent *getShardRouteAgent () ;
          _netRouteAgent *getReplRouteAgent () ;
          shardCB * getShardCB () ;
@@ -243,7 +246,10 @@ namespace engine
          _clsTaskMgr*  getTaskMgr () ;
          BOOLEAN  isPrimary () ;
          INT32    clearAllData () ;
+         INT32    invalidateCache ( const CHAR *name, UINT8 type ) ;
          INT32    invalidateCata ( const CHAR *name ) ;
+         INT32    invalidateStatistics () ;
+         INT32    invalidatePlan ( const CHAR *name ) ;
 
       protected:
 
@@ -254,10 +260,6 @@ namespace engine
          INT32 _sendQueryTaskReq ( UINT64 requestID, const CHAR *clFullName,
                                    const BSONObj* match ) ;
 
-         void  _callRegisterEventHandler() ;
-         void  _callPrimaryChangeHandler( BOOLEAN primary,
-                                          SDB_EVENT_OCCUR_TYPE type ) ;
-
          virtual INT32 _defaultMsgFunc ( NET_HANDLE handle, MsgHeader* msg ) ;
          virtual void  onTimer ( UINT64 timerID, UINT32 interval ) ;
 
@@ -267,7 +269,6 @@ namespace engine
          INT32       _prepareTask () ;
          INT32       _addTaskInnerSession ( const CHAR *objdata ) ;
 
-      //msg and event function
       protected:
          INT32 _onCatRegisterRes ( NET_HANDLE handle, MsgHeader* msg ) ;
          INT32 _onCatQueryTaskRes ( NET_HANDLE handle, MsgHeader* msg ) ;
@@ -304,9 +305,6 @@ namespace engine
          UINT64                        _taskID ;
          map< UINT64, UINT64 >         _mapTaskID ;
          ossSpinSLatch                 _clsLatch ;
-
-         VEC_EVENTHANDLER              _vecEventHandler ;
-         ossSpinSLatch                 _handlerLatch ;
 
          UINT64                        _regTimerID ;
          UINT32                        _regFailedTimes ;

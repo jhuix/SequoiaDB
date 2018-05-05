@@ -32,9 +32,9 @@
 #include "clsCataHashMatcher.hpp"
 #include "clsCatalogAgent.hpp"
 #include "pd.hpp"
-#include "mthMatcher.hpp"
 #include "pdTrace.hpp"
 #include "clsTrace.hpp"
+#include "mthCommon.hpp"
 
 using namespace bson;
 namespace engine
@@ -114,9 +114,6 @@ namespace engine
          {
             if ( _logicType != CLS_CATA_LOGIC_AND )
             {
-               // $or: upgrade to universe set.
-               // CLS_CATA_LOGIC_INVALID means it is the only element also
-               // upgrade to universe set.
                upgradeToUniverse();
             }
          }
@@ -133,7 +130,6 @@ namespace engine
 
       if ( CLS_CATA_LOGIC_OR == _logicType && _fieldSet.size() >= 1 )
       {
-         // _fieldSet can't be $or relations, must be $and relations
          clsCataHashPredTree *pChild = NULL ;
          pChild = SDB_OSS_NEW clsCataHashPredTree( _shardingKey ) ;
          PD_CHECK( pChild != NULL, SDB_OOM, error, PDERROR,
@@ -147,7 +143,6 @@ namespace engine
       iter = _fieldSet.find( pFieldName ) ;
       if ( iter != _fieldSet.end() )
       {
-         // ex: a = 1 and a = 2, is not impossible
          if ( 0 != beField.woCompare( iter->second, FALSE ) )
          {
             clear() ;
@@ -173,7 +168,6 @@ namespace engine
       }
       _children.clear() ;
       _fieldSet.clear() ;
-      _logicType = CLS_CATA_LOGIC_INVALID ;
    }
 
    INT32 clsCataHashPredTree::generateHashPredicate( UINT32 partitionBit,
@@ -236,7 +230,6 @@ namespace engine
          if ( includeAllKey )
          {
             objKey = bobKey.obj() ;
-            /// should not hit here when version is old
             _hashVal = clsPartition( objKey,
                                      partitionBit,
                                      internalV ) ;
@@ -361,7 +354,6 @@ namespace engine
          buf << _logicType << ": " ;
       }
 
-      // predicate
       if ( _fieldSet.size() > 0 )
       {
          MAP_CLSCATAHASHPREDFIELDS::const_iterator cit = _fieldSet.begin() ;
@@ -383,7 +375,6 @@ namespace engine
          buf << "{ isNull: true }" ;
       }
 
-      // sub
       for ( UINT32 i = 0 ; i < _children.size() ; ++i )
       {
          buf << _children[ i ]->toString() ;
@@ -393,7 +384,6 @@ namespace engine
       return buf.str() ;
    }
 
-   // note: don't delete shardingkey before delete clsCataHashMatcher
    clsCataHashMatcher::clsCataHashMatcher( const BSONObj &shardingKey )
    :_predicateSet( shardingKey ),
    _shardingKey( shardingKey )
@@ -492,24 +482,18 @@ namespace engine
       {
          const CHAR *pFieldName = beField.fieldName() ;
 
-         // the regular expresion is regarded as universe set
          if ( beField.type() != Array )
          {
             if ( predicateSet.getLogicType() != CLS_CATA_LOGIC_AND )
             {
-               // $or: upgrade to universe set.
-               // CLS_CATA_LOGIC_INVALID means it is the only element also
-               // upgrade to universe set.
                predicateSet.upgradeToUniverse();
             }
-            // $and: ignore the element
             goto done ;
          }
 
          if ( 'a' == pFieldName[1] && 'n' == pFieldName[2] &&
               'd' == pFieldName[3] && 0 == pFieldName[4] )
          {
-            // parse "$and"
             if ( predicateSet.getLogicType() == CLS_CATA_LOGIC_OR )
             {
                pPredicateSet = SDB_OSS_NEW clsCataHashPredTree( _shardingKey ) ;
@@ -530,7 +514,6 @@ namespace engine
          else if ( 'o' == pFieldName[1] && 'r' == pFieldName[2] &&
                    0 == pFieldName[3] )
          {
-            // parse "$or"
             if ( predicateSet.getLogicType() == CLS_CATA_LOGIC_AND )
             {
                pPredicateSet = SDB_OSS_NEW clsCataHashPredTree( _shardingKey ) ;
@@ -552,12 +535,8 @@ namespace engine
          {
             if ( predicateSet.getLogicType() != CLS_CATA_LOGIC_AND )
             {
-               // $or: upgrade to universe set.
-               // CLS_CATA_LOGIC_INVALID means it is the only element also
-               // upgrade to universe set.
                predicateSet.upgradeToUniverse();
             }
-            // $and: ignore the element
             goto done ;
          }
 
@@ -578,8 +557,6 @@ namespace engine
             }
             if ( isNewChild )
             {
-               // after call addchild the predicateset
-               // will free by its father.
                predicateSet.addChild( pPredicateSet );
                isNewChild = FALSE ;
             }
@@ -617,7 +594,6 @@ namespace engine
          BSONElement beTmp = _shardingKey.getField( pFieldName ) ;
          if ( beTmp.eoo() )
          {
-            // ignore the field which is not sharding-key
             goto done ;
          }
          if ( beField.type() == Object )
@@ -631,9 +607,6 @@ namespace engine
             {
                if ( predicateSet.getLogicType() != CLS_CATA_LOGIC_AND )
                {
-                  // $or: upgrade to universe set.
-                  // CLS_CATA_LOGIC_INVALID means it is the only element also
-                  // upgrade to universe set.
                   predicateSet.upgradeToUniverse() ;
                }
                goto done;
@@ -651,6 +624,14 @@ namespace engine
                goto done ;
             }
          }
+         else if ( beField.type() == RegEx )
+         {
+            if ( predicateSet.getLogicType() != CLS_CATA_LOGIC_AND )
+            {
+               predicateSet.upgradeToUniverse() ;
+            }
+            goto done ;
+         }
          rc = predicateSet.addPredicate( pFieldName, beField ) ;
          PD_RC_CHECK( rc, PDERROR, "Failed to add predicate(rc=%d)", rc ) ;
       }
@@ -667,7 +648,7 @@ namespace engine
       goto done ;
    }
 
-   // PD_TRACE_DECLARE_FUNCTION ( SDB_CLSCATAHASHMATCHER_CHECKOPOBJ, "clsCataHashMatcher::isOpObj" )
+   // PD_TRACE_DECLARE_FUNCTION ( SDB_CLSCATAHASHMATCHER_CHECKOPOBJ, "clsCataHashMatcher::checkOpObj" )
    INT32 clsCataHashMatcher::checkOpObj( const bson::BSONObj obj,
                                          INT32 &result )
    {
@@ -692,7 +673,26 @@ namespace engine
                   }
                   else
                   {
-                     result = PREDICATE_OBJ_TYPE_OP_EQ ;
+                     if ( beTmp.type() == Object )
+                     {
+                        INT32 tmpResult = PREDICATE_OBJ_TYPE_NOT_OP ;
+                        rc = checkETInnerObj( beTmp.embeddedObject(),
+                                              tmpResult ) ;
+                        PD_RC_CHECK( rc, PDERROR, "Failed to parse object "
+                                     "inside $et, rc: %d", rc ) ;
+                        if ( tmpResult == PREDICATE_OBJ_TYPE_NOT_OP )
+                        {
+                           result = PREDICATE_OBJ_TYPE_OP_EQ ;
+                        }
+                        else
+                        {
+                           result = PREDICATE_OBJ_TYPE_OP_NOT_EQ ;
+                        }
+                     }
+                     else
+                     {
+                        result = PREDICATE_OBJ_TYPE_OP_EQ ;
+                     }
                   }
                }
                else
@@ -713,6 +713,66 @@ namespace engine
    done:
       PD_TRACE_EXIT ( SDB_CLSCATAHASHMATCHER_CHECKOPOBJ ) ;
       return rc ;
+   error:
+      goto done ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB_CLSCATAHASHMATCHER_CHECKETINNER, "clsCataHashMatcher::checkETInnerObj" )
+   INT32 clsCataHashMatcher::checkETInnerObj( const bson::BSONObj obj,
+                                              INT32 &result )
+   {
+      INT32 rc = SDB_OK ;
+
+      result = PREDICATE_OBJ_TYPE_NOT_OP ;
+
+      PD_TRACE_ENTRY ( SDB_CLSCATAHASHMATCHER_CHECKETINNER ) ;
+
+      try
+      {
+         BSONObjIterator iter( obj ) ;
+         while ( iter.more() )
+         {
+            BSONElement beTmp = iter.next() ;
+            const CHAR *pFieldName = beTmp.fieldName() ;
+            if ( MTH_OPERATOR_EYECATCHER == pFieldName[0] )
+            {
+               INT32 opType = beTmp.getGtLtOp() ;
+               if ( opType != BSONObj::opREGEX &&
+                    opType != BSONObj::opOPTIONS )
+               {
+                  result = PREDICATE_OBJ_TYPE_OP_NOT_EQ ;
+                  break ;
+               }
+               else
+               {
+                  PD_CHECK( beTmp.type() == String, SDB_INVALIDARG, error,
+                            PDERROR, "Failed to parse regex operator" ) ;
+               }
+            }
+            else if ( beTmp.type() == Object )
+            {
+               rc = checkETInnerObj( beTmp.embeddedObject(), result ) ;
+               PD_RC_CHECK( rc, PDERROR, "Failed to parse inner object, "
+                            "rc: %d", rc ) ;
+               if ( result != PREDICATE_OBJ_TYPE_NOT_OP )
+               {
+                  break ;
+               }
+            }
+         }
+      }
+      catch ( std::exception &e )
+      {
+         rc = SDB_INVALIDARG ;
+         PD_LOG( PDERROR, "Failed to check the obj occured unexpected error:%s",
+                 e.what() ) ;
+         goto error ;
+      }
+
+   done:
+      PD_TRACE_EXIT ( SDB_CLSCATAHASHMATCHER_CHECKETINNER ) ;
+      return rc ;
+
    error:
       goto done ;
    }

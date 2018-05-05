@@ -2,7 +2,6 @@
 
 import pysequoiadb
 from pysequoiadb import client
-from pysequoiadb import const
 from pysequoiadb import lob
 from pysequoiadb.error import (SDBTypeError,
                                SDBBaseError,
@@ -14,8 +13,10 @@ if __name__ == "__main__":
 
    try:
       # connect to local db, using default args value.
-      # host= '192.168.20.48', port= 11810, user= '', password= ''
-      db = client("192.168.20.48", 11810)
+      host = 'localhost'
+      port= 11810
+      # user= '', password= ''
+      db = client(host, port)
       cs_name = "gymnasium"
       cs = db.create_collection_space(cs_name)
 
@@ -37,15 +38,16 @@ if __name__ == "__main__":
             break
          except SDBBaseError:
             raise
-         pysequoiadb._print(lob_one)
+         print(lob_one)
 
       lob_two = cl.get_lob(oid)
-      pysequoiadb._print(lob_two.get_size())
-      pysequoiadb._print(lob_two.get_create_time())
+      print(lob_two.get_size())
+      print(lob_two.get_create_time())
       datafrom = lob_two.read(20)
-      pysequoiadb._print(datafrom)
+      lob_two.close()
+      print(datafrom)
       cl.remove_lob(oid)
-      pysequoiadb._print("remove success")
+      print("remove success")
       # drop collection
       cs.drop_collection( cl_name )
       del cl
@@ -57,8 +59,8 @@ if __name__ == "__main__":
       db.disconnect()
       del db
 
-   except SDBBaseError, e:
-      pysequoiadb._print(e)
-      pysequoiadb._print(e.detail)
-   except SDBTypeError, e:
-      pysequoiadb._print(e)
+   except SDBBaseError as e:
+      print(e)
+      print(e.detail)
+   except SDBTypeError as e:
+      print(e)

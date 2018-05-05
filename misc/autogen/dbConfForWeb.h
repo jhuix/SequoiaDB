@@ -7,21 +7,22 @@
 #include <boost/property_tree/xml_parser.hpp>
 #include <boost/foreach.hpp>
 
-// xml source file
 #define OPTXMLSRCFILE          "optlist.xml"
 #define OPTOTHERINFOFORWEBFILE "optOtherInfoForWeb.xml"
 
-// output file path
-// #define DBCONFFORWEBPATH "../../doc/administration/database/topics/runtime_configuration"
-#define DBCONFFORWEBPATH "../../doc/bak/runtime_configuration"
-#define FILESUFFIX ".dita"
+#define OPT_SUPPLEMENTFILE "../../doc/src/document/database_management/runtime_configuration_supplement.md"
+
+#define OPT_MDPATH "../../doc/src/document/database_management/runtime_configuration.md"
 
 class OptEle
 {
 public:
+	std::string nametag ;
     std::string longtag ;
     std::string shorttag ;
     std::string typeofwebtag ;
+	std::string reloadabletag ;
+	std::string reloadstrategytag ;
     std::string detailtag ;
     BOOLEAN hiddentag ;
     OptEle()
@@ -37,12 +38,12 @@ class OptOtherInfoEle
 public:
     std::string titletag ;
     std::string subtitletag ;
-    // stentry tags
     std::string stentry_nametag ;
     std::string stentry_acronymtag ;
     std::string stentry_typetag ;
+	std::string stentry_reloadabletag ;
+	std::string stentry_reloadstrategytag ;
     std::string stentry_desttag ;
-    // note tags
     std::string firsttag ;
     std::string secondtag ;
 } ;
@@ -54,7 +55,9 @@ class OptGenForWeb
     std::vector<OptEle*> optlist ;
     void loadOtherInfoFromXML () ;
     void loadFromXML () ;
+	INT32 parseOptListTag( boost::property_tree::ptree::value_type &v ) ;
     std::string genOptions () ;
+	std::string genSupplement() ;
     void gendoc () ;
 
 public:

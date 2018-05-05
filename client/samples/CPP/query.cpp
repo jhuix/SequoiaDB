@@ -15,13 +15,13 @@
  * Manual Compile:
  *    Dynamic Linking:
  *    Linux:
- *       g++ query.cpp common.cpp -o query -I../../include \
- *       -L../../lib -lsdbcpp
+ *       g++ query.cpp common.cpp -o query -I../../include  -O0 -ggdb \
+ *       -Wno-deprecated -L../../lib -lsdbcpp -lm -ldl
  *    Win:
- *       cl /Foquery.obj /c query.cpp /I..\..\include /wd4047
- *       cl /Focommon.obj /c common.cpp /I..\..\include /wd4047
- *       link /OUT:query.exe /LIBPATH:..\..\lib sdbcpp.lib query.obj common.obj
- *       copy ..\..\lib\sdbcpp.dll .
+ *       cl /Foquery.obj /c query.cpp /I..\..\include /wd4047 /Od /MDd /RTC1 /Z7 /TP
+ *       cl /Focommon.obj /c common.cpp /I..\..\include /wd4047 /Od /MDd /RTC1 /Z7 /TP
+ *       link /OUT:query.exe /LIBPATH:..\..\lib\cpp\debug\dll sdbcppd.lib query.obj common.obj /build
+ *       copy ..\..\lib\cpp\debug\dll\sdbcppd.dll .
  *    Static Linking:
  *    Linux: g++ query.cpp common.cpp -o query.static -I../../include -O0
  *           -ggdb -Wno-deprecated ../../lib/libstaticsdbcpp.a -lm -ldl -lpthread
@@ -36,6 +36,7 @@
 
 using namespace std ;
 using namespace sdbclient ;
+using namespace sample ;
 
 #define NUM_RECORD 5
 
@@ -44,8 +45,6 @@ using namespace sdbclient ;
 
 // Display Syntax Error
 void displaySyntax ( CHAR *pCommand ) ;
-// create record list
-void createRecordList ( vector<BSONObj> &objlist, INT32 listSize ) ;
 
 INT32 main ( INT32 argc, CHAR **argv )
 {
@@ -76,6 +75,9 @@ INT32 main ( INT32 argc, CHAR **argv )
    BSONObj obj ;
    BSONObj rule ;
    vector<BSONObj> objList ;
+   BSONObjBuilder myBuilder ;
+   BSONObj decimalObj ;
+   bsonDecimal decimal ;
    int count = 0 ;
    INT32 rc = SDB_OK ;
 
@@ -118,6 +120,15 @@ INT32 main ( INT32 argc, CHAR **argv )
       }
    }
 
+   decimal.init() ;
+   decimal.fromDouble(1.2345);
+   myBuilder.append("a", decimal);
+   decimalObj = myBuilder.obj();
+   rc = collection.insert ( decimalObj ) ;
+   if ( rc )
+   {
+      cout<<"Failed to insert record, rc = "<<rc<<endl ;
+   }
    // query all the record in this collection
    // and return the result by the cursor
    rc = collection.query ( cursor ) ;

@@ -38,6 +38,7 @@
 
 #include "utilCommon.hpp"
 #include "ossAtomic.hpp"
+#include "ossUtil.hpp"
 
 using namespace bson ;
 
@@ -50,8 +51,29 @@ namespace engine
    typedef  void (*PMD_ON_QUIT_FUNC)() ;
 
    /*
+      Be called when pmdEDU exit
+   */
+   typedef  void (*PMD_ON_EDU_EXIT_FUNC)() ;
+
+   PMD_ON_EDU_EXIT_FUNC pmdSetEDUHook( PMD_ON_EDU_EXIT_FUNC hookFunc ) ;
+   PMD_ON_EDU_EXIT_FUNC pmdGetEDUHook() ;
+
+   /*
       pmd system info define
    */
+
+   typedef struct _pmdOccurredErr
+   {
+      UINT64 _oom ;
+      UINT64 _noSpc ;
+      UINT64 _tooManyOpenFD ;
+
+      _pmdOccurredErr()
+      : _oom( 0 ), _noSpc( 0 ), _tooManyOpenFD( 0 )
+      {
+      }
+   } pmdOccurredErr ;
+
    typedef struct _pmdSysInfo
    {
       SDB_ROLE                      _dbrole ;
@@ -64,14 +86,18 @@ namespace engine
       BOOLEAN                       _quitFlag ;
       PMD_ON_QUIT_FUNC              _pQuitFunc ;
 
-      /// loop updated by pmdSyncClockEntryPoint
       volatile UINT64               _tick ;
 
-      /// loop updated by clsReplicaSet
       volatile UINT64               _validationTick ;
 
+      ossAtomic64                   _globalID ;
+
+      ossProcLimits                 _limitInfo ;
+
+      pmdOccurredErr                _numErr ;
+
       _pmdSysInfo()
-      :_isPrimary( 0 )
+      :_isPrimary( 0 ), _globalID( 1 )
       {
          _dbrole        = SDB_ROLE_STANDALONE ;
          _nodeID.value  = MSG_INVALID_ROUTEID ;
@@ -118,6 +144,14 @@ namespace engine
                                UINT64 &validationTick ) ;
 
    BOOLEAN        pmdDBIsAbnormal() ;
+
+   UINT64         pmdAcquireGlobalID() ;
+
+   ossProcLimits* pmdGetLimit() ;
+
+   void           pmdIncErrNum( INT32 rc ) ;
+   void           pmdResetErrNum() ;
+   pmdOccurredErr pmdGetOccurredErr() ;
 
    pmdSysInfo*    pmdGetSysInfo () ;
 

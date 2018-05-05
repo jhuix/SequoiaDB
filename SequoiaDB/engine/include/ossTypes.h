@@ -44,7 +44,9 @@
    #define OSS_NEWLINE "\n"
    #define SDB_INVALID_FH (-1)
 #endif
-// platform dependent data types
+
+#define SDB_UNUSED(x)      (x)=(x)
+
 #ifdef TRUE
 #undef TRUE
 #endif
@@ -68,9 +70,9 @@
    typedef char                 CHAR ;
    typedef unsigned char        UINT8;
    typedef unsigned char         BYTE;
-   typedef char                 SINT8;
+   typedef signed char          SINT8;
 #if defined (_LINUX) || defined ( _AIX )
-   typedef char                 INT8 ;
+   typedef signed char          INT8 ;
    #define SDB_DEV_NULL         "/dev/null"
 #endif
 
@@ -89,6 +91,18 @@
 #define OSS_UINT64_MAX 0xFFFFFFFFFFFFFFFFuLL
 #define OSS_SINT64_MAX 0x7FFFFFFFFFFFFFFFLL
 #define OSS_SINT64_MIN (-9223372036854775807LL-1)
+#define OSS_SINT64_MAX_D (9223372036854775807.0)
+#define OSS_SINT64_MIN_D (-9223372036854775808.0)
+#define OSS_SINT64_JS_MAX  (9007199254740991LL)
+#define OSS_SINT64_JS_MIN (-9007199254740991LL)
+#define OSS_SINT32_MAX (2147483647)
+#define OSS_SINT32_MIN (-2147483648)
+#define OSS_SINT32_MAX_LL (2147483647LL)
+#define OSS_SINT32_MIN_LL (-2147483648LL)
+#define OSS_SINT32_MAX_D  (2147483647.0)
+#define OSS_SINT32_MIN_D  (-2147483648.0)
+
+
 
 #if defined (_LINUX) || defined ( _AIX )
    typedef INT32                BOOLEAN;
@@ -121,15 +135,6 @@ typedef INT32 SOCKET ;
    typedef uid_t           OSSUID ;
    typedef gid_t           OSSGID ;
    #define OSS_INLINE      inline
-   // any attempt to get TLS variable should use OSS_FORCE_INLINE
-   // It may avoid calling __tls_get_addr (x86 only)instruction repeatedly if
-   // there's any for loop
-   // eg:
-   // static OSS_THREAD_LOCAL pmdEDUCB *_tlsEDUCB ;
-   // OSS_FORCE_INLINE pmdEDUCB *getEDUCB ()
-   // {
-   //    return _tlsEDUCB ;
-   // }
    #define OSS_FORCE_INLINE __attribute__((always_inline))
    #define OSS_THREAD_LOCAL __thread
 #elif defined _WINDOWS
@@ -141,15 +146,6 @@ typedef INT32 SOCKET ;
    typedef DWORD           OSSUID ;
    typedef DWORD           OSSGID ;
    #define OSS_INLINE      inline
-   // any attempt to get TLS variable should use OSS_FORCE_INLINE
-   // It may avoid calling __tls_get_addr (x86 only)instruction repeatedly if
-   // there's any for loop
-   // eg:
-   // static OSS_THREAD_LOCAL pmdEDUCB *_tlsEDUCB ;
-   // OSS_FORCE_INLINE pmdEDUCB *getEDUCB ()
-   // {
-   //    return _tlsEDUCB ;
-   // }
    #define OSS_FORCE_INLINE __forceinline
    #define OSS_THREAD_LOCAL __declspec(thread)
 #else
@@ -166,16 +162,11 @@ typedef UINT64 EDUID ;
 #define OSS_INVALID_GID       ( ( OSSGID )-1 )
 
 
-// return the minimum of two values
 #define OSS_MIN(a, b) (((a) < (b)) ? (a) : (b))
-//
-// return the maximum of two values
 #define OSS_MAX(a, b) (((a) > (b)) ? (a) : (b))
 
 #define ossRoundDownToMultipleX(x,y) (((x)/(y))*(y))
 #define ossRoundUpToMultipleX(x,y) (((x)+((y)-1))-(((x)+((y)-1))%(y)))
-// check if an address is aligned on a 4 or 8 bytes boundary on its
-// platform ( currently it works for 32bit or 64bit only )
 #define ossIsAlignedNative(x) (0==(((ossValuePtr)(x))&(sizeof(void*)-1)))
 #define ossIsAligned4(x) (0==(((ossValuePtr)(x))&(4-1)))
 #define ossIsAligned8(x) (0==(((ossValuePtr)(x))&(8-1)))
@@ -288,7 +279,6 @@ enum SDB_SHELL_RETURN_CODE
 
    SDB_SRC_INVALIDARG         = 127,   // invalid argment
 
-   // user define, begin from 128
    SDB_SRC_IO                 = 128,   // IO Exception
    SDB_SRC_PERM               = 129,   // Permission Error
    SDB_SRC_OOM                = 130,   // Out of Memory
@@ -303,8 +293,6 @@ enum SDB_SHELL_RETURN_CODE
    SDB_SRC_MAX                = 255    // max value
 } ;
 
-// define the client return code
-// should always between 0 to 255
 #define SDB_RETURNCODE_OK      SDB_SRC_SUC
 #define SDB_RETURNCODE_EMPTY   SDB_SRC_EMPTY
 #define SDB_RETURNCODE_WARNING SDB_SRC_WARNING

@@ -40,15 +40,16 @@
 
 #include "pmdEDU.hpp"
 #include "rtnCB.hpp"
-#include "rtnContext.hpp"
+#include "rtnContextDump.hpp"
+#include "rtnFetchBase.hpp"
 #include "dpsTransCB.hpp"
 #include "../bson/bson.h"
+#include "rtnCommandDef.hpp"
 
 using namespace bson ;
 
 namespace engine
 {
-
    /*
       Base define
    */
@@ -63,36 +64,29 @@ namespace engine
    #define MON_MASK_TRANSINFO          0x00000100
    #define MON_MASK_ALL                0xFFFFFFFF
 
+   #define MON_MASK_FETCH_DEFAULT      ( MON_MASK_NODE_NAME |\
+                                         MON_MASK_HOSTNAME |\
+                                         MON_MASK_SERVICE_NAME |\
+                                         MON_MASK_GROUP_NAME |\
+                                         MON_MASK_NODEID )
+
    INT32 monAppendSystemInfo ( BSONObjBuilder &ob,
                                UINT32 mask = MON_MASK_ALL ) ;
 
    void  monAppendVersion ( BSONObjBuilder &ob ) ;
 
-   INT32 monDumpContextsFromCB ( pmdEDUCB *cb, rtnContextDump *context,
-                                 SDB_RTNCB *rtncb, BOOLEAN simple = TRUE ) ;
-   INT32 monDumpAllContexts ( SDB_RTNCB *rtncb, rtnContextDump *context,
-                              BOOLEAN simple = TRUE ) ;
-   INT32 monDumpSessionFromCB ( pmdEDUCB *cb, rtnContextDump *context,
-                                BOOLEAN addInfo, BOOLEAN simple = TRUE ) ;
-   INT32 monDumpAllSessions ( pmdEDUCB *cb, rtnContextDump *context,
-                              BOOLEAN addInfo, BOOLEAN simple = TRUE ) ;
+   void  monAppendUlimit ( BSONObjBuilder &ob ) ;
 
-   INT32 monDumpMonSystem ( rtnContextDump *context, BOOLEAN addInfo ) ;
+   INT32 monAppendFileDesp( BSONObjBuilder &ob ) ;
 
-   INT32 monDumpMonDBCB ( rtnContextDump *context, BOOLEAN addInfo ) ;
+   INT32 monAppendHostMemory ( BSONObjBuilder &ob ) ;
 
-   INT32 monDumpAllCollections ( SDB_DMSCB *dmsCB, rtnContextDump *context,
-                                 BOOLEAN addInfo, BOOLEAN details = FALSE,
-                                 BOOLEAN includeSys = TRUE ) ;
+   INT32 monAppendNodeMemory( BSONObjBuilder &ob ) ;
 
-   INT32 monDumpAllCollectionSpaces ( SDB_DMSCB *dmsCB, rtnContextDump *context,
-                                      BOOLEAN addInfo,
-                                      BOOLEAN details = FALSE,
-                                      BOOLEAN includeSys = TRUE ) ;
+   INT32 monAppendDisk ( BSONObjBuilder &ob,
+                         BOOLEAN appendDbPath = TRUE ) ;
 
-   INT32 monDumpAllStorageUnits ( SDB_DMSCB *dmsCB, rtnContextDump *context ) ;
-
-   INT32 monDumpIndexes( vector<monIndex> &indexes, rtnContextDump *context ) ;
+   INT32 monDumpIndexes( MON_IDX_LIST &indexes, rtnContextDump *context ) ;
 
    INT32 monDumpTraceStatus ( rtnContextDump *context ) ;
 
@@ -106,8 +100,8 @@ namespace engine
                              INT32 direction,
                              rtnContextDump *context ) ;
 
-   void  monResetMon () ;
-
+   void  monResetMon ( RTN_COMMAND_TYPE type, BOOLEAN resetAllEDU,
+                       EDUID eduID ) ;
    INT32 monDBDumpStorageInfo( BSONObjBuilder &ob );
 
    INT32 monDBDumpProcMemInfo( BSONObjBuilder &ob );
@@ -123,14 +117,17 @@ namespace engine
    */
    class _monTransFetcher : public rtnFetchBase
    {
+      DECLARE_FETCH_AUTO_REGISTER()
+
       public:
          _monTransFetcher() ;
          virtual ~_monTransFetcher() ;
 
-         INT32    init( pmdEDUCB *cb,
-                        UINT32 addInfoMask,
-                        BOOLEAN isDumpCurrentEdu,
-                        BOOLEAN detail = FALSE ) ;
+         virtual INT32        init( pmdEDUCB *cb,
+                                    BOOLEAN isCurrent,
+                                    BOOLEAN isDetail,
+                                    UINT32 addInfoMask,
+                                    const BSONObj obj = BSONObj() ) ;
 
          virtual const CHAR*  getName() const ;
 
@@ -159,14 +156,17 @@ namespace engine
    */
    class _monContextFetcher : public rtnFetchBase
    {
+      DECLARE_FETCH_AUTO_REGISTER()
+
       public:
          _monContextFetcher() ;
          virtual ~_monContextFetcher() ;
 
-         INT32    init( pmdEDUCB *cb,
-                        UINT32 addInfoMask,
-                        BOOLEAN isDumpCurrentEdu,
-                        BOOLEAN detail = FALSE ) ;
+         virtual INT32        init( pmdEDUCB *cb,
+                                    BOOLEAN isCurrent,
+                                    BOOLEAN isDetail,
+                                    UINT32 addInfoMask,
+                                    const BSONObj obj = BSONObj() ) ;
 
          virtual const CHAR*  getName() const ;
 
@@ -194,14 +194,17 @@ namespace engine
    */
    class _monSessionFetcher : public rtnFetchBase
    {
+      DECLARE_FETCH_AUTO_REGISTER()
+
       public:
          _monSessionFetcher() ;
          virtual ~_monSessionFetcher() ;
 
-         INT32    init( pmdEDUCB *cb,
-                        UINT32 addInfoMask,
-                        BOOLEAN isDumpCurrentEdu,
-                        BOOLEAN detail = FALSE ) ;
+         virtual INT32        init( pmdEDUCB *cb,
+                                    BOOLEAN isCurrent,
+                                    BOOLEAN isDetail,
+                                    UINT32 addInfoMask,
+                                    const BSONObj obj = BSONObj() ) ;
 
          virtual const CHAR*  getName() const ;
 
@@ -229,14 +232,19 @@ namespace engine
    */
    class _monCollectionFetch : public rtnFetchBase
    {
+      DECLARE_FETCH_AUTO_REGISTER()
+
       public:
          _monCollectionFetch() ;
          virtual ~_monCollectionFetch() ;
-
-         INT32    init( pmdEDUCB *cb,
-                        UINT32 addInfoMask,
-                        BOOLEAN includeSys,
-                        BOOLEAN detail = FALSE ) ;
+         /*
+            Use isCurrent for isIncludeSystem
+         */
+         virtual INT32        init( pmdEDUCB *cb,
+                                    BOOLEAN isCurrent,
+                                    BOOLEAN isDetail,
+                                    UINT32 addInfoMask,
+                                    const BSONObj obj = BSONObj() ) ;
 
          virtual const CHAR*  getName() const ;
 
@@ -254,8 +262,8 @@ namespace engine
          UINT32                     _addInfoMask ;
          BOOLEAN                    _hitEnd ;
 
-         std::set< monCLSimple >    _collectionList ;
-         std::set< monCollection >  _collectionInfo ;
+         MON_CL_SIM_LIST            _collectionList ;
+         MON_CL_LIST                _collectionInfo ;
    } ;
    typedef _monCollectionFetch monCollectionFetch ;
 
@@ -264,14 +272,19 @@ namespace engine
    */
    class _monCollectionSpaceFetch : public rtnFetchBase
    {
+      DECLARE_FETCH_AUTO_REGISTER()
+
       public:
          _monCollectionSpaceFetch() ;
          virtual ~_monCollectionSpaceFetch() ;
-
-         INT32    init( pmdEDUCB *cb,
-                        UINT32 addInfoMask,
-                        BOOLEAN includeSys,
-                        BOOLEAN detail = FALSE ) ;
+         /*
+            Use isCurrent for isIncludeSystem
+         */
+         virtual INT32        init( pmdEDUCB *cb,
+                                    BOOLEAN isCurrent,
+                                    BOOLEAN isDetail,
+                                    UINT32 addInfoMask,
+                                    const BSONObj obj = BSONObj() ) ;
 
          virtual const CHAR*  getName() const ;
 
@@ -289,10 +302,279 @@ namespace engine
          UINT32                     _addInfoMask ;
          BOOLEAN                    _hitEnd ;
 
-         std::set< monCSSimple >          _csList ;
-         std::set< monCollectionSpace >   _csInfo ;
+         MON_CS_SIM_LIST            _csList ;
+         MON_CS_LIST                _csInfo ;
    } ;
    typedef _monCollectionSpaceFetch monCollectionSpaceFetch ;
+
+   /*
+      _monDataBaseFetch define
+   */
+   class _monDataBaseFetch : public rtnFetchBase
+   {
+      DECLARE_FETCH_AUTO_REGISTER()
+
+      public:
+         _monDataBaseFetch() ;
+         virtual ~_monDataBaseFetch() ;
+
+         virtual INT32        init( pmdEDUCB *cb,
+                                    BOOLEAN isCurrent,
+                                    BOOLEAN isDetail,
+                                    UINT32 addInfoMask,
+                                    const BSONObj obj = BSONObj() ) ;
+
+         virtual const CHAR*  getName() const ;
+
+      public:
+         virtual BOOLEAN   isHitEnd() const ;
+         virtual INT32     fetch( BSONObj &obj ) ;
+
+      private:
+         UINT32                  _addInfoMask ;
+         BOOLEAN                 _hitEnd ;
+
+   } ;
+   typedef _monDataBaseFetch monDataBaseFetch ;
+
+   /*
+      _monSystemFetch define
+   */
+   class _monSystemFetch : public rtnFetchBase
+   {
+      DECLARE_FETCH_AUTO_REGISTER()
+
+      public:
+         _monSystemFetch() ;
+         virtual ~_monSystemFetch() ;
+
+         virtual INT32        init( pmdEDUCB *cb,
+                                    BOOLEAN isCurrent,
+                                    BOOLEAN isDetail,
+                                    UINT32 addInfoMask,
+                                    const BSONObj obj = BSONObj() ) ;
+
+         virtual const CHAR*  getName() const ;
+
+      public:
+         virtual BOOLEAN   isHitEnd() const ;
+         virtual INT32     fetch( BSONObj &obj ) ;
+
+      private:
+         UINT32                  _addInfoMask ;
+         BOOLEAN                 _hitEnd ;
+
+   } ;
+   typedef _monSystemFetch monSystemFetch ;
+
+   /*
+      _monHealthFetch define
+   */
+   class _monHealthFetch : public rtnFetchBase
+   {
+      DECLARE_FETCH_AUTO_REGISTER()
+
+      public:
+         _monHealthFetch() ;
+         virtual ~_monHealthFetch() ;
+
+         virtual INT32        init( pmdEDUCB *cb,
+                                    BOOLEAN isCurrent,
+                                    BOOLEAN isDetail,
+                                    UINT32 addInfoMask,
+                                    const BSONObj obj = BSONObj() ) ;
+
+         virtual const CHAR*  getName() const ;
+
+      public:
+         virtual BOOLEAN   isHitEnd() const ;
+         virtual INT32     fetch( BSONObj &obj ) ;
+
+      private:
+         UINT32                  _addInfoMask ;
+         BOOLEAN                 _hitEnd ;
+
+   } ;
+   typedef _monHealthFetch monHealthFetch ;
+
+   /*
+      _monStorageUnitFetch define
+   */
+   class _monStorageUnitFetch : public rtnFetchBase
+   {
+      DECLARE_FETCH_AUTO_REGISTER()
+
+      public:
+         _monStorageUnitFetch() ;
+         virtual ~_monStorageUnitFetch() ;
+
+         /*
+            use isCurrent for isIncludeSystem
+         */
+         virtual INT32        init( pmdEDUCB *cb,
+                                    BOOLEAN isCurrent,
+                                    BOOLEAN isDetail,
+                                    UINT32 addInfoMask,
+                                    const BSONObj obj = BSONObj() ) ;
+
+         virtual const CHAR*  getName() const ;
+
+      public:
+         virtual BOOLEAN   isHitEnd() const ;
+         virtual INT32     fetch( BSONObj &obj ) ;
+
+      protected:
+         INT32       _fetchNext( BSONObj &obj ) ;
+
+      private:
+         BOOLEAN                 _includeSys ;
+         UINT32                  _addInfoMask ;
+         BOOLEAN                 _hitEnd ;
+
+         MON_SU_LIST             _suInfo ;
+   } ;
+   typedef _monStorageUnitFetch monStorageUnitFetch ;
+
+   /*
+      _monIndexFetch define
+   */
+   class _monIndexFetch : public rtnFetchBase
+   {
+      DECLARE_FETCH_AUTO_REGISTER()
+
+      public:
+         _monIndexFetch() ;
+         virtual ~_monIndexFetch() ;
+
+         virtual INT32        init( pmdEDUCB *cb,
+                                    BOOLEAN isCurrent,
+                                    BOOLEAN isDetail,
+                                    UINT32 addInfoMask,
+                                    const BSONObj obj = BSONObj() ) ;
+
+         virtual const CHAR*  getName() const ;
+
+      public:
+         virtual BOOLEAN   isHitEnd() const ;
+         virtual INT32     fetch( BSONObj &obj ) ;
+
+      protected:
+         INT32       _fetchNext( BSONObj &obj ) ;
+
+      private:
+         UINT32                  _addInfoMask ;
+         BOOLEAN                 _hitEnd ;
+
+         UINT32                  _pos ;
+         MON_IDX_LIST            _indexInfo ;
+   } ;
+   typedef _monIndexFetch monIndexFetch ;
+
+   /*
+      _monCLBlockFetch define
+   */
+   class _monCLBlockFetch : public rtnFetchBase
+   {
+      DECLARE_FETCH_AUTO_REGISTER()
+
+      public:
+         _monCLBlockFetch() ;
+         virtual ~_monCLBlockFetch() ;
+
+         virtual INT32        init( pmdEDUCB *cb,
+                                    BOOLEAN isCurrent,
+                                    BOOLEAN isDetail,
+                                    UINT32 addInfoMask,
+                                    const BSONObj obj = BSONObj() ) ;
+
+         virtual const CHAR*  getName() const ;
+
+      public:
+         virtual BOOLEAN   isHitEnd() const ;
+         virtual INT32     fetch( BSONObj &obj ) ;
+
+      protected:
+         INT32       _fetchNext( BSONObj &obj ) ;
+
+      private:
+         UINT32                  _addInfoMask ;
+         BOOLEAN                 _hitEnd ;
+
+         UINT32                  _pos ;
+         vector<dmsExtentID>     _vecBlock ;
+   } ;
+   typedef _monCLBlockFetch monCLBlockFetch ;
+
+   /*
+      _monBackupFetch define
+   */
+   class _monBackupFetch : public rtnFetchBase
+   {
+      DECLARE_FETCH_AUTO_REGISTER()
+
+      public:
+         _monBackupFetch() ;
+         virtual ~_monBackupFetch() ;
+
+         virtual INT32        init( pmdEDUCB *cb,
+                                    BOOLEAN isCurrent,
+                                    BOOLEAN isDetail,
+                                    UINT32 addInfoMask,
+                                    const BSONObj obj = BSONObj() ) ;
+
+         virtual const CHAR*  getName() const ;
+
+      public:
+         virtual BOOLEAN   isHitEnd() const ;
+         virtual INT32     fetch( BSONObj &obj ) ;
+
+      protected:
+         INT32       _fetchNext( BSONObj &obj ) ;
+
+      private:
+         UINT32                  _addInfoMask ;
+         BOOLEAN                 _hitEnd ;
+
+         UINT32                  _pos ;
+         vector < BSONObj >      _vecBackup ;
+   } ;
+   typedef _monBackupFetch monBackupFetch ;
+
+   /*
+      _monAccessPlansFetch define
+    */
+   class _monAccessPlansFetch : public rtnFetchBase
+   {
+      DECLARE_FETCH_AUTO_REGISTER()
+
+      public:
+         _monAccessPlansFetch () ;
+         virtual ~_monAccessPlansFetch () ;
+
+         virtual INT32 init ( pmdEDUCB *cb,
+                              BOOLEAN isCurrent,
+                              BOOLEAN isDetail,
+                              UINT32 addInfoMask,
+                              const BSONObj obj = BSONObj() ) ;
+
+         virtual const CHAR* getName () const ;
+
+      public :
+         virtual BOOLEAN isHitEnd () const ;
+         virtual INT32 fetch ( BSONObj &obj ) ;
+
+      protected :
+         INT32 _fetchNext ( BSONObj &obj ) ;
+
+      private :
+         UINT32               _addInfoMask ;
+         BSONObj              _sysInfo ;
+         BOOLEAN              _hitEnd ;
+         UINT32               _pos ;
+         vector<BSONObj>      _cachedPlanList ;
+   } ;
+
+   typedef _monAccessPlansFetch monAccessPlansFetch ;
 
 }
 

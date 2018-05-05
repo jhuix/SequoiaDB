@@ -42,8 +42,8 @@
 #include "monCB.hpp"
 #include "rtn.hpp"
 #include "dmsStorageUnit.hpp"
-#include "dmsTempCB.hpp"
-#include "rtnContext.hpp"
+#include "dmsTempSUMgr.hpp"
+#include "rtnContextQGM.hpp"
 #include "qgmUtil.hpp"
 #include "pdTrace.hpp"
 #include "qgmTrace.hpp"
@@ -144,7 +144,6 @@ namespace engine
          goto error ;
       }
 
-      /// context is freed by sort context.
       _contextSort = -1 ;
 
    done:

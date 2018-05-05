@@ -16,6 +16,7 @@
 """
 
 import calendar
+import ctypes
 import datetime
 import re
 import struct
@@ -25,33 +26,34 @@ from bson.binary import (Binary, OLD_UUID_SUBTYPE,
                          JAVA_LEGACY, CSHARP_LEGACY)
 from bson.code import Code
 from bson.dbref import DBRef
+from bson.decimal import Decimal
 from bson.errors import (InvalidBSON,
                          InvalidDocument,
                          InvalidStringData)
 from bson.max_key import MaxKey
 from bson.min_key import MinKey
 from bson.objectid import ObjectId
-from bson.py3compat import b, binary_type
+from bson.py3compat import (PY3, b, binary_type, str_type, text_type, long_type)
 from bson.regex import Regex
 from bson.son import SON, RE_TYPE
 from bson.timestamp import Timestamp
 from bson.tz_util import utc
 
-
 try:
     from bson import _cbson
+
     _use_c = True
 except ImportError:
     _use_c = False
 
 try:
     import uuid
+
     _use_uuid = True
 except ImportError:
     _use_uuid = False
 
 PY3 = sys.version_info[0] == 3
-
 
 MAX_INT32 = 2147483647
 MIN_INT32 = -2147483648
@@ -65,29 +67,30 @@ EPOCH_NAIVE = datetime.datetime.utcfromtimestamp(0)
 # python from 2.4 forward. In 2.x b("foo") is just
 # "foo". In 3.x it becomes b"foo".
 EMPTY = b("")
-ZERO  = b("\x00")
-ONE   = b("\x01")
+ZERO = b("\x00")
+ONE = b("\x01")
 
-BSONNUM = b("\x01") # Floating point
-BSONSTR = b("\x02") # UTF-8 string
-BSONOBJ = b("\x03") # Embedded document
-BSONARR = b("\x04") # Array
-BSONBIN = b("\x05") # Binary
-BSONUND = b("\x06") # Undefined
-BSONOID = b("\x07") # ObjectId
-BSONBOO = b("\x08") # Boolean
-BSONDAT = b("\x09") # UTC Datetime
-BSONNUL = b("\x0A") # Null
-BSONRGX = b("\x0B") # Regex
-BSONREF = b("\x0C") # DBRef
-BSONCOD = b("\x0D") # Javascript code
-BSONSYM = b("\x0E") # Symbol
-BSONCWS = b("\x0F") # Javascript code with scope
-BSONINT = b("\x10") # 32bit int
-BSONTIM = b("\x11") # Timestamp
-BSONLON = b("\x12") # 64bit int
-BSONMIN = b("\xFF") # Min key
-BSONMAX = b("\x7F") # Max key
+BSONNUM = b("\x01")  # Floating point
+BSONSTR = b("\x02")  # UTF-8 string
+BSONOBJ = b("\x03")  # Embedded document
+BSONARR = b("\x04")  # Array
+BSONBIN = b("\x05")  # Binary
+BSONUND = b("\x06")  # Undefined
+BSONOID = b("\x07")  # ObjectId
+BSONBOO = b("\x08")  # Boolean
+BSONDAT = b("\x09")  # UTC Datetime
+BSONNUL = b("\x0A")  # Null
+BSONRGX = b("\x0B")  # Regex
+BSONREF = b("\x0C")  # DBRef
+BSONCOD = b("\x0D")  # Javascript code
+BSONSYM = b("\x0E")  # Symbol
+BSONCWS = b("\x0F")  # Javascript code with scope
+BSONINT = b("\x10")  # 32bit int
+BSONTIM = b("\x11")  # Timestamp
+BSONLON = b("\x12")  # 64bit int
+BSONMIN = b("\xFF")  # Min key
+BSONMAX = b("\x7F")  # Max key
+BSONDECIMAL = b("\x64")  # Decimal type
 
 
 def _get_int(data, position, as_class=None,
@@ -117,7 +120,7 @@ def _get_c_string(data, position, length=None):
 
 
 def _make_c_string(string, check_null=False):
-    if isinstance(string, unicode):
+    if isinstance(string, text_type):
         if check_null and "\x00" in string:
             raise InvalidDocument("BSON keys / regex patterns must not "
                                   "contain a NULL character")
@@ -275,7 +278,9 @@ def _get_ref(data, position, as_class, tz_aware, uuid_subtype, compile_re):
 def _get_timestamp(
         data, position, as_class, tz_aware, uuid_subtype, compile_re):
     inc, position = _get_int(data, position, unsigned=True)
+    inc = ctypes.c_int32(inc).value
     timestamp, position = _get_int(data, position, unsigned=True)
+    timestamp = ctypes.c_int32(timestamp).value
     return Timestamp(timestamp, inc), position
 
 
@@ -283,9 +288,18 @@ def _get_long(data, position, as_class, tz_aware, uuid_subtype, compile_re):
     # Have to cast to long; on 32-bit unpack may return an int.
     # 2to3 will change long to int. That's fine since long doesn't
     # exist in python3.
-    value = long(struct.unpack("q", data[position:position + 8])[0])
+    value = long_type(struct.unpack("q", data[position:position + 8])[0])
     position += 8
     return value, position
+
+
+def __get_decimal(data, position, as_class, tz_aware, uuid_subtype, compile_re):
+    d = Decimal(0)
+    l = d._from_bson_element_value(data[position:])
+    value = str(d)
+    position += l
+
+    return d, position
 
 
 _element_getter = {
@@ -306,9 +320,10 @@ _element_getter = {
     BSONCWS: _get_code_w_scope,
     BSONINT: _get_int,  # number_int
     BSONTIM: _get_timestamp,
-    BSONLON: _get_long, # Same as _get_int after 2to3 runs.
+    BSONLON: _get_long,  # Same as _get_int after 2to3 runs.
     BSONMIN: lambda u, v, w, x, y, z: (MinKey(), v),
-    BSONMAX: lambda u, v, w, x, y, z: (MaxKey(), v)}
+    BSONMAX: lambda u, v, w, x, y, z: (MaxKey(), v),
+    BSONDECIMAL: __get_decimal}
 
 
 def _element_to_dict(
@@ -332,6 +347,7 @@ def _elements_to_dict(data, as_class, tz_aware, uuid_subtype, compile_re):
         result[key] = value
     return result
 
+
 def _bson_to_dict(data, as_class, tz_aware, uuid_subtype, compile_re):
     obj_size = struct.unpack("i", data[:4])[0]
     length = len(data)
@@ -344,12 +360,14 @@ def _bson_to_dict(data, as_class, tz_aware, uuid_subtype, compile_re):
         elements, as_class, tz_aware, uuid_subtype, compile_re)
 
     return dct, data[obj_size:]
+
+
 if _use_c:
     _bson_to_dict = _cbson._bson_to_dict
 
 
 def _element_to_bson(key, value, check_keys, uuid_subtype):
-    if not isinstance(key, basestring):
+    if not isinstance(key, str_type):
         raise InvalidDocument("documents must have only string keys, "
                               "key was %r" % key)
 
@@ -405,7 +423,7 @@ def _element_to_bson(key, value, check_keys, uuid_subtype):
         cstring = _make_c_string(value)
         length = struct.pack("i", len(cstring))
         return BSONSTR + name + length + cstring
-    if isinstance(value, unicode):
+    if isinstance(value, text_type):
         cstring = _make_c_string(value)
         length = struct.pack("i", len(cstring))
         return BSONSTR + name + length + cstring
@@ -429,7 +447,7 @@ def _element_to_bson(key, value, check_keys, uuid_subtype):
         return BSONINT + name + struct.pack("i", value)
     # 2to3 will convert long to int here since there is no long in python3.
     # That's OK. The previous if block will match instead.
-    if isinstance(value, long):
+    if isinstance(value, long_type):
         if value > MAX_INT64 or value < MIN_INT64:
             raise OverflowError("BSON can only handle up to 8-byte ints")
         return BSONLON + name + struct.pack("q", value)
@@ -440,8 +458,8 @@ def _element_to_bson(key, value, check_keys, uuid_subtype):
                      value.microsecond / 1000)
         return BSONDAT + name + struct.pack("q", millis)
     if isinstance(value, Timestamp):
-        time = struct.pack("I", value.time)
-        inc = struct.pack("I", value.inc)
+        time = struct.pack("i", value.time)
+        inc = struct.pack("i", value.inc)
         return BSONTIM + name + inc + time
     if value is None:
         return BSONNUL + name
@@ -461,13 +479,15 @@ def _element_to_bson(key, value, check_keys, uuid_subtype):
         if value.flags & re.VERBOSE:
             flags += "x"
         return BSONRGX + name + _make_c_string(pattern, True) + \
-            _make_c_string(flags)
+               _make_c_string(flags)
     if isinstance(value, DBRef):
         return _element_to_bson(key, value.as_doc(), False, uuid_subtype)
     if isinstance(value, MinKey):
         return BSONMIN + name
     if isinstance(value, MaxKey):
         return BSONMAX + name
+    if isinstance(value, Decimal):
+        return BSONDECIMAL + name + value._to_bson_element_value()  # struct.pack(fmt, a) #value.to_bson_element_value()
 
     raise InvalidDocument("cannot convert value of type %s to bson" %
                           type(value))
@@ -479,7 +499,7 @@ def _dict_to_bson(dict, check_keys, uuid_subtype, top_level=True):
         if top_level and "_id" in dict:
             elements.append(_element_to_bson("_id", dict["_id"],
                                              check_keys, uuid_subtype))
-        for (key, value) in dict.iteritems():
+        for (key, value) in dict.items():
             if not top_level or key != "_id":
                 elements.append(_element_to_bson(key, value,
                                                  check_keys, uuid_subtype))
@@ -489,9 +509,10 @@ def _dict_to_bson(dict, check_keys, uuid_subtype, top_level=True):
     encoded = EMPTY.join(elements)
     length = len(encoded) + 5
     return struct.pack("i", length) + encoded + ZERO
+
+
 if _use_c:
     _dict_to_bson = _cbson._dict_to_bson
-
 
 
 def decode_all(data, as_class=dict,
@@ -534,10 +555,10 @@ def decode_all(data, as_class=dict,
         return docs
     except InvalidBSON:
         raise
-    except Exception:
-        # Change exception type to InvalidBSON but preserve traceback.
-        exc_type, exc_value, exc_tb = sys.exc_info()
-        raise InvalidBSON, str(exc_value), exc_tb
+    except Exception as e:
+        reraise(InvalidBSON, InvalidBSON(e), sys.exc_info()[2])
+
+
 if _use_c:
     decode_all = _cbson.decode_all
 

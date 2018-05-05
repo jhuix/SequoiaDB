@@ -69,9 +69,13 @@ namespace engine
 
       INT32 sort( _pmdEDUCB *cb ) ;
 
-      /// do not ensure that the key and obj is get owned.
       INT32 fetch( BSONObj &key, const CHAR** obj,
                    INT32* objLen, _pmdEDUCB *cb ) ;
+
+      OSS_INLINE BOOLEAN isInMemorySort () const
+      {
+         return _blks.empty() ;
+      }
 
    private:
 

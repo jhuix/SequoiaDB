@@ -6,7 +6,7 @@ namespace SequoiaDB
     internal class SDBMessage
     {
         public int RequestLength { get; set; }
-        public  ulong RequestID { get; set; }
+        public ulong RequestID { get; set; }
         public Operation OperationCode { get; set; }
         public int Version { get; set; }
         public short W { get; set; }
@@ -40,6 +40,7 @@ namespace SequoiaDB
         public uint BsonLen { get; set; }
         public uint LobLen { get; set; }
         public uint LobSequence { get; set; }
+        public ByteBuffer LobCachedDataBuf { get; set; }
         public long LobOffset { get; set; }
         public byte[] lobBuff;
         public byte[] LobBuff

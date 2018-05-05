@@ -72,12 +72,13 @@ namespace engine
       OMNODE_STATUS        _status ;
       deque< time_t >      _startTime ;
       INT32                _errNum ;
-
+      BOOLEAN              _isDetected ;
       _dbProcessInfo()
       {
          _pid        = OSS_INVALID_PID ;
          _status     = OMNODE_NORMAL ;
          _errNum     = 0 ;
+         _isDetected = FALSE ;
       }
 
       void reset()
@@ -85,6 +86,7 @@ namespace engine
          _pid        = OSS_INVALID_PID ;
          _status     = OMNODE_NORMAL ;
          _errNum     = 0 ;
+         _isDetected = FALSE ;
       }
    } ;
    typedef _dbProcessInfo dbProcessInfo ;
@@ -193,7 +195,6 @@ namespace engine
          */
          void     watchManualNodes() ;
 
-         // remote process functions
          INT32    addANode( const CHAR *arg1, const CHAR *arg2,
                             string *omsvc = NULL ) ;
          INT32    rmANode( const CHAR *arg1, const CHAR *arg2,
@@ -235,7 +236,7 @@ namespace engine
 
          const CHAR* _getSvcNameFromArg( const CHAR *arg ) ;
 
-         INT32 _getCfgFile( const CHAR *pSvcName, 
+         INT32 _getCfgFile( const CHAR *pSvcName,
                             CHAR *pBuffer, INT32 bufSize ) ;
 
          void     _checkNodeByStartupFile( const CHAR *pSvcName,

@@ -48,6 +48,8 @@ namespace engine
 
    #define  OM_REST_HEAD_SDBUSER         "SdbUser"
    #define  OM_REST_HEAD_SDBPASSWD       "SdbPasswd"
+   #define  OM_REST_HEAD_SDBHOSTNAME     "SdbHostName"
+   #define  OM_REST_HEAD_SDBSERVICENAME  "SdbServiceName"
 
    class _dpsLogWrapper ;
    class _SDB_RTNCB ;
@@ -70,7 +72,6 @@ namespace engine
          CHAR              _userName[SESSION_USER_NAME_LEN+1] ;
       } _attr ;
 
-      // status
       UINT64               _activeTime ;
       INT64                _timeoutCounter ; // ms
       BOOLEAN              _authOK ;
@@ -166,8 +167,6 @@ namespace engine
 
          virtual INT32     run() ;
 
-         // run1() will take place of run()
-//         INT32             run1() ;
 
       public:
          httpConnection*   getRestConn() { return &_restConn ; }
@@ -193,9 +192,9 @@ namespace engine
 
       protected:
 
-         INT32             _fetchOneContext( SINT64 &contextID, 
+         INT32             _fetchOneContext( SINT64 &contextID,
                                              rtnContextBuf &contextBuff ) ;
-         virtual INT32     _processMsg( HTTP_PARSE_COMMON command, 
+         virtual INT32     _processMsg( HTTP_PARSE_COMMON command,
                                         const CHAR *pFilePath ) ;
          INT32             _processBusinessMsg( restAdaptor *pAdaptor ) ;
          INT32             _translateMSG( restAdaptor *pAdaptor,
@@ -228,26 +227,16 @@ namespace engine
    #define REST_CMD_NAME_SNAPSHOT      "snapshot"
    #define REST_CMD_NAME_EXEC          "exec"
    #define REST_CMD_NAME_LISTINDEXES   "list indexes"
+   #define REST_CMD_NAME_TRUNCATE_COLLECTION "truncate collection"
    #define REST_CMD_NAME_ATTACH_COLLECTION "attach collection"
+   #define REST_CMD_NAME_DETACH_COLLECTION "detach collection"
+   #define REST_CMD_NAME_START_GROUP   "start group"
+   #define REST_CMD_NAME_STOP_GROUP    "stop group"
+   #define REST_CMD_NAME_START_NODE    "start node"
+   #define REST_CMD_NAME_STOP_NODE     "stop node"
 
-   #define REST_KEY_NAME_COLLECTIONSPACE "Collectionspace"
-   #define REST_KEY_NAME_COLLECTION    "Collectionname"
-   #define REST_KEY_NAME_SUBCLNAME     "Subclname"
-   #define REST_KEY_NAME_ORDERBY       "Orderby"
-   #define REST_KEY_NAME_LIMIT         "Limit"
-   #define REST_KEY_NAME_MATCHER       "Matcher"
-   #define REST_KEY_NAME_FLAG          "Flag"
-   #define REST_KEY_NAME_INSERTOR      "Insertor"
-   #define REST_KEY_NAME_UPDATOR       "Updator"
-   #define REST_KEY_NAME_DELETOR       "Deletor"
-   #define REST_KEY_NAME_SET_ON_INSERT "Setoninsert"
-   #define REST_KEY_NAME_SQL           "Sql"
-   #define REST_KEY_NAME_LOWBOUND      "Lowbound"
-   #define REST_KEY_NAME_UPBOUND       "Upbound"
-
-
-   class RestToMSGTransfer ;   
-   typedef INT32 ( RestToMSGTransfer::*restTransFunc )( restAdaptor *pAdaptor, 
+   class RestToMSGTransfer ;
+   typedef INT32 ( RestToMSGTransfer::*restTransFunc )( restAdaptor *pAdaptor,
                                                         MsgHeader **msg ) ;
 
    class RestToMSGTransfer : public SDBObject
@@ -255,15 +244,15 @@ namespace engine
       public:
          RestToMSGTransfer( pmdRestSession *session ) ;
          ~RestToMSGTransfer() ;
-         
+
       public:
          INT32       trans( restAdaptor *pAdaptor, MsgHeader **msg ) ;
          INT32       init() ;
-                            
+
       private:
-         INT32       _convertCreateCS( restAdaptor *pAdaptor, 
+         INT32       _convertCreateCS( restAdaptor *pAdaptor,
                                        MsgHeader **msg ) ;
-         INT32       _convertCreateCL( restAdaptor *pAdaptor, 
+         INT32       _convertCreateCL( restAdaptor *pAdaptor,
                                        MsgHeader **msg ) ;
          INT32       _convertDropCS( restAdaptor *pAdaptor, MsgHeader **msg ) ;
          INT32       _convertDropCL( restAdaptor *pAdaptor, MsgHeader **msg ) ;
@@ -298,21 +287,24 @@ namespace engine
 
          INT32       _convertSplit( restAdaptor *pAdaptor, MsgHeader **msg ) ;
 
-         INT32       _converCreateIndex( restAdaptor *pAdaptor,
-                                         MsgHeader **msg ) ;
+         INT32       _convertCreateIndex( restAdaptor *pAdaptor,
+                                          MsgHeader **msg ) ;
 
-         INT32       _converDropIndex( restAdaptor *pAdaptor, 
-                                       MsgHeader **msg ) ;
+         INT32       _convertDropIndex( restAdaptor *pAdaptor,
+                                        MsgHeader **msg ) ;
 
+         INT32       _convertTruncateCollection( restAdaptor *pAdaptor,
+                                                 MsgHeader **msg ) ;
          INT32       _coverAttachCollection( restAdaptor *pAdaptor,
                                              MsgHeader **msg ) ;
-         
+         INT32       _coverDetachCollection( restAdaptor *pAdaptor,
+                                             MsgHeader **msg ) ;
+
          INT32       _convertAlterCollection( restAdaptor *pAdaptor,
                                               MsgHeader **msg ) ;
-         INT32       _convertGetCount( restAdaptor *pAdaptor, 
+         INT32       _convertGetCount( restAdaptor *pAdaptor,
                                        MsgHeader **msg ) ;
 
-         //list
          INT32       _convertListContexts( restAdaptor *pAdaptor,
                                            MsgHeader **msg ) ;
          INT32       _convertListBase( restAdaptor *pAdaptor,
@@ -322,8 +314,19 @@ namespace engine
                                                   MsgHeader **msg ) ;
          INT32       _convertListSessions( restAdaptor *pAdaptor,
                                            MsgHeader **msg ) ;
+
          INT32       _convertListGroups( restAdaptor *pAdaptor,
                                          MsgHeader **msg ) ;
+         INT32       _convertStartGroup( restAdaptor *pAdaptor,
+                                         MsgHeader **msg ) ;
+         INT32       _convertStopGroup( restAdaptor *pAdaptor,
+                                        MsgHeader **msg ) ;
+
+         INT32       _convertStartNode( restAdaptor *pAdaptor,
+                                         MsgHeader **msg ) ;
+         INT32       _convertStopNode( restAdaptor *pAdaptor,
+                                        MsgHeader **msg ) ;
+
          INT32       _convertListSessionsCurrent( restAdaptor *pAdaptor,
                                                   MsgHeader **msg ) ;
          INT32       _convertListCollections( restAdaptor *pAdaptor,
@@ -332,8 +335,20 @@ namespace engine
                                                    MsgHeader **msg ) ;
          INT32       _convertListStorageUnits( restAdaptor *pAdaptor,
                                                MsgHeader **msg ) ;
+
+         INT32       _convertCreateProcedure( restAdaptor *pAdaptor,
+                                              MsgHeader **msg ) ;
+         INT32       _convertRemoveProcedure( restAdaptor *pAdaptor,
+                                              MsgHeader **msg ) ;
          INT32       _convertListProcedures( restAdaptor *pAdaptor,
                                              MsgHeader **msg ) ;
+
+         INT32       _convertCreateDomain( restAdaptor *pAdaptor,
+                                           MsgHeader **msg ) ;
+         INT32       _convertDropDomain( restAdaptor *pAdaptor,
+                                         MsgHeader **msg ) ;
+         INT32       _convertAlterDomain( restAdaptor *pAdaptor,
+                                          MsgHeader **msg ) ;
          INT32       _convertListDomains( restAdaptor *pAdaptor,
                                           MsgHeader **msg ) ;
          INT32       _convertListTasks( restAdaptor *pAdaptor,
@@ -349,7 +364,6 @@ namespace engine
          INT32       _convertListIndexes( restAdaptor *pAdaptor,
                                           MsgHeader **msg ) ;
 
-         //snapshot
          INT32       _convertSnapshotContext( restAdaptor *pAdaptor,
                                               MsgHeader **msg ) ;
          INT32       _convertSnapshotContextCurrent( restAdaptor *pAdaptor,
@@ -368,12 +382,21 @@ namespace engine
                                              MsgHeader **msg ) ;
          INT32       _convertSnapshotCata( restAdaptor *pAdaptor,
                                            MsgHeader **msg ) ;
+         INT32       _convertSnapshotAccessPlans ( restAdaptor * pAdaptor,
+                                                   MsgHeader ** msg ) ;
+         INT32       _convertSnapshotHealth ( restAdaptor * pAdaptor,
+                                              MsgHeader ** msg ) ;
 
          INT32       _buildExecMsg( CHAR **ppBuffer, INT32 *bufferSize,
                                     const CHAR *pSql, UINT64 reqID ) ;
          INT32       _convertExec( restAdaptor *pAdaptor, MsgHeader **msg ) ;
 
+         INT32       _convertForceSession( restAdaptor *pAdaptor,
+                                           MsgHeader **msg ) ;
+
          INT32       _convertLogin( restAdaptor *pAdaptor, MsgHeader **msg ) ;
+
+         INT32       _convertAnalyze ( restAdaptor * pAdaptor, MsgHeader ** msg ) ;
 
       private:
          pmdRestSession    *_restSession ;

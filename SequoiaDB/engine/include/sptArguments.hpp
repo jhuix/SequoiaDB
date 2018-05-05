@@ -36,6 +36,7 @@
 #include "core.hpp"
 #include "oss.hpp"
 #include "../bson/bson.hpp"
+#include "sptPrivateData.hpp"
 
 namespace engine
 {
@@ -56,12 +57,28 @@ namespace engine
       virtual ~_sptArguments(){}
 
    public:
-      /// start with zero.
       virtual INT32 getNative( UINT32 pos, void *value,
                                SPT_NATIVE_TYPE type ) const = 0 ;
-      virtual INT32 getString( UINT32 pos, std::string &value ) const = 0 ;
+      virtual INT32 getString( UINT32 pos, std::string &value,
+                               BOOLEAN strict = TRUE ) const = 0 ;
       virtual INT32 getBsonobj( UINT32 pos, bson::BSONObj &value ) const = 0 ;
+      virtual INT32 getUserObj( UINT32 pos, const _sptObjDesc &objDesc,
+                                const void** value ) const = 0 ;
+      virtual sptPrivateData* getPrivateData() const = 0 ;
+
       virtual UINT32 argc() const = 0 ;
+
+      virtual BOOLEAN isString( UINT32 pos ) const = 0 ;
+      virtual BOOLEAN isInt( UINT32 pos ) const = 0 ;
+      virtual BOOLEAN isBoolean( UINT32 pos ) const = 0 ;
+      virtual BOOLEAN isDouble( UINT32 pos ) const = 0 ;
+      virtual BOOLEAN isNumber( UINT32 pos ) const = 0 ;
+      virtual BOOLEAN isObject( UINT32 pos ) const = 0 ;
+      virtual BOOLEAN isNull( UINT32 pos ) const = 0 ;
+      virtual BOOLEAN isVoid( UINT32 pos ) const = 0 ;
+      virtual BOOLEAN isUserObj( UINT32 pos,
+                                 const _sptObjDesc &objDesc ) const = 0 ;
+      virtual string getUserObjClassName( UINT32 pos ) const = 0 ;
    } ;
    typedef class _sptArguments sptArguments ;
 }

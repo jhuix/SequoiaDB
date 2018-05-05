@@ -15,7 +15,7 @@
    You should have received a copy of the GNU Affero General Public License
    along with this program. If not, see <http://www.gnu.org/license/>.
 
-   Source File Name = dmsTempCB.cpp
+   Source File Name = dpsMessageBlock.hpp
 
    Descriptive Name = Data Management Service Temp Table Control Block
 
@@ -55,9 +55,7 @@ namespace engine
       CHAR *_start;
       CHAR *_write;
       CHAR *_read;
-      // size is the size of buffer
       UINT32 _size;
-      // length is the size with active user data
       UINT32 _length;
 
    public:

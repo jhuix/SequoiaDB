@@ -36,7 +36,7 @@
 #include <iostream>
 #include "boost/thread.hpp"
 #include "rtnIXScanner.hpp"
-#include "rtnAPM.hpp"
+#include "optAPM.hpp"
 #include "boost/thread.hpp"
 #include <stdio.h>
 #include <vector>
@@ -122,7 +122,6 @@ INT32 queryTest(BSONObj *selects, BSONObj *pattern)
       for ( int i=0; i<context._numRecords- previousRecords; i++ )
       {
          BSONObj obj(p) ;
-         //printf("%d: %s\n", i, obj.toString().c_str()) ;
          p+=obj.objsize() ;
          p = (char*)ossRoundUpToMultipleX((ossValuePtr)p,4);
       }
@@ -152,7 +151,6 @@ INT32 concurrentDeleteBig(void *ptr)
       printf("Failed to load pattern\n");
       return -1 ;
    }
-   //cout << sampleObj.toString()<<endl;
    t1 = boost::posix_time::microsec_clock::local_time() ;
    rc = myUnit->deleteRecords(BIG_COLLECTION_NAME, NULL, NULL, &matcher,
                              numDeletedRecords );
@@ -221,7 +219,6 @@ INT32 concurrentInsertBig(void *ptr)
    boost::posix_time::ptime t2 ;
    int thread_id=*(int*)ptr;
    BSONObj sampleObj = BSON("name"<<"concurrentInsertBig"<<"tid"<<thread_id);
-   //cout << sampleObj.toString()<<endl;
    t1 = boost::posix_time::microsec_clock::local_time() ;
    for(unsigned int i=0; i<LOOPNUM; i++)
    {
@@ -248,7 +245,6 @@ INT32 concurrentInsertSmall(void *ptr)
    boost::posix_time::ptime t2 ;
    int thread_id=*(int*)ptr;
    BSONObj sampleObj = BSON("name"<<"concurrentInsertSmall"<<"tid"<<thread_id);
-   //cout << sampleObj.toString()<<endl;
    t1 = boost::posix_time::microsec_clock::local_time() ;
    for(unsigned int i=0; i<LOOPNUM; i++)
    {
@@ -334,7 +330,7 @@ printf ( "dmsStorageUnitHeader size = %d\n", sizeof ( engine::_dmsStorageUnit::_
    printf("dmsDeletedRecord size = %d\n", (int)sizeof(dmsDeletedRecord)) ;
 
    fflush(stdout);
-   myUnit = new dmsStorageUnit( COLLECTIONNAME ,1 ) ;
+   myUnit = new dmsStorageUnit( COLLECTIONNAME ,1, NULL, NULL ) ;
    if ( !myUnit )
    {
       printf ("Failed to allocate memory for myUnit\n" );
@@ -370,7 +366,7 @@ printf ( "dmsStorageUnitHeader size = %d\n", sizeof ( engine::_dmsStorageUnit::_
       collectionName[stringSize] = 0 ;
       printf("CollectionName: %s, NumPages: %d\n", collectionName, pages ) ;
       rc = myUnit->data()->addCollection( collectionName, NULL, 0, NULL, NULL,
-                                          pages, TRUE, FALSE ) ;
+                                          pages, TRUE ) ;
       if ( rc )
       {
          printf("Failed to create collection, rc=%d\n", rc ) ;
@@ -399,7 +395,7 @@ printf ( "dmsStorageUnitHeader size = %d\n", sizeof ( engine::_dmsStorageUnit::_
    printf("add 4096 pages extent");
    t1 = boost::posix_time::microsec_clock::local_time() ;
    rc = myUnit->data()->addCollection( BIG_COLLECTION_NAME, NULL, 0, NULL, NULL,
-                                       4096, TRUE, FALSE ) ;
+                                       4096, TRUE ) ;
    if ( rc )
    {
       printf("Failed to create collection, rc=%d\n", rc ) ;
@@ -444,7 +440,6 @@ printf ( "dmsStorageUnitHeader size = %d\n", sizeof ( engine::_dmsStorageUnit::_
    }
    ixmExtent root ( rootExtent, myUnit ) ;
    printf("Totally %lld keys in the index\n", root.count()) ;
-   rtnAccessPlanManager apm( myUnit ) ;
 while ( true )
 {
    CHAR inputBuffer[1024] = {0} ;
@@ -459,46 +454,6 @@ while ( true )
       break ;
    }
    BSONObj emptyObj ;
-   optAccessPlan *plan ;
-   rc = apm.getPlan ( inputObj, emptyObj, emptyObj,
-                      BIG_COLLECTION_NAME, &plan ) ;
-   if ( rc )
-   {
-      printf("Failed to get plan\n") ;
-      return 0 ;
-   }
-   if ( plan->getScanType() == IXSCAN )
-   {
-      ixmIndexCB myIndexCB ( plan->getIndexCBExtent(), myUnit->index() ) ;
-      if ( !myIndexCB.isInitialized() )
-      {
-         printf("Failed to init index\n") ;
-         return 0 ;
-      }
-      rtnPredicateList *predList = plan->getPredList() ;
-      printf("rtnList = %s\n", predList->toString().c_str()) ;
-      rtnIXScanner scanner ( &myIndexCB, predList, myUnit, NULL ) ;
-      dmsRecordID rid ;
-      INT32 count = 0 ;
-      while ( scanner.advance (rid) != SDB_IXM_EOC )
-      {
-         BSONObj dataRecord ;
-         if ( !rid.isNull() )
-         {
-            rc = myUnit->data()->fetch ( rid, dataRecord, NULL ) ;
-            if ( rc )
-            {
-               printf("failed to fetch\n");
-               return 0 ;
-            }
-            printf("dataRecord = %s\n",dataRecord.toString(false,
-                   false).c_str()) ;
-            count++ ;
-         }
-      }
-      printf("Totally %d records selected from index scan\n", count);
-      apm.releasePlan ( plan ) ;
-   }
 }
 /*
    rtnPredicateListIterator listIterator ( rtnList ) ;

@@ -54,7 +54,8 @@ namespace engine
    {
       public:
          _rtnIndexJob ( RTN_JOB_TYPE type, const CHAR *pCLName,
-                        const BSONObj &indexObj, SDB_DPSCB *dpsCB ) ;
+                        const BSONObj &indexObj, SDB_DPSCB *dpsCB,
+                        UINT64 offset, BOOLEAN isRollBack ) ;
 
          virtual ~_rtnIndexJob() ;
 
@@ -77,6 +78,8 @@ namespace engine
          BSONElement             _indexEle ;
          SDB_DPSCB*              _dpsCB ;
          SDB_DMSCB*              _dmsCB ;
+         UINT64                  _lsn ;
+         BOOLEAN                 _isRollback ;
 
    };
    typedef _rtnIndexJob rtnIndexJob ;
@@ -86,13 +89,10 @@ namespace engine
    */
    class _rtnLoadJob : public _rtnBaseJob
    {
-      protected:
-         std::string _jobName ;
       public:
-         _rtnLoadJob()
-         {
-            _jobName = "Load" ;
-         }
+         _rtnLoadJob() {}
+         virtual ~_rtnLoadJob() {}
+
       public:
          virtual RTN_JOB_TYPE type () const ;
          virtual const CHAR* name () const ;
@@ -101,7 +101,33 @@ namespace engine
    };
    typedef _rtnLoadJob rtnLoadJob ;
 
-   INT32 rtnStartLoadJob() ;
+   typedef void (*RTN_ON_REBUILD_DONE_FUNC)( INT32 rc ) ;
+   /*
+      _rtnRebuildJob define
+   */
+   class _rtnRebuildJob : public _rtnBaseJob
+   {
+      public:
+         _rtnRebuildJob() ;
+         virtual ~_rtnRebuildJob() ;
+      public:
+         virtual RTN_JOB_TYPE type () const ;
+         virtual const CHAR* name () const ;
+         virtual BOOLEAN muteXOn ( const _rtnBaseJob *pOther ) ;
+         virtual INT32 doit () ;
+
+         void    setInfo( RTN_ON_REBUILD_DONE_FUNC pFunc = NULL ) ;
+
+     private:
+         RTN_ON_REBUILD_DONE_FUNC   _pFunc ;
+   } ;
+   typedef _rtnRebuildJob rtnRebuildJob ;
+
+   /*
+      Global function define
+   */
+   INT32    rtnStartLoadJob() ;
+   INT32    rtnStartRebuildJob( RTN_ON_REBUILD_DONE_FUNC pFunc = NULL ) ;
 
 }
 

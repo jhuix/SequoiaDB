@@ -2,7 +2,6 @@
 
 import pysequoiadb
 from pysequoiadb import client
-from pysequoiadb import const
 from pysequoiadb.error import (SDBTypeError,
                                SDBBaseError,
                                SDBEndOfCursor)
@@ -24,12 +23,12 @@ if __name__ == "__main__":
 
       # insert records
       records = []
-      for idx in xrange(0, 10):
+      for idx in range(10):
          name = 'SequoiaDB' + str(idx)
          sport = {"Rank":idx, "Name":name}
          records.append(sport)
 
-      cl.bulk_insert(1, [{'idx':i} for i in xrange(10)]) #records
+      cl.bulk_insert(1, [{'idx':i} for i in range(10)]) #records
 
       full_name = cl.get_full_name()
       sql1 = "select * from %s" % full_name
@@ -38,7 +37,7 @@ if __name__ == "__main__":
 
       # execute sql1
       cr = db.exec_sql(sql1)
-      pysequoiadb._print("The result are below after execute sql:%s" % sql1)
+      print("The result are below after execute sql:%s" % sql1)
       while True:
          try:
             record = cr.next()
@@ -46,13 +45,13 @@ if __name__ == "__main__":
             break
          except SDBBaseError:
             raise
-         pysequoiadb._print(record)
+         print(record)
 
-      pysequoiadb._print('\n')
+      print('\n')
 
       # execute sql2
       db.exec_update(sql2)
-      pysequoiadb._print("The result are below after execute sql:%s" % sql2)
+      print("The result are below after execute sql:%s" % sql2)
       cr = cl.query()
 
       record = cr.next()
@@ -63,7 +62,7 @@ if __name__ == "__main__":
             break
          except SDBBaseError:
             raise
-         pysequoiadb._print(record)
+         print(record)
 
       # drop collection
       cs.drop_collection( cl_name )
@@ -76,7 +75,7 @@ if __name__ == "__main__":
       db.disconnect()
       del db
 
-   except (SDBTypeError, SDBBaseError), e:
-      pysequoiadb._print(e)
-   except SDBBaseError, e:
-      pysequoiadb._print(e.detail)
+   except (SDBTypeError, SDBBaseError) as e:
+      print(e)
+   except SDBBaseError as e:
+      print(e.detail)

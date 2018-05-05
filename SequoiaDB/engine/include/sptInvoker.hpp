@@ -40,12 +40,16 @@
 #include "pd.hpp"
 #include "sptSPDef.hpp"
 #include "sptSPArguments.hpp"
+#include "sptReturnVal.hpp"
+#include "sptCommon.hpp"
 #include "../bson/bson.hpp"
 
 
 namespace engine
 {
    using namespace JS_INVOKER;
+   using namespace bson ;
+   using namespace std ;
 
    /*
       _sptInvoker define
@@ -94,6 +98,11 @@ namespace engine
             goto error ;
          }
 
+         if ( JS_IsExceptionPending( cx ) )
+         {
+            rc = SDB_SPT_EVAL_FAIL ;
+            goto error ;
+         }
          JS_SET_RVAL( cx, vp, jsRval ) ;
       done:
          return rc ;
@@ -185,14 +194,31 @@ namespace engine
             rc = SDB_SYS ;
             goto error ;
          }
+         /*
+            Add the fixed property
+         */
+         rval.addSelfProperty( SPT_OBJ_CNAME_PROPNAME,
+                               SPT_PROP_READONLY|
+                               SPT_PROP_PERMANENT )->setValue(
+                               T::__desc.getJSClassName() ) ;
+         rval.addSelfProperty( SPT_OBJ_ID_PROPNAME,
+                               SPT_PROP_READONLY|
+                               SPT_PROP_PERMANENT )->setValue(
+                               sdbGetGlobalID() ) ;
 
-         if ( !rval.getValProperties().empty() )
+         if ( !rval.getSelfProperties().empty() )
          {
-            rc = setProperty( cx, jsObj, rval.getValProperties() ) ;
+            rc = setProperty( cx, jsObj, rval.getSelfProperties() ) ;
             if ( SDB_OK != rc )
             {
                goto error ;
             }
+         }
+
+         if ( JS_IsExceptionPending( cx ) )
+         {
+            rc = SDB_SPT_EVAL_FAIL ;
+            goto error ;
          }
       done:
          return rc ;
@@ -233,14 +259,18 @@ namespace engine
       {
          INT32 rc = SDB_OK ;
          bson::BSONObj detail ;
+         _sptReturnVal rval ;
+         jsval jsRval = JSVAL_VOID ;
          jsval valID = JSVAL_VOID ;
-         CHAR *idValue = NULL ;
+
+         BOOLEAN processed = FALSE ;
+         BOOLEAN setIDProp = FALSE ;
+         string  callFunc ;
+
          void *instance = JS_GetPrivate( cx, obj ) ;
          if ( NULL == instance )
          {
-            PD_LOG( PDERROR, "js object has no private data." ) ;
-            rc = SDB_SYS ;
-            goto error ;
+            goto done ;
          }
 
          if ( !JS_IdToValue( cx, id, &valID ) )
@@ -252,54 +282,103 @@ namespace engine
 
          if ( flags & JSRESOLVE_ASSIGNING )
          {
-            PD_LOG( PDDEBUG, "the property appears on the left-hand "
-                    "side of an assignment." ) ;
             goto done ;
          }
 
-         if ( !JSVAL_IS_STRING ( valID ) )
+         if ( JSVAL_IS_INT( valID ) || JSVAL_IS_STRING ( valID ) )
          {
-            PD_LOG( PDDEBUG, "not surpported yet" ) ;
-            goto done ;
-         }
+            jsval vp[ 3 ] = { JSVAL_VOID, JSVAL_VOID, valID } ;
+            _sptSPArguments args( cx, 1, &vp[0] ) ;
 
-         idValue = (CHAR *)JS_EncodeString( cx , JSVAL_TO_STRING( valID ) ) ;
-         if ( NULL == idValue )
-         {
-            PD_LOG( PDERROR, "failed to allocate mem." ) ;
-            rc = SDB_OOM ;
-            goto error ;
-         }
+            JSObject *prototype = JS_GetPrototype( cx, obj ) ;
+            if ( prototype )
+            {
+               JSClass *pClass = NULL ;
+               JSResolveOp tmpResoveOp = NULL ;
+               JSBool hasRet = FALSE ;
+               JSBool found = FALSE ;
 
-         if ( T::__desc.getFuncMap().isMemberFunc( idValue ) )
-         {
-            /// member function will be called.
-            goto done ;
-         }
+               pClass = JS_GET_CLASS( cx, obj ) ;
+               SDB_ASSERT( pClass, "Class can't be empty" ) ;
+               if ( pClass )
+               {
+                  tmpResoveOp = pClass->resolve ;
+                  pClass->resolve = JS_ResolveStub ;
+               }
+               hasRet = JS_HasPropertyById( cx, prototype, id, &found ) ;
+               if ( pClass )
+               {
+                  pClass->resolve = tmpResoveOp ;
+               }
 
-         {
-         jsval jsRval = JSVAL_VOID ;
-         _sptReturnVal rval ;
+               if ( hasRet && found )
+               {
+                  goto done ;
+               }
+            }
 
-         rc = (( ( T * )instance )->*f)( idValue, rval, detail ) ;
-         if ( SDB_OK != rc )
-         {
-            PD_LOG( PDERROR, "resolve func returns err:%d, detail:%s",
-                    rc, detail.isEmpty() ? "" : detail.toString().c_str() ) ;
-            goto error ;
+            if ( JSVAL_IS_STRING ( valID ) )
+            {
+               string idstr ;
+               args.getString( 0, idstr ) ;
+
+               if ( T::__desc.getFuncMap().isMemberFunc( idstr.c_str() ) )
+               {
+                  goto done ;
+               }
+            }
+
+            rc = (( ( T * )instance )->*f)( args,
+                                            _getOpCode( cx ), /// SPT_JS_OP_CODE
+                                            processed,
+                                            callFunc,
+                                            setIDProp,
+                                            rval,
+                                            detail ) ;
+            if ( SDB_OK != rc )
+            {
+               PD_LOG( PDERROR, "resolve func returns err:%d, detail:%s",
+                       rc, detail.isEmpty() ? "" : detail.toString().c_str() ) ;
+               goto error ;
+            }
+            else if ( !processed )
+            {
+               goto done ;
+            }
+            else if ( !callFunc.empty() )
+            {
+               if ( !JS_CallFunctionName ( cx, obj, callFunc.c_str(),
+                                           1, &valID, &jsRval ) )
+               {
+                  rc = SDB_SYS ;
+                  detail = BSON( SPT_ERR << "Call function failed" ) ;
+                  goto error ;
+               }
+            }
+            else
+            {
+               rc = _callbackDone( cx, obj, rval, detail, &jsRval ) ;
+               if ( SDB_OK != rc )
+               {
+                  goto error ;
+               }
+            }
+
+            if ( setIDProp && !JS_SetPropertyById ( cx, obj, id, &jsRval ) )
+            {
+               rc = SDB_SYS ;
+               detail = BSON( SPT_ERR << "Set property by id failed" ) ;
+               goto error ;
+            }
          }
          else
          {
-            rc = _callbackDone( cx, obj, rval, detail, &jsRval ) ;
-            if ( SDB_OK != rc )
-            {
-               goto error ;
-            }
-            *objp = obj ;
+            goto done ;
          }
-         }
+
+         *objp = obj ;
+
       done:
-         SAFE_JS_FREE( cx, idValue ) ;
          return rc ;
       error:
           _reportError( cx, rc, detail ) ;
@@ -310,6 +389,10 @@ namespace engine
       static INT32 setProperty( JSContext *cx,
                                 JSObject *obj,
                                 const SPT_PROPERTIES &properties ) ;
+
+      static INT32 setArrayElems( JSContext *cx,
+                                  JSObject *obj,
+                                  const SPT_PROPERTIES &properties ) ;
 
    private:
       static INT32 _getValFromProperty( JSContext *cx,
@@ -324,6 +407,8 @@ namespace engine
       static void _reportError( JSContext *cx,
                                 INT32 rc,
                                 const bson::BSONObj &detail ) ;
+
+      static UINT32 _getOpCode( JSContext *cx ) ;
  
    } ;
    typedef class _sptInvoker sptInvoker ;

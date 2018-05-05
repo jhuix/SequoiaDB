@@ -80,7 +80,7 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY( SDB__RTNSORTING_INIT ) ;
-      SDB_ASSERT( RTN_SORT_MIN_BUFSIZE <= RTN_SORT_MIN_BUFSIZE,
+      SDB_ASSERT( RTN_SORT_MIN_BUFSIZE <= bufSize,
                   "bufSize should >= 64MB" ) ;
       SDB_ASSERT( NULL != cb, "impossible" ) ;
       SDB_ASSERT( !orderby.isEmpty(), "impossible" ) ;
@@ -183,7 +183,6 @@ namespace engine
          PD_LOG( PDERROR, "failed to exec internal sort:%d", rc ) ;
          goto error ;
       }
-      /// sorting can be done in mem.
       if ( _blks.empty() )
       {
          _step = RTN_SORT_STEP_FETCH_FROM_INTER ;

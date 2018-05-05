@@ -20,7 +20,6 @@
 
 #pragma once
 
-//#include <boost/preprocessor/cat.hpp> // like the ## operator but works with __LINE__
 /** \namespace bson
     \brief Include files for C++ BSON module
 */
@@ -46,6 +45,11 @@ namespace bson {
             }
             _pos = jso.objdata() + 4;
             _theend = jso.objdata() + sz - 1;
+        }
+
+        BSONObjIterator() {
+            _pos    = NULL ;
+            _theend = NULL ;
         }
 
         BSONObjIterator( const char * start , const char * end ) {

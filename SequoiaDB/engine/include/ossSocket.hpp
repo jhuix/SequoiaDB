@@ -50,8 +50,6 @@
 #include <netinet/tcp.h>
 #include <fcntl.h>
 #else
-//#include <winsock2.h>
-//#include <ws2tcpip.h>
 #pragma comment(lib, "Ws2_32.lib")
 #endif
 #include <string.h>
@@ -68,11 +66,6 @@
 #endif
 #include "pd.hpp"
 
-// by default 500ms timeout
-// note this is default for engine communication
-// this value shouldn't be set too big since it may break
-// the heartbeat detection
-// for client, we should set client socket timeout value instead of this one
 #define OSS_SOCKET_DFT_TIMEOUT      500
 
 #define OSS_MAX_HOSTNAME            NI_MAXHOST
@@ -84,7 +77,6 @@ struct SSLHandle ;
 SDB_EXTERN_C_END
 #endif
 
-// todo: support AF_UNIX later
 /*
    _ossSocket define
 */
@@ -114,14 +106,13 @@ class _ossSocket : public SDBObject
 
    public :
       INT32 setSocketLi ( INT32 lOnOff, INT32 linger ) ;
-      INT32 setKeepAlive( INT32 keepAlive, INT32 keepIdle,
-                          INT32 keepInterval, INT32 keepCount ) ;
+      INT32 setKeepAlive( INT32 keepAlive = 1,
+                          INT32 keepIdle = OSS_SOCKET_KEEP_IDLE,
+                          INT32 keepInterval = OSS_SOCKET_KEEP_INTERVAL,
+                          INT32 keepCount = OSS_SOCKET_KEEP_CONTER ) ;
 
-      // Create a listening socket, timeout in millisecond
       _ossSocket ( UINT32 port, INT32 timeoutMilli = 0 ) ;
-      // Create a connecting socket, timeout in millisecond
       _ossSocket ( const CHAR *pHostname, UINT32 port, INT32 timeoutMilli = 0 ) ;
-      // Create from a existing socket, timeout in millisecond
       _ossSocket ( SOCKET *sock, INT32 timeoutMilli = 0 ) ;
 
       ~_ossSocket () ;
@@ -175,7 +166,6 @@ class _ossSocket : public SDBObject
 
 typedef class _ossSocket ossSocket ;
 
-// define socket functions
 
 INT32    ossInitSocket() ;
 INT32    ossGetHostName( CHAR *pName, INT32 nameLen ) ;

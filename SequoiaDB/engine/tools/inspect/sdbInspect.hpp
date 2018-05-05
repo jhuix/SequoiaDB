@@ -38,17 +38,13 @@
 #ifndef CONSISTENCY_INSPECT_HPP__
 #define CONSISTENCY_INSPECT_HPP__
 
-// system
 #include <iostream>
-// local project
 #include "pmdOptionsMgr.hpp"
 #include "dms.hpp"
 #include "client.hpp"
-// third party
 #include <boost/program_options.hpp>
 #include <boost/program_options/parsers.hpp>
 
-// macro for debug
 #ifdef _DEBUG
    #define OUTPUT_FUNCTION( str, funcName, rc ) \
       std::cout << str << funcName << " rc = " << rc << std::endl
@@ -65,7 +61,6 @@
       }                                   \
    }while( FALSE )
 
-// macros
 #define CI_INSPECT_ERROR         0x10001000
 #define CI_INSPECT_CL_NOT_FOUND  0x10001001
 
@@ -90,12 +85,12 @@ CHAR g_password[ CI_PASSWD_SIZE + 1 ] = { 0 } ;
 #define CI_FILE_NAME       "inspect.bin"
 #define CI_TMP_FILE        "inspect.bin.tmp.%d"
 #define CI_FILE_REPORT     ".report"
-// action option
+#define CI_START_TMP_FILE  "inspect.start.tmp"
 #define CI_ACTION_INSPECT  "inspect"
 #define CI_ACTION_REPORT   "report"
-// view option
 #define CI_VIEW_GROUP      "group"
 #define CI_VIEW_CL         "collection"
+#define CI_COORD_DEFVAL    "localhost:11810"
 
 #define CI_HEADER_EYECATCHER "SDBCI"
 #define HEADER_PARSE_ERROR 1
@@ -118,14 +113,11 @@ CHAR g_password[ CI_PASSWD_SIZE + 1 ] = { 0 } ;
 */
 #define TAIL_PADDING_SIZE ( CI_TAIL_SIZE - sizeof(INT32) * 2 )
 
-// the length of ciGroupHeader
 #define CI_GROUP_HEADER_SIZE ( ( CI_GROUPNAME_SIZE + 1 ) + \
                                  sizeof( INT32 )         + \
                                  sizeof( UINT32 ) * 2 )
-// the length of ciClHeader
 #define CI_CL_HEADER_SIZE ( ( CI_CL_FULLNAME_SIZE + 1 ) * 2 + sizeof( UINT32 ) )
 
-// the length of ciNode
 #define CI_NODE_SIZE ( ( CI_HOSTNAME_SIZE + 1 )    + \
                        ( CI_SERVICENAME_SIZE + 1 ) + \
                          sizeof( INT32 ) * 3 )
@@ -140,10 +132,8 @@ do                            \
    }                          \
 } while (FALSE);
 
-// max node count of group
 #define MAX_NODE_COUNT 7
 
-// option for ciState
 #define LSHIFT(x) ( 1 << x )
 #define ALL_THE_SAME_BIT 7
 
@@ -324,12 +314,10 @@ struct _ciGroup
    {
       while (NULL != _next)
       {
-         // separate next node from the list
          _ciGroup* ptr = _next ;
          _next = _next->_next ;
          ptr->_next = NULL ;
 
-         // delete the separate node
          delete ptr ;
          ptr = NULL ;
       }
@@ -339,14 +327,27 @@ typedef _ciGroup ciGroup ;
 
 struct _ciNode
 {
+   enum 
+   {
+      STATE_NORMAL = 0,    // normal
+      STATE_DISCONN,       // failed to connect to
+      STATE_CLNOTEXIST,    // the corresponding collection does not exist
+      STATE_CLFAILED,      // failed to get the corresponding collection
+      STATE_CUSURFAILED,    // failed to get cusur of the collection
+
+      STATE_COUNT
+   } ;
+   static const CHAR *stateDesc[STATE_COUNT] ;
+
    INT32           _index ;
    INT32           _nodeID ;
-   INT32           _state ; // 0:normal 1:disconnected 2:lost connection
+   INT32           _state ; 
    sdbclient::sdb *_db ;
    _ciNode        *_next ;
    CHAR            _hostname[ CI_HOSTNAME_SIZE + 1 ] ;
    CHAR            _serviceName[ CI_SERVICENAME_SIZE + 1 ] ;
-   _ciNode() : _index( 0 ), _nodeID( 0 ), _state( 0 ), _db( NULL ), _next( NULL )
+   _ciNode() : _index( 0 ), _nodeID( 0 ), 
+               _state( STATE_NORMAL ), _db( NULL ), _next( NULL )
    {
       ossMemset( _hostname, 0, CI_HOSTNAME_SIZE + 1 ) ;
       ossMemset( _serviceName, 0, CI_SERVICENAME_SIZE + 1 ) ;
@@ -362,12 +363,10 @@ struct _ciNode
 
       while (NULL != _next)
       {
-         // separate next node from the list
          _ciNode* ptr = _next ;
          _next = _next->_next ;
          ptr->_next = NULL ;
 
-         // delete the separate node
          delete ptr ;
          ptr = NULL ;
       }
@@ -391,12 +390,10 @@ struct _ciCollection
    {
       while (NULL != _next)
       {
-         // separate next node from the list
          _ciCollection* ptr = _next ;
          _next = _next->_next ;
          ptr->_next = NULL ;
 
-         // delete the separate node
          delete ptr ;
          ptr = NULL ;
       }
@@ -416,12 +413,10 @@ struct _ciRecord
    {
       while (NULL != _next)
       {
-         // separate next node from the list
          _ciRecord* ptr = _next ;
          _next = _next->_next ;
          ptr->_next = NULL ;
 
-         // delete the separate node
          delete ptr ;
          ptr = NULL ;
       }
@@ -444,7 +439,6 @@ struct _ciCursor
    {
       if ( NULL != _db )
       {
-         //delete _db ;
          _db = NULL ;
       }
 
@@ -456,12 +450,10 @@ struct _ciCursor
 
       while (NULL != _next)
       {
-         // separate next node from the list
          _ciCursor* ptr = _next ;
          _next = _next->_next ;
          ptr->_next = NULL ;
 
-         // delete the separate node
          delete ptr ;
          ptr = NULL ;
       }
@@ -487,12 +479,10 @@ struct _ciOffset
    {
       while (NULL != _next)
       {
-         // separate next node from the list
          _ciOffset* ptr = _next ;
          _next = _next->_next ;
          ptr->_next = NULL ;
 
-         // delete the separate node
          delete ptr ;
          ptr = NULL ;
       }
@@ -508,12 +498,13 @@ struct _ciTail
    INT32  _exitCode ;
    UINT32 _groupCount ;
    UINT32 _clCount ;
+   UINT32 _diffCLCount ;
    UINT32 _mainClCount ;
    INT64  _recordCount ;
    UINT64 _timeCount ;
    mainCl _mainCls ;
    ciLinkList< ciOffset > _groupOffset ;
-   _ciTail() : _exitCode( 0 ), _groupCount( 0 ), _clCount( 0 ),
+   _ciTail() : _exitCode( 0 ), _groupCount( 0 ), _clCount( 0 ), _diffCLCount(0),
                _mainClCount( 0 ), _recordCount( 0 ), _timeCount( 0 )
    {}
 } ;
@@ -521,11 +512,6 @@ typedef _ciTail ciTail ;
 
 struct _ciState
 {
-   //    0   1   1   0   1   1   0   0             bits of state
-   //    1   2   3   4   5   6   7   -             index if node 
-   //  if 8th of state is 1, means that all node has current record, and every
-   //  cursor should get next record. or the min bson( of "oid" ) need get next
-   //  record.
    CHAR _state ;
    void set( INT32 index )
    {
@@ -546,8 +532,6 @@ struct _ciState
 } ;
 typedef _ciState ciState ;
 
-//////////////////////////////////////////////////////////////////////////
-// sdbCi
 #define CONSISTENCY_INSPECT_HELP      "help"
 #define CONSISTENCY_INSPECT_VER       "version"
 #define CONSISTENCY_INSPECT_ACTION    "action"
@@ -571,7 +555,7 @@ typedef _ciState ciState ;
    ( INSPECT_COMMANDS_STRING( CONSISTENCY_INSPECT_VER, ",v" ), "show version of tool" ) \
    ( INSPECT_COMMANDS_STRING( CONSISTENCY_INSPECT_AUTH, ",u" ), boost::program_options::value< std::string >(), "auth, username:password, \"\":\"\" is set default" ) \
    ( INSPECT_COMMANDS_STRING( CONSISTENCY_INSPECT_ACTION, ",a" ), boost::program_options::value< std::string >(), "specify action, \"inspect\" or \"report\" supported, \"inspect\" is set default" ) \
-   ( INSPECT_COMMANDS_STRING( CONSISTENCY_INSPECT_COORD, ",d" ), boost::program_options::value< std::string >(), "specify the coord address, like: ubuntu-coord:11810" ) \
+   ( INSPECT_COMMANDS_STRING( CONSISTENCY_INSPECT_COORD, ",d" ), boost::program_options::value< std::string >(), "specify the coord address, default: \"localhost:11810\"" ) \
    ( INSPECT_COMMANDS_STRING( CONSISTENCY_INSPECT_LOOP, ",t" ), boost::program_options::value< INT32 >(), "specify times to loop" ) \
    ( INSPECT_COMMANDS_STRING( CONSISTENCY_INSPECT_GROUP, ",g" ),boost::program_options::value< std::string >(), "specify group name to be inspect" ) \
    ( INSPECT_COMMANDS_STRING( CONSISTENCY_INSPECT_CS, ",c" ), boost::program_options::value< std::string >(), "specify the collection space to be inspected") \
@@ -608,7 +592,7 @@ private:
 
 private:
    virtual INT32 doDataExchange( engine::pmdCfgExchange *pEx ) ;
-   virtual INT32 postLoaded() ;
+   virtual INT32 postLoaded( engine::PMD_CFG_STEP step ) ;
    virtual INT32 preSaving() ;
 
 private:

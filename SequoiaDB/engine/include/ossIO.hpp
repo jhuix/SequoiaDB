@@ -46,27 +46,20 @@
  * File access modes
  */
 
-// open/create mode
 #define OSS_DEFAULT        0x00000000     // default open option
 
-// create file when not exist, otherwise return error
 #define OSS_CREATEONLY     0x00000001
 
-// empty file when exist, otherwise create one
 #define OSS_REPLACE        0x00000002
 
-// create file when not exist, then open the file
 #define OSS_CREATE         (OSS_CREATEONLY | OSS_REPLACE)
 
-// read/write access mode
 #define OSS_READONLY       0x00000004     // read only mode
 #define OSS_WRITEONLY      0x00000008     // write only mode
 #define OSS_READWRITE      (OSS_READONLY | OSS_WRITEONLY)
 
-// exclusive/share mode
 #define OSS_EXCLUSIVE      0x00000000     // exclusive access, by default
 #define OSS_SHAREREAD      0x00000010     // shared read
-// shared write, must be shared read too
 #define OSS_SHAREWRITE     OSS_SHAREREAD|0x00000020
 #define OSS_WRITETHROUGH   0x00000040     // write through mode
 #define OSS_DIRECTIO       0x00000080     // direct io
@@ -75,52 +68,40 @@
  * File access permissions
  */
 #if defined (_WINDOWS)
-  // user
 #define OSS_RU      0x00000400
 #define OSS_WU      0x00000200
 #define OSS_XU      0x00000100
 #define OSS_RWXU     (OSS_RU | OSS_WU | OSS_XU)
- // group
 #define OSS_RG      0x00000040
 #define OSS_WG      0x00000020
 #define OSS_XG      0x00000010
 #define OSS_RWXG     (OSS_RG | OSS_WG | OSS_XG)
- // other
 #define OSS_RO      0x00000004
 #define OSS_WO      0x00000002
 #define OSS_XO      0x00000001
 #define OSS_RWXO     (OSS_RO | OSS_WO | OSS_XO)
- // sticky bit
 #define OSS_STICKY     0
 
-// rwxr-x---
 #define OSS_DEFAULTFILE   (OSS_RWXU | OSS_RG | OSS_XG) 
 #else
- // user
 #define OSS_RU      S_IRUSR
 #define OSS_WU      S_IWUSR
 #define OSS_XU      S_IXUSR
 #define OSS_RWXU    S_IRWXU
- // group
 #define OSS_RG      S_IRGRP
 #define OSS_WG      S_IWGRP
 #define OSS_XG      S_IXGRP
 #define OSS_RWXG    S_IRWXG
- // other
 #define OSS_RO      S_IROTH
 #define OSS_WO      S_IWOTH
 #define OSS_XO      S_IXOTH
 #define OSS_RWXO    S_IRWXO
-// sticky bit
 #define OSS_STICKY  S_ISVTX
 
-// rw-r-----
 #define OSS_DEFAULTFILE   (OSS_RU | OSS_WU | OSS_RG)
 #endif
 
-// rwxrwxrwx
 #define OSS_PERMALL       (OSS_RWXU | OSS_RWXG | OSS_RWXO )
-// rwxr-xr-x
 #define OSS_DEFAULTDIR    (OSS_RWXU | OSS_RG | OSS_XG | OSS_RO | OSS_XO )
 
 class _OSS_FILE : public SDBObject
@@ -228,8 +209,23 @@ INT32 ossClose ( OSSFILE& pFile ) ;
  * SDB_PERM (permission denied)
  * SDB_FE (dir already exist)
  */
-INT32 ossMkdir(const CHAR   *pPathName,
+INT32 ossMkdir( const CHAR   *pPathName,
                 UINT32 iPermission = OSS_DEFAULTDIR ) ;
+
+/*
+   * Get current working directory
+   * pPath   : output
+   * maxSize : the path size
+   * Return  : SDB_OK ( succeed ), otherwise failed
+*/
+INT32 ossGetCWD( CHAR *pPath, UINT32 maxSize ) ;
+
+/*
+   * Change the current directory to pPath
+   * pPath   : input
+   * Return  : SDB_OK ( succeed ), otherwise failed
+*/
+INT32 ossChDir( const CHAR *pPath ) ;
 
 /*
  * Delete a file or directory
@@ -265,7 +261,13 @@ INT32 ossFileCopy( const CHAR *pSrcFile,
                    UINT32      iPermission = OSS_DEFAULTFILE,
                    BOOLEAN     isReplace = TRUE ) ;
 
-INT32 ossAccess ( const CHAR  *pPathName, int flags = 0 ) ;
+#define  OSS_MODE_ACCESS         00       /// F_OK
+#define  OSS_MODE_EXCUSIVE       01       /// X_OK
+#define  OSS_MODE_WRITE          02       /// W_OK
+#define  OSS_MODE_READ           04       /// R_OK
+#define  OSS_MODE_READWRITE      ( OSS_MODE_WRITE | OSS_MODE_READ )
+
+INT32 ossAccess ( const CHAR  *pPathName, int flags = OSS_MODE_ACCESS ) ;
 
 /*
  * Read a file from current file descriptor location
@@ -318,15 +320,16 @@ INT32 ossWrite ( OSSFILE        *pFile,
  * offset (off_t)
  * whence (OSS_SEEK)
  * Output
- * N/A
+ * position (the resulting offset location from the beginning of the file)
  * Return
  * SDB_OK (success)
  * SDB_INVALIDSIZE (seek location is not valid)
  * SDB_INVALIDARGS (bad arguments)
  */
 INT32 ossSeek( OSSFILE  *pFile,
-               INT64    offset,
-               OSS_SEEK whence);
+               INT64 offset,
+               OSS_SEEK whence,
+               INT64* position = NULL );
 
 /*
  * Read a file from current file descriptor location
@@ -489,8 +492,12 @@ INT32 ossGetFileSize(OSSFILE *pFile, INT64 *pfsize);
  *      SDB_INVALIDARG (invalid input arguments)
  *      SDB_INVALID_FILE_TYPE (invalid input arguments)
  */
-INT32 ossExtendFile(OSSFILE *pFile,
-                    const INT64 incrementSize ) ;
+INT32 ossExtendFile( OSSFILE *pFile,
+                     const INT64 incrementSize ) ;
+
+INT32 ossExtentBySparse( OSSFILE *pFile,
+                         UINT64 incrementSize,
+                         UINT32 onceWrite = 512 ) ;
 
 INT32 ossTruncateFile ( OSSFILE *pFile, const INT64 fileLen ) ;
 

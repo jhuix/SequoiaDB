@@ -42,13 +42,13 @@
 #include "clsCatalogAgent.hpp"
 #include "sdbInterface.hpp"
 #include "clsDCMgr.hpp"
-#include <map>
+#include "utilMap.hpp"
+#include "monDMS.hpp"
 
 using namespace bson ;
 
 namespace engine
 {
-   // the shard mgr update some info from catalog timeout
    #define CLS_SHARD_TIMEOUT     (30*OSS_ONE_SEC)
 
    /*
@@ -86,16 +86,54 @@ namespace engine
          ossEvent       event ;
          UINT32         pageSize ;
          UINT32         lobPageSize ;
+         DMS_STORAGE_TYPE    type ;
          NET_HANDLE     netHandle ;
 
          _clsCSEventItem()
          {
             pageSize = 0 ;
             lobPageSize = 0 ;
+            type = DMS_STORAGE_NORMAL ;
             netHandle = NET_INVALID_HANDLE ;
          }
    } ;
    typedef _clsCSEventItem clsCSEventItem ;
+
+   /*
+      _clsFreezingWindow define
+   */
+   class _clsFreezingWindow : public SDBObject
+   {
+      typedef std::set< UINT64 > OP_SET ;
+      typedef _utilMap< std::string, OP_SET > MAP_WINDOW ;
+
+      public:
+         _clsFreezingWindow() ;
+         ~_clsFreezingWindow() ;
+
+         void registerCL ( const CHAR * pName, const CHAR * pMainCLName,
+                           UINT64 & opID ) ;
+         void unregisterCL ( const CHAR * pName, const CHAR * pMainCLName,
+                             UINT64 opID ) ;
+
+         BOOLEAN needBlockOpr( const CHAR *pName, UINT64 testOpID ) ;
+
+         INT32 waitForOpr( const CHAR *pName,
+                           _pmdEDUCB *cb,
+                           BOOLEAN isWrite ) ;
+
+      private :
+         void _registerCLInternal ( const CHAR * pName, UINT64 opID ) ;
+         void _unregisterCLInternal ( const CHAR * pName, UINT64 opID ) ;
+
+      private:
+         UINT32            _clCount ;
+         MAP_WINDOW        _mapWindow ;
+         ossSpinXLatch     _latch ;
+         ossEvent          _event ;
+
+   } ;
+   typedef _clsFreezingWindow clsFreezingWindow ;
 
    /*
       _clsShardMgr define
@@ -139,6 +177,8 @@ namespace engine
 
          catAgent* getCataAgent () ;
          nodeMgrAgent* getNodeMgrAgent () ;
+         clsFreezingWindow *getFreezingWindow() ;
+         clsDCMgr* getDCMgr() ;
 
          INT32 getAndLockCataSet( const CHAR *name, clsCatalogSet **ppSet,
                                   BOOLEAN noWithUpdate = TRUE,
@@ -152,9 +192,12 @@ namespace engine
                                      BOOLEAN *pUpdated = NULL ) ;
          INT32 unlockGroupItem( clsGroupItem *item ) ;
 
-         INT32 rGetCSPageSize( const CHAR *csName, UINT32 &pageSize,
-                               UINT32 &lobPageSize,
-                               INT64 waitMillSec = CLS_SHARD_TIMEOUT ) ;
+         INT32 rGetCSInfo( const CHAR *csName, UINT32 &pageSize,
+                           UINT32 &lobPageSize,
+                           DMS_STORAGE_TYPE &type,
+                           INT64 waitMillSec = CLS_SHARD_TIMEOUT ) ;
+
+         INT32 updateDCBaseInfo() ;
 
       public:
          INT32  sendToCatlog ( MsgHeader * msg,
@@ -177,7 +220,6 @@ namespace engine
 
          INT64 netIn() ;
          INT64 netOut() ;
-         void resetMon() ;
 
       protected:
 
@@ -211,19 +253,28 @@ namespace engine
                                 const CHAR *hostName,
                                 const std::string &service,
                                 NodeID &id ) ;
+         INT32 _sendToSeAdpt( NET_HANDLE handle, MsgHeader *msg ) ;
 
-      //msg functions
       protected:
          INT32 _onCatCatGroupRes ( NET_HANDLE handle, MsgHeader* msg ) ;
          INT32 _onCatalogReqMsg ( NET_HANDLE handle, MsgHeader* msg ) ;
          INT32 _onCatGroupRes ( NET_HANDLE handle, MsgHeader* msg ) ;
          INT32 _onQueryCSInfoRsp( NET_HANDLE handle, MsgHeader* msg ) ;
          INT32 _onHandleClose( NET_HANDLE handle, MsgHeader* msg ) ;
+         INT32 _onAuthReqMsg( NET_HANDLE handle, MsgHeader * msg ) ;
+         INT32 _onTextIdxInfoReqMsg( NET_HANDLE handle, MsgHeader * msg ) ;
+         INT32 _buildTextIdxObj( const monCSSimple *csInfo,
+                                 const monCLSimple *clInfo,
+                                 const monIndex *idxInfo,
+                                 BSONObjBuilder &builder ) ;
+         INT32 _dumpTextIdxInfo( INT64 localVersion, BSONObj &obj,
+                                 BOOLEAN onlyVersion = FALSE ) ;
 
       private:
          _netRouteAgent                *_pNetRtAgent ;
          _clsCatalogAgent              *_pCatAgent ;
          _clsNodeMgrAgent              *_pNodeMgrAgent ;
+         clsFreezingWindow             *_pFreezingWindow ;
          clsDCMgr                      *_pDCMgr ;
          ossSpinXLatch                 _catLatch ;
          MAP_CAT_EVENT                 _mapSyncCatEvent ;
@@ -240,7 +291,7 @@ namespace engine
          ossSpinSLatch                 _shardLatch ;
 
          MsgRouteID                    _nodeID ;
-
+         MsgRouteID                    _seAdptID ;
    } ;
 
    typedef _clsShardMgr shardCB ;

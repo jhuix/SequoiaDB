@@ -73,9 +73,10 @@ but it will be faster as there is less recursion.
 """
 
 import base64
-import calendar
 import datetime
 import re
+import time
+from collections import OrderedDict
 
 json_lib = True
 try:
@@ -96,9 +97,8 @@ from bson.min_key import MinKey
 from bson.objectid import ObjectId
 from bson.regex import Regex
 from bson.timestamp import Timestamp
-
-from bson.py3compat import PY3, binary_type, string_types
-
+from bson.decimal import Decimal
+from bson.py3compat import PY3, binary_type, string_types, text_type, long_type
 
 _RE_OPT_TABLE = {
     "i": re.I,
@@ -108,6 +108,20 @@ _RE_OPT_TABLE = {
     "u": re.U,
     "x": re.X,
 }
+
+_js_compatibility = False
+
+
+def set_js_compatibility(compatible):
+    global _js_compatibility
+    if not isinstance(compatible, bool):
+        raise Exception("compatible should be type of bool")
+    _js_compatibility = compatible
+
+
+def get_js_compatibility():
+    global _js_compatibility
+    return _js_compatibility
 
 
 def dumps(obj, *args, **kwargs):
@@ -151,7 +165,7 @@ def _json_convert(obj):
     converted into json.
     """
     if hasattr(obj, 'iteritems') or hasattr(obj, 'items'):  # PY3 support
-        return SON(((k, _json_convert(v)) for k, v in obj.iteritems()))
+        return SON(((k, _json_convert(v)) for k, v in obj.items()))
     elif hasattr(obj, '__iter__') and not isinstance(obj, string_types):
         return list((_json_convert(v) for v in obj))
     try:
@@ -163,11 +177,33 @@ def _json_convert(obj):
 def object_hook(dct, compile_re=True):
     if "$oid" in dct:
         return ObjectId(str(dct["$oid"]))
+    if "$numberLong" in dct:
+        return int(dct["$numberLong"])
+    if "$decimal" in dct:
+        v = str(dct["$decimal"])
+        if "$precision" in dct:
+            precision = dct["$precision"][0]
+            scale = dct["$precision"][1]
+            d = Decimal(v, precision, scale)
+        else:
+            d = Decimal(v)
+        return d
     if "$ref" in dct:
         return DBRef(dct["$ref"], dct["$id"], dct.get("$db", None))
     if "$date" in dct:
-        secs = float(dct["$date"]) / 1000.0
-        return EPOCH_AWARE + datetime.timedelta(seconds=secs)
+        try:
+            secs = float(dct["$date"]) / 1000.0
+            return EPOCH_AWARE + datetime.timedelta(seconds=secs)
+        except ValueError:
+            return datetime.datetime.strptime(dct["$date"], "%Y-%m-%d")
+    if "$timestamp" in dct:
+        try:
+            ms = long_type(dct["$timestamp"])
+            return Timestamp(ms / 1000, ms % 1000 * 1000)
+        except ValueError:
+            dt = datetime.datetime.strptime(dct["$timestamp"], "%Y-%m-%d-%H.%M.%S.%f")
+            secs = long_type(time.mktime(dt.timetuple()))
+            return Timestamp(secs, dt.microsecond)
     if "$regex" in dct:
         flags = 0
         # PyMongo always adds $options but some other tools may not.
@@ -184,10 +220,8 @@ def object_hook(dct, compile_re=True):
         return MaxKey()
     if "$binary" in dct:
         if isinstance(dct["$type"], int):
-            dct["$type"] = "%02x" % dct["$type"]
-        subtype = int(dct["$type"], 16)
-        if subtype >= 0xffffff80:  # Handle mongoexport values
-            subtype = int(dct["$type"][6:], 16)
+            dct["$type"] = "%d" % dct["$type"]
+        subtype = int(dct["$type"])
         return Binary(base64.b64decode(dct["$binary"].encode()), subtype)
     if "$code" in dct:
         return Code(dct["$code"], dct.get("$scope"))
@@ -207,15 +241,21 @@ def default(obj):
     # order in Python 2.4.
     if isinstance(obj, ObjectId):
         return {"$oid": str(obj)}
+    if isinstance(obj, int) or ((not PY3) and isinstance(obj, long)):
+        if (obj > 9007199254740991 or obj < -9007199254740991) and get_js_compatibility():
+            return {"$numberLong": str(obj)}
+    if isinstance(obj, Decimal):
+        return json.loads(str(obj), object_pairs_hook=OrderedDict)
     if isinstance(obj, DBRef):
         return _json_convert(obj.as_doc())
     if isinstance(obj, datetime.datetime):
         # TODO share this code w/ bson.py?
-        if obj.utcoffset() is not None:
-            obj = obj - obj.utcoffset()
-        millis = int(calendar.timegm(obj.timetuple()) * 1000 +
-                     obj.microsecond / 1000)
-        return {"$date": millis}
+        # if obj.utcoffset() is not None:
+        #    obj = obj - obj.utcoffset()
+        # millis = int(calendar.timegm(obj.timetuple()) * 1000 +
+        #             obj.microsecond / 1000)
+        # PY2 do not support year before 1900
+        return {"$date": "{0.year:04d}-{0.month:02d}-{0.day:02d}".format(obj)}
     if isinstance(obj, (RE_TYPE, Regex)):
         flags = ""
         if obj.flags & re.IGNORECASE:
@@ -230,7 +270,7 @@ def default(obj):
             flags += "u"
         if obj.flags & re.VERBOSE:
             flags += "x"
-        if isinstance(obj.pattern, unicode):
+        if isinstance(obj.pattern, text_type):
             pattern = obj.pattern
         else:
             pattern = obj.pattern.decode('utf-8')
@@ -240,17 +280,18 @@ def default(obj):
     if isinstance(obj, MaxKey):
         return {"$maxKey": 1}
     if isinstance(obj, Timestamp):
-        return SON([("t", obj.time), ("i", obj.inc)])
+        dt = time.strftime("%Y-%m-%d-%H.%M.%S", time.localtime(obj.time)) + "." + "{:06d}".format(obj.inc)
+        return {"$timestamp": dt}
     if isinstance(obj, Code):
         return SON([('$code', str(obj)), ('$scope', obj.scope)])
     if isinstance(obj, Binary):
         return SON([
             ('$binary', base64.b64encode(obj).decode()),
-            ('$type', "%02x" % obj.subtype)])
+            ('$type', "%d" % obj.subtype)])
     if PY3 and isinstance(obj, binary_type):
         return SON([
             ('$binary', base64.b64encode(obj).decode()),
-            ('$type', "00")])
+            ('$type', "0")])
     if bson.has_uuid() and isinstance(obj, bson.uuid.UUID):
         return {"$uuid": obj.hex}
     raise TypeError("%r is not JSON serializable" % obj)

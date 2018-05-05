@@ -1,3 +1,158 @@
+var getBrowserInfo = function()
+{
+	var agent = window.navigator.userAgent.toLowerCase() ;
+	var regStr_ie = /msie [\d.]+;/gi ;
+	var regStr_ff = /firefox\/[\d.]+/gi ;
+	var regStr_chrome = /chrome\/[\d.]+/gi ;
+	var regStr_saf = /safari\/[\d.]+/gi ;
+	var temp = '' ;
+	var info = [] ;
+	if( agent.indexOf( 'msie' ) > 0 )
+	{
+		temp = agent.match( regStr_ie ) ;
+		info.push( 'ie' ) ;
+	}
+	else if( agent.indexOf( 'firefox' ) > 0 )
+	{
+		temp = agent.match( regStr_ff ) ;
+		info.push( 'firefox' ) ;
+	}
+	else if( agent.indexOf( 'chrome' ) > 0 )
+	{
+		temp = agent.match( regStr_chrome ) ;
+		info.push( 'chrome' ) ;
+	}
+	else if( agent.indexOf( 'safari' ) > 0 && agent.indexOf( 'chrome' ) < 0 )
+	{
+		temp = agent.match( regStr_saf ) ;
+		info.push( 'safari' ) ;
+	}
+	else
+	{
+		if( agent.indexOf( 'trident' ) > 0 && agent.indexOf( 'rv' ) > 0 )
+		{
+			info.push( 'ie' ) ;
+			temp = '11' ;
+		}
+		else
+		{
+			temp = '0' ;
+			info.push( 'unknow' ) ;
+		}
+	}
+	verinfo = ( temp + '' ).replace( /[^0-9.]/ig, '' ) ;
+	info.push( parseInt( verinfo ) ) ;
+	return info ;
+}
+
+var setBrowserStorage = function()
+{
+	var browser = getBrowserInfo() ;
+   var storageType ;
+	if( browser[0] === 'ie' && browser[1] <= 7 )
+	{
+      storageType = 'cookie' ;
+	}
+	else
+	{
+		if( window.localStorage )
+		{
+			storageType = 'localStorage' ;
+		}
+		else
+		{
+			if( navigator.cookieEnabled === true )
+			{
+				storageType = 'cookie' ;
+			}
+			else
+			{
+				storageType = '' ;
+			}
+		}
+	}
+	return storageType ;
+}
+
+var localLocalData = function( key, value )
+{
+   var storageType = setBrowserStorage() ;
+
+   if( typeof( value ) == 'undefined' )
+   {
+      //读取本地数据
+      var newValue = null ;
+	   if ( storageType === 'localStorage' )
+	   {
+		   newValue = window.localStorage.getItem( key ) ;
+	   }
+	   else if ( storageType === 'cookie' )
+	   {
+		   newValue = $.cookie( key ) ;
+	   }
+	   return newValue ;
+   }
+   else if( value == null )
+   {
+      //删除本地数据
+      if ( storageType === 'localStorage' )
+	   {
+		   window.localStorage.removeItem( key ) ;
+	   }
+	   else if ( storageType === 'cookie' )
+	   {
+		   $.removeCookie( key ) ;
+	   }
+   }
+   else
+   {
+      //写入本地数据
+      if ( storageType === 'localStorage' )
+	   {
+		   window.localStorage.setItem( key, value ) ;
+	   }
+	   else if ( storageType === 'cookie' )
+	   {
+		   var saveTime = new Date() ;
+		   saveTime.setDate( saveTime.getDate() + 365 ) ;
+		   $.cookie( key, value, { 'expires': saveTime } ) ;
+	   }
+   }
+}
+
+var isPluginPath = function( fileName )
+{
+   var files = fileName.split( '/' ) ;
+
+   if( files[0] == '.' || files[0] == '' )
+   {
+      files.splice( 0, 1 ) ;
+   }
+
+   if( files.length < 3 )
+   {
+      return false ;
+   }
+
+   if( files[0] != 'app' )
+   {
+      return false ;
+   }
+
+   if( files[1] != 'controller' )
+   {
+      return false ;
+   }
+
+   if( files[2] != 'Data' &&
+       files[2] != 'Monitor' )
+   {
+      return false ;
+   }
+
+   return true ;
+}
+
 //动态加载模块文件
 var resolveFun = function( files ){
    return {
@@ -5,19 +160,47 @@ var resolveFun = function( files ){
          var deferred = $q.defer();
          var dependencies = files ;
          var i = 0 ;
+
          function loadjs( fileName )
          {
-            $.getScript( fileName, function(){
-               ++i ;
-               if( i == dependencies.length )
-               {
-                  $rootScope.$apply( function(){
-                     deferred.resolve() ;
-                  } ) ;
-               }
-               else
-               {
-                  loadjs( dependencies[i] ) ;
+            $.ajax( {
+               'url': fileName,
+               'dataType': 'script',
+               'beforeSend': function( jqXHR ){
+                  if( isPluginPath( fileName ) == false )
+                  {
+                     return ;
+                  }
+
+	               var clusterName = localLocalData( 'SdbClusterName' ) ;
+	               if( clusterName !== null )
+	               {
+		               jqXHR.setRequestHeader( 'SdbClusterName', clusterName ) ;
+	               }
+	               var businessName = localLocalData( 'SdbModuleName' )
+	               if( businessName !== null )
+	               {
+		               jqXHR.setRequestHeader( 'SdbBusinessName', businessName ) ;
+	               }
+               },
+               'success': function( response, status ){
+                  ++i ;
+                  if( i == dependencies.length )
+                  {
+                     $rootScope.$apply( function(){
+                        deferred.resolve() ;
+                     } ) ;
+                  }
+                  else
+                  {
+                     loadjs( dependencies[i] ) ;
+                  }
+               },
+               'error': function( XMLHttpRequest, textStatus, errorThrown ){
+                  if( window.SdbDebug == true )
+                  {
+                     throw errorThrown ;
+                  }
                }
             } ) ;
          }
@@ -57,6 +240,30 @@ var sprintf = function( format )
 	return newStr ;
 } ;
 
+//判断是否空
+function isEmpty( val )
+{
+   switch( typeof( val ) )
+   {
+   case 'undefined':
+      return true ;
+   case 'number':
+      return val == 0 ;
+   case 'string':
+      return val.length == 0 ;
+   case 'object':
+      for( var k in val )
+      {
+         return false ;
+      }
+      return true ;
+   default:
+      alert( val ) ;
+      return false ;
+   }
+   return false ;
+}
+
 //保留多少位小数
 function fixedNumber( x, num )
 {
@@ -77,7 +284,7 @@ function pad( num, n, chars )
    var len = num.toString().length;
    while( len < n )
    {
-      num = '0' + num ;
+      num = chars + num ;
       ++len ;
    }
    return num ;
@@ -94,6 +301,36 @@ function getObjectSize( obj )
       } ) ;
    }
    return len ;
+}
+
+//获取对象的属性是第几个
+function getObjectAttrIndex( obj, attr )
+{
+   var index = 0 ;
+   for( var key in obj )
+   {
+      if( key == attr )
+      {
+         return index ;
+      }
+      ++index ;
+   }
+   return -1 ;
+}
+
+//获取对象的第x个属性
+function getObjetAttrByIndex( obj, index )
+{
+   var index2 = 0 ;
+   for( var key in obj )
+   {
+      if( index == index2 )
+      {
+         return key ;
+      }
+      ++index2 ;
+   }
+   return undefined ;
 }
 
 //格式化日期
@@ -124,12 +361,20 @@ function timeFormat( date, fmt )
 
 //删除两端空格
 function trim( str )
-{　　
-   return str.replace( /(^\s*)|(\s*$)/g, '' ) ; 
+{
+   if( typeof( str ) == 'string' )
+   {
+      return str.replace( /(^\s*)|(\s*$)/g, '' ) ;
+   }
+   return str ;
 }
 
 //判断是不是数组
 function isArray( object ) {
+   if( typeof( object ) == 'undefined' )
+      return false ;
+   if( object === null )
+      return false ;
    //判断length属性是否是可枚举的 对于数组 将得到false
    return object && typeof( object ) === 'object' && typeof( object.length ) === 'number' &&
             typeof( object.splice ) === 'function' && !( object.propertyIsEnumerable( 'length' ) ) ;
@@ -163,15 +408,15 @@ function autoTypeConvert( val, hasQuotes )
          {
             val = false ;
          }
-         else if( val == 'minKey' )
+         else if( val.toLowerCase() == '$minkey' )
          {
-            val = { '$minkey': 1 } ;
+            val = { '$minKey': 1 } ;
          }
-         else if( val == 'maxKey' )
+         else if( val.toLowerCase() == '$maxkey' )
          {
-            val = { '$maxkey': 1 } ;
+            val = { '$maxKey': 1 } ;
          }
-         else if( val == 'undefined' )
+         else if( val.toLowerCase() == '$undefined' )
          {
             val = { '$undefined': 1 } ;
          }
@@ -182,6 +427,127 @@ function autoTypeConvert( val, hasQuotes )
       }
    }
    return val ;
+}
+
+//解析decimal类型的字符串
+function parseDecimal( str )
+{
+   var decimal = trim( str ) ;
+   var precision = null ;
+   var left = decimal.indexOf( '(' ) ;
+   var right = decimal.indexOf( ')' )
+   if( left > 0 && right > 0 && left < right && decimal.length - 1 == right )
+   {
+      precision = decimal.substring( left + 1, right ) ;
+      precision = precision.split( ',' ) ;
+      if( precision.length == 2 && isNaN( precision[0] ) == false && isNaN( precision[1] ) == false )
+      {
+         precision = [ parseInt( precision[0] ), parseInt( precision[1] ) ] ;
+         decimal = decimal.substring( 0, left ) ;
+      }
+      else
+      {
+         precision = null ;
+      }
+   }
+   if( precision == null )
+   {
+      return { '$decimal': decimal } ;
+   }
+   else
+   {
+      return { '$decimal': decimal, '$precision': precision } ;
+   }
+}
+
+//解析regex类型的字符串
+function parseRegex( str )
+{
+   var regex = trim( str ) ;
+   var options = '' ;
+   if( regex.charAt(0) == '/' && regex.indexOf( '/', 1 ) > 0 )
+   {
+      var right = regex.indexOf( '/', 1 ) ;
+      options = regex.substr( right + 1 ) ;
+      regex = regex.substr( 1, right - 1 ) ;
+   }
+   return { '$regex': regex, '$options': options } ;
+}
+
+//解析binary类型的字符串
+function parseBinary( str )
+{
+   var binary = trim( str ) ;
+   var binType = '' ;
+   if( binary.length > 0 && binary.charAt(0) == '(' && binary.indexOf( ')' ) >= 0 )
+   {
+      var right = binary.indexOf( ')' ) ;
+      binType = binary.substr( 1, right - 1 ) ;
+      binary = binary.substr( right + 1 ) ;
+   }
+   return { '$binary': binary, '$type': binType } ;
+}
+
+//指定类型转换
+function specifyTypeConvert( val, type )
+{
+   var retval = null ;
+   switch( type )
+   {
+   case 'Auto':
+      retval = autoTypeConvert( val, true ) ;
+      break ;
+   case 'Bool':
+      if( val.toLowerCase() == 'true' )
+      {
+         retval = true ;
+      }
+      else if( val.toLowerCase() == 'false' )
+      {
+         retval = false ;
+      }
+      else
+      {
+         retval = val ? true : false ;
+      }
+      break ;
+   case 'Number':
+      if( isNaN( val ) == false )
+      {
+         retval = Number( val ) ;
+      }
+      else
+      {
+         retval = parseInt( val ) ;
+      }
+      break ;
+   case 'Decimal':
+      retval = parseDecimal( val ) ;
+      break ;
+   case 'String':
+      retval = val ;
+      break ;
+   case 'ObjectId':
+      val = pad( val, 24, '0' ) ;
+      retval = { '$oid': val } ;
+      break ;
+   case 'Regex':
+      retval = parseRegex( val ) ;
+      break ;
+   case 'Binary':
+      retval = parseBinary( val ) ;
+      break ;
+   case 'Timestamp':
+      retval = { '$timestamp': val } ;
+      break ;
+   case 'Date':
+      retval = { '$date': val } ;
+      break ;
+   default:
+      retval = val ;
+      break ;
+   }
+   return retval ;
 }
 
 /*
@@ -268,21 +634,13 @@ function array2Json( array, parentType )
       }
       else if( field['type'] == 'Binary' )
       {
-         var binary = trim( field['val'] ) ;
-         var binType = '' ;
-         if( binary.length > 0 && binary.charAt(0) == '(' && binary.indexOf( ')' ) >= 0 )
-         {
-            var right = binary.indexOf( ')' ) ;
-            binType = binary.substr( 1, right - 1 ) ;
-            binary = binary.substr( right + 1 ) ;
-         }
          if( parentType == 'Object' )
          {
-            json[ field['key'] ] = { '$binary': binary, '$type': binType } ;
+            json[ field['key'] ] = parseBinary( field['val'] ) ;
          }
          else
          {
-            json.push( { '$binary': binary, '$type': binType } ) ;
+            json.push( parseBinary( field['val'] ) ) ;
          }
       }
       else if( field['type'] == 'Timestamp' )
@@ -324,21 +682,24 @@ function array2Json( array, parentType )
       }
       else if( field['type'] == 'Regex' )
       {
-         var regex = trim( field['val'] ) ;
-         var options = '' ;
-         if( regex.charAt(0) == '/' && regex.indexOf( '/', 1 ) > 0 )
-         {
-            var right = regex.indexOf( '/', 1 ) ;
-            options = regex.substr( right + 1 ) ;
-            regex = regex.substr( 1, right - 1 ) ;
-         }
          if( parentType == 'Object' )
          {
-            json[ field['key'] ] = { '$regex': regex, '$options': options } ;
+            json[ field['key'] ] = parseRegex( field['val'] ) ;
          }
          else
          {
-            json.push( { '$regex': regex, '$options': options } ) ;
+            json.push( parseRegex( field['val'] ) ) ;
+         }
+      }
+      else if( field['type'] == 'Decimal' )
+      {
+         if( parentType == 'Object' )
+         {
+            json[ field['key'] ] = parseDecimal( field['val'] ) ;
+         }
+         else
+         {
+            json.push( parseDecimal( field['val'] ) ) ;
          }
       }
    } ) ;
@@ -468,6 +829,16 @@ function json2Array( json, level, exact )
             value = '/' + value['$regex'] + '/' + value['$options'] ;
             valueType = 'Regex' ;
          }
+         else if( typeof( value['$decimal'] ) == 'string' )
+         {
+            var precision = value['$precision'] ;
+            value = value['$decimal'] ;
+            if( isArray( precision ) )
+            {
+               value = value + '(' + precision[0] + ',' + precision[1] + ')' ;
+            }
+            valueType = 'Decimal' ;
+         }
          else
          {
             value = json2Array( value, level + 1, exact ) ;
@@ -485,18 +856,7 @@ function json2Array( json, level, exact )
       }
       else if (valueType == 'number')
       {
-         if( value == Number.POSITIVE_INFINITY )
-         {
-            value = '1.7976931348623157e+308' ;
-         }
-         else if( value == Number.NEGATIVE_INFINITY )
-         {
-            value = '-1.7976931348623157e+308' ;
-         }
-         else
-         {
-            value = value + '' ;
-         }
+         value = value + '' ;
          valueType = 'Auto' ;
          if( exact == true )
          {
@@ -650,7 +1010,7 @@ function parseConditionValue( condition )
             subCondition[ field['field'] ] = fieldValue ;
             break ;
          case 'size':
-            subCondition[ field['field'] ] = { '$size': fieldValue } ;
+            subCondition[ field['field'] ] = { '$size': 1, '$et': fieldValue } ;
             break ;
          case 'regex':
             var regex = trim( fieldValue ) ;
@@ -736,7 +1096,7 @@ function parseConditionValue( condition )
                fieldValue = parseInt( fieldValue ) ;
                break ;
             }
-            subCondition[ field['field'] ] = { '$type': fieldValue } ;
+            subCondition[ field['field'] ] = { '$type': 1, '$et': fieldValue } ;
             break ;
          case 'null':
             subCondition[ field['field'] ] = { '$isnull': 1 } ;
@@ -797,6 +1157,9 @@ function parseHintValue( jobj )
    {
       hint[''] = null ;
    }
+   else if( jobj === 0 )
+   {
+   }
    else
    {
       hint[''] = jobj ;
@@ -813,6 +1176,29 @@ function parseUpdatorValue( jobj ){
    } ) ;
    updator = { '$set': updator } ;
    return updator ;
+}
+
+//指定光标移动到最后
+function set_focus( box )
+{
+   box.focus() ;
+   if( $.support.msie )
+   {
+      var range = document.selection.createRange();
+      this.last = range;
+      range.moveToElementText( box );
+      range.select();
+      document.selection.empty(); //取消选中
+   }
+   else
+   {
+      var range = document.createRange();
+      range.selectNodeContents( box );
+      range.collapse(false);
+      var sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+   }
 }
 
 //解析indexDef的值
@@ -934,6 +1320,11 @@ function parseSSQL( str, state )
             state['result'] += ', ' ;
          }
          state['result'] += result ;
+         if( result.indexOf( 'LINE ' ) == 0 )
+         {
+            state['status'] = 0 ;
+            state['rc'] = false ;
+         }
       }
       return state ;
    }
@@ -1117,4 +1508,871 @@ function sqlEscape( sql )
 {
    sql = sql.replace( /\\/g, "\\\\" ) ;
    return "'" + sql.replace( /'/g, "\\'" ) + "'" ;
+}
+
+//判断IP地址
+function IsIPAddress( ip )
+{
+   if( typeof( ip ) != 'string' )
+   {
+      return false ;
+   }
+   if( ip.indexOf( '.' ) <= 0 )
+   {
+      return false ;
+   }
+   var ipArr = ip.split( '.' ) ;
+   if( ipArr.length != 4 )
+   {
+      return false ;
+   }
+   if( isNaN( ipArr[0] ) == true || parseInt( ipArr[0] ) < 0 || parseInt( ipArr[0] ) > 255 )
+   {
+      return false ;
+   }
+   if( isNaN( ipArr[1] ) == true || parseInt( ipArr[1] ) < 0 || parseInt( ipArr[1] ) > 255 )
+   {
+      return false ;
+   }
+   if( isNaN( ipArr[2] ) == true || parseInt( ipArr[2] ) < 0 || parseInt( ipArr[2] ) > 255 )
+   {
+      return false ;
+   }
+   if( isNaN( ipArr[3] ) == true || parseInt( ipArr[3] ) < 0 || parseInt( ipArr[3] ) > 255 )
+   {
+      return false ;
+   }
+   return true ;
+}
+
+/*
+ * 解析ip ip段 hostname  hostname段
+ * 返回数组  [ { 'HostName': 'xxx' }, { 'IP': 'xxx' } ]
+ */
+function parseAddress( address )
+{
+	var link_search = [] ;
+	var splitAddress = address.split( /[,\s;]/ ) ;
+	var splitLen = splitAddress.length ;
+	
+	for( var strNum = 0; strNum < splitLen; ++strNum )
+	{
+		var str = $.trim( splitAddress[ strNum ] ) ;
+		var host_search = [] ;
+		var matches = new Array() ;
+		//识别主机字符串，扫描主机
+		var reg = new RegExp(/^((.*)(\[[ ]*(\d+)[ ]*\-[ ]*(\d+)[ ]*\])(.*))$/) ;
+		if ( ( matches = reg.exec( str ) ) != null )
+		{
+			host_search.push( matches[2] ) ;
+			host_search.push( matches[4] ) ;
+			host_search.push( matches[5] ) ;
+			host_search.push( matches[6] ) ;
+		}
+		else
+		{
+			host_search = str ;
+		}
+	
+		if ( host_search.length > 0 )
+		{
+			//转换hostname
+			if ( isArray( host_search ) )
+			{
+				var str_start = host_search[0] ;
+				var str_end   = host_search[3] ;
+				var strlen_num = host_search[1].length ;
+				var strlen_temp  = parseInt(host_search[1]).toString().length ;
+				var need_add_zero = false ;
+				if ( strlen_num > strlen_temp )
+				{
+					need_add_zero = true ;
+				}
+            var startNum = parseInt( host_search[1] ) ;
+            var endNum   = parseInt( host_search[2] ) ;
+            if( startNum > endNum )
+            {
+               startNum = endNum ;
+               endNum   = parseInt( host_search[1] ) ;
+            }
+				for ( var i = startNum; i <= endNum ; ++i )
+				{
+               if( IsIPAddress( str_start + i + str_end ) )
+               {
+                  //IP地址
+                  if ( need_add_zero && i.toString().length <= strlen_num )
+					   {
+						   link_search.push( { 'IP': str_start + pad(i,strlen_num) + str_end } ) ;
+					   }
+					   else
+					   {
+						   link_search.push( { 'IP': str_start + i + str_end } ) ;
+					   }
+               }
+               else
+               {
+					   if ( need_add_zero && i.toString().length <= strlen_num )
+					   {
+						   link_search.push( { 'HostName': str_start + pad(i,strlen_num) + str_end } ) ;
+					   }
+					   else
+					   {
+						   link_search.push( { 'HostName': str_start + i + str_end } ) ;
+					   }
+               }
+				}
+			}
+			else
+			{
+            if( IsIPAddress( host_search ) == true )
+            {
+               link_search.push( { 'IP': host_search } ) ;
+            }
+            else
+            {
+               link_search.push( { 'HostName': host_search } ) ;
+            }
+			}
+		}
+	}
+	return link_search ;
+}
+
+//解析主机列表
+function parseHostString( hostStr )
+{
+	var i = 0 ;
+	var tempHostList = [] ;
+	var hostList = [] ;
+	if( hostStr.indexOf( ',' ) >= 0 )
+   {
+      addressList = hostStr.split( ',' ) ;
+   }
+	else if( hostStr.indexOf( "\n" ) >= 0 )
+   {
+      addressList = hostStr.split( "\n" ) ;
+   }
+   else
+   {
+      addressList = [ hostStr ] ;
+   }
+	$.each( addressList, function( index, address ){
+		var temp = parseAddress( address ) ;
+		$.each( temp, function( index2, hostInfo ){
+			tempHostList.push( hostInfo ) ;
+			++i ;
+			if( i === 5 )
+			{
+				hostList.push( tempHostList ) ;
+				tempHostList = [] ;
+				i = 0 ;
+			}
+		} ) ;
+	} ) ;
+	if( tempHostList.length > 0 )
+	{
+		hostList.push( tempHostList ) ;
+	}
+	return hostList ;
+}
+
+//检查列表中是否存在主机或IP
+//-1 不存在  -2 存在,并且重复  >= 0 存在，返回下标
+function checkHostIsExist( _hostList, hostName, IP )
+{
+	var rc = -1 ;
+	$.each( _hostList, function( index, hostInfo ){
+		if( ( hostInfo['HostName'] !== '' && hostName !== '' &&
+				hostInfo['HostName'] === hostName ) ||
+			 ( hostInfo['IP'] !== '' && IP !== '' &&
+				hostInfo['IP'] === IP ) )
+		{
+			if( ( hostInfo['HostName'] !== '' && hostName !== '' &&
+				   hostInfo['HostName'] === hostName ) &&
+				 ( hostInfo['IP'] !== '' && IP !== '' &&
+				   hostInfo['IP'] !== IP ) )
+			{
+				rc = -2 ;
+				return true ;
+			}
+			if( ( hostInfo['HostName'] !== '' && hostName !== '' &&
+				   hostInfo['HostName'] !== hostName ) &&
+				 ( hostInfo['IP'] !== '' && IP !== '' &&
+				   hostInfo['IP'] === IP ) )
+			{
+				rc = -2 ;
+				return true ;
+			}
+			rc = index ;
+			return false ;
+		}
+	} ) ;
+	return rc ;
+}
+
+//保留两位小数
+function twoDecimalPlaces( num )
+{
+	return ( Math.round( num * 100 ) / 100 ) ;
+}
+
+/*
+   自动换算容量
+   num 单位 MB
+*/
+function sizeConvert( num )
+{
+	var rn = '0 MB' ;
+	if ( num < 1 && num > 0 )
+	{
+		rn = ( num * 1024 ) + ' KB' ;
+	}
+	if( num >= 1 && num < 1024 )
+	{
+		rn = num + ' MB' ;
+	}
+	if( num >= 1024 && num < 1048576 )
+	{
+		rn = twoDecimalPlaces( num / 1024 ) + ' GB' ;
+	}
+	else if ( num >= 1048576 && num < 1073741824 )
+	{
+		rn = twoDecimalPlaces( num / 1048576 ) + ' TB' ;
+	}
+	else if ( num >= 1073741824 )
+	{
+		rn = twoDecimalPlaces( num / 1073741824 ) + ' PB' ;
+	}
+	return rn ;
+}
+
+//检测端口
+function checkPort( str )
+{
+	var len = str.length ;
+	if ( len <= 0 )
+	{
+		return false ;
+	}
+	if ( str.charAt( 0 ) == '0' )
+	{
+		return false ;
+	}
+	for ( var i = 0; i < len; ++i )
+	{
+		var char = str.charAt( i ) ;
+		if ( char < '0' || char > '9' )
+		{
+			return false ;
+		}
+	}
+	var port = parseInt( str ) ;
+	if ( port <= 0 || port > 65535 )
+	{
+		return false ;
+	}
+	return true ;
+}
+
+//解析布尔值
+function parseBoolean( val )
+{
+   var newVal = false ;
+   if( val == 'true' )
+   {
+      newVal = true ;
+   }
+   else if( val == 'false' )
+   {
+      newVal = false ;
+   }
+   return newVal ;
+}
+
+//从路径去除 role svcname groupname hostname
+function selectDBPath( dbpath, role, svcname, groupname, hostname )
+{
+	if( 'role' === groupname || 'role' === hostname || 'svcname' === groupname || 'svcname' === hostname || 'groupname' === groupname || 'groupname' === hostname || 'hostname' === groupname || 'hostname' === hostname )
+	{
+		return dbpath ;
+	}
+	var replaceTemp = '' ;
+	function filterSlash( str )
+	{
+		var len = str.length ;
+		var replaceTemp2 = replaceTemp ;
+		replaceTemp2 = '/' + replaceTemp2 ;
+		if( str.charAt( len - 1 ) === '/' )
+		{
+			replaceTemp2 = replaceTemp2 + '/' ;
+		}
+		return replaceTemp2 ;
+	}
+	if( role !== null && role !== '' )
+	{
+		var reg = new RegExp( '/' + role + '/|/' + role + '$', 'g' ) ;
+		replaceTemp = '[role]' ;
+		dbpath = dbpath.replace( reg, filterSlash ) ;
+	}
+	if( svcname !== null && svcname !== '' )
+	{
+		var reg = new RegExp( '/' + svcname + '/|/' + svcname + '$', 'g' ) ;
+		replaceTemp = '[svcname]' ;
+		dbpath = dbpath.replace( reg, filterSlash ) ;
+	}
+	if( groupname !== null && groupname !== '' )
+	{
+		var reg = new RegExp( '/' + groupname + '/|/' + groupname + '$', 'g' ) ;
+		replaceTemp = '[groupname]' ;
+		dbpath = dbpath.replace( reg, filterSlash ) ;
+	}
+	if( hostname !== null && hostname !== '' )
+	{
+		var reg = new RegExp( '/' + hostname + '/|/' + hostname + '$', 'g' ) ;
+		replaceTemp = '[hostname]' ;
+		dbpath = dbpath.replace( reg, filterSlash ) ;
+	}
+	return dbpath ;
+}
+
+/*
+ * 数据路径转义
+ * 参数1 路径字符串，例子 /opt/sequoiadb/[role]/[svcname]/[groupname]/[hostname] 可用的特殊命令就是 [role] [svcname] [groupname] [hostname]
+ * 参数2 主机名
+ * 参数3 端口
+ * 参数4 角色
+ * 参数5 分区组名
+ */
+function dbpathEscape( str, hostname, svcname, role, groupname )
+{
+	var newPath = '' ;
+	while( true )
+	{
+		var leftNum = str.indexOf( '[' ) ;
+		var rightNum = -1 ;
+		if( leftNum >= 0 )
+		{
+			newPath += str.substring( 0, leftNum ) ;
+			str = str.substring( leftNum ) ;
+			rightNum = str.indexOf( ']' ) ;
+			if( rightNum >= 0 )
+			{
+				var order = str.substring( 1, rightNum ) ;
+				if( order == 'hostname' )
+				{
+					newPath += hostname + '' ;
+				}
+				else if( order == 'svcname' )
+				{
+					newPath += svcname + '' ;
+				}
+				else if( order == 'role' )
+				{
+					newPath += role + '' ;
+				}
+				else if( order == 'groupname' )
+				{
+					newPath += groupname + '' ;
+				}
+				else
+				{
+					newPath += str.substring( 0, rightNum + 1 ) ;
+				}
+				str = str.substring( rightNum + 1 ) ;
+			}
+			else
+			{
+				newPath += str ;
+				break ;
+			}
+		}
+		else
+		{
+			newPath += str ;
+			break ;
+		}
+	}
+	return newPath ;
+}
+
+/*
+ * 端口转义
+ * 参数1 端口字符串，例子 '11810[+10]'
+ * 参数2 第几个节点 最小值 0
+ */
+function portEscape( str, num )
+{
+	var newPort = null ;
+	str = str + '' ;
+	if( str == '' )
+	{
+		return str ;
+	}
+	if( str.indexOf( '[' ) > 0 )
+	{
+		var portStr = str.substring( 0, str.indexOf( '[' ) ) ;
+		var escapeStr = str.substring( str.indexOf( '[' ) ) ;
+		var n = 1 ;
+		if( escapeStr.charAt(0) == '[' && escapeStr.charAt(escapeStr.length - 1) == ']' )
+		{
+			if( escapeStr.charAt(1) == '+' )
+			{
+				n = 1 ;
+			}
+			else if( escapeStr.charAt(1) == '-' )
+			{
+				n = -1 ;
+			}
+			else
+			{
+				return null ;
+			}
+         if( isNaN( escapeStr.substring( 2, escapeStr.length - 1 ) ) == true )
+         {
+            return null ;
+         }
+         if( isNaN( portStr ) == true )
+         {
+            return null ;
+         }
+			var tempNum = parseInt( escapeStr.substring( 2, escapeStr.length - 1 ) ) * num * n ;
+			newPort = '' + ( parseInt( portStr ) + tempNum ) ;
+		}
+		else
+		{
+			return null ;
+		}
+	}
+	else
+	{
+		newPort = str ;
+	}
+	if( checkPort( newPort ) )
+	{
+		return newPort ;
+	}
+	else
+	{
+		return null ;
+	}
+}
+
+//删除json对象里面指定字段
+function deleteJson( json, keys )
+{
+   var newJson = {} ;
+   $.each( json, function( key, value ){
+      if( keys.indexOf( key ) == -1 )
+      {
+         newJson[key] = value ;
+      }
+   } ) ;
+   return newJson ;
+}
+
+//设置json的值都为字符串
+function convertJsonValueString( json )
+{
+   $.each( json, function( key, value ){
+      if( typeof( value ) == "string" )
+      {
+         return true ;
+      }
+      else if( typeof( value ) == "number" )
+      {
+         json[key] = '' + value ;
+      }
+      else if( typeof( value ) == "boolean" )
+      {
+         json[key] = value ? 'true' : 'false' ;
+      }
+      else
+      {
+         json[key] = value ;
+      }
+   } ) ;
+   return json ;
+}
+
+//JSON.parse JSON.stringify
+{
+   var _json_parse = null;
+   var _json_string = null;
+   if (typeof (JSON) != 'undefined') {
+      _json_parse = JSON.parse;
+      _json_string = JSON.stringify;
+   }
+
+   //过滤不可见字符
+   function filterInviChart(str) {
+      var i = 0, len = str.length;
+      var newStr = '';
+      var chars, code;
+      while (i < len) {
+         chars = str.charAt(i);
+         code = chars.charCodeAt();
+         if (code < 0x20 || code == 0x7F) {
+            chars = '?';
+         }
+         newStr += chars;
+         ++i;
+      }
+      return newStr;
+   }
+
+   //json字符串转js对象
+   function json2Obj(str, func) {
+      var json;
+      try {
+         json = _json_parse( str ) ;
+      } catch (e) {
+         try {
+            var newStr = filterInviChart(str);
+            json = _json_parse(newStr, func);
+         } catch (e) {
+            json = eval('(' + str + ')');
+         }
+      }
+      return json;
+   }
+
+   JSON.parse = json2Obj;
+
+   var rx_one = /^[\],:{}\s]*$/;
+   var rx_two = /\\(?:["\\\/bfnrt]|u[0-9a-fA-F]{4})/g;
+   var rx_three = /"[^"\\\n\r]*"|true|false|null|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?/g;
+   var rx_four = /(?:^|:|,)(?:\s*\[)+/g;
+   var rx_escapable = /[\\\"\u0000-\u001f\u007f-\u009f\u00ad\u0600-\u0604\u070f\u17b4\u17b5\u200c-\u200f\u2028-\u202f\u2060-\u206f\ufeff\ufff0-\uffff]/g;
+   var rx_dangerous = /[\u0000\u00ad\u0600-\u0604\u070f\u17b4\u17b5\u200c-\u200f\u2028-\u202f\u2060-\u206f\ufeff\ufff0-\uffff]/g;
+
+   function f(n) {
+      return n < 10
+          ? "0" + n
+          : n;
+   }
+
+   function this_value() {
+      return this.valueOf();
+   }
+
+   if (typeof Date.prototype.toJSON !== "function") {
+
+      Date.prototype.toJSON = function () {
+
+         return isFinite(this.valueOf())
+             ? this.getUTCFullYear() + "-" +
+                     f(this.getUTCMonth() + 1) + "-" +
+                     f(this.getUTCDate()) + "T" +
+                     f(this.getUTCHours()) + ":" +
+                     f(this.getUTCMinutes()) + ":" +
+                     f(this.getUTCSeconds()) + "Z"
+             : null;
+      };
+
+      Boolean.prototype.toJSON = this_value;
+      Number.prototype.toJSON = this_value;
+      String.prototype.toJSON = this_value;
+   }
+
+   var gap;
+   var indent;
+   var meta;
+   var rep;
+
+
+   function quote(str) {
+      rx_escapable.lastIndex = 0;
+      return rx_escapable.test(str)
+          ? "\"" + str.replace(rx_escapable, function (a) {
+             var c = meta[a];
+             return typeof c === "string"
+                 ? c
+                 : "\\u" + ("0000" + a.charCodeAt(0).toString(16)).slice(-4);
+          }) + "\""
+          : "\"" + str + "\"";
+   }
+
+
+   function str(key, holder) {
+
+      var i;
+      var k;
+      var v;
+      var length;
+      var mind = gap;
+      var partial;
+      var value = holder[key];
+
+      if (value && typeof value === "object" &&
+              typeof value.toJSON === "function") {
+         value = value.toJSON(key);
+      }
+
+      if (typeof rep === "function") {
+         value = rep.call(holder, key, value);
+      }
+
+      switch (typeof value) {
+         case "string":
+            return quote(value);
+
+         case "number":
+            if (value === Number.POSITIVE_INFINITY) {
+               return 'Infinity';
+            }
+            else if (value === Number.NEGATIVE_INFINITY) {
+               return '-Infinity';
+            }
+            else if (value === Number.NaN) {
+               return '0';
+            }
+            else {
+               return String(value);
+            }
+
+         case "boolean":
+         case "null":
+            return String(value);
+
+         case "object":
+            if (!value) {
+               return "null";
+            }
+            gap += indent;
+            partial = [];
+
+            if (Object.prototype.toString.apply(value) === "[object Array]") {
+               length = value.length;
+               for (i = 0; i < length; i += 1) {
+                  partial[i] = str(i, value) || "null";
+               }
+
+               v = partial.length === 0
+                   ? "[]"
+                   : gap
+                       ? "[\n" + gap + partial.join(",\n" + gap) + "\n" + mind + "]"
+                       : "[" + partial.join(",") + "]";
+               gap = mind;
+               return v;
+            }
+
+            if (rep && typeof rep === "object") {
+               length = rep.length;
+               for (i = 0; i < length; i += 1) {
+                  if (typeof rep[i] === "string") {
+                     k = rep[i];
+                     v = str(k, value);
+                     if (v) {
+                        partial.push(quote(k) + (
+                            gap
+                                ? ": "
+                                : ":"
+                        ) + v);
+                     }
+                  }
+               }
+            } else {
+
+               for (k in value) {
+                  if (Object.prototype.hasOwnProperty.call(value, k)) {
+                     v = str(k, value);
+                     if (v) {
+                        partial.push(quote(k) + (
+                            gap
+                                ? ": "
+                                : ":"
+                        ) + v);
+                     }
+                  }
+               }
+            }
+
+            v = partial.length === 0
+                ? "{}"
+                : gap
+                    ? "{\n" + gap + partial.join(",\n" + gap) + "\n" + mind + "}"
+                    : "{" + partial.join(",") + "}";
+            gap = mind;
+            return v;
+      }
+   }
+
+   //js对象转成json字符串
+   meta = {    // table of character substitutions
+      "\b": "\\b",
+      "\t": "\\t",
+      "\n": "\\n",
+      "\f": "\\f",
+      "\r": "\\r",
+      "\"": "\\\"",
+      "\\": "\\\\"
+   };
+   JSON.stringify = function (value, replacer, space) {
+
+      var i;
+      gap = "";
+      indent = "";
+
+      if (typeof space === "number") {
+         for (i = 0; i < space; i += 1) {
+            indent += " ";
+         }
+
+      } else if (typeof space === "string") {
+         indent = space;
+      }
+
+      rep = replacer;
+      if (replacer && typeof replacer !== "function" &&
+              (typeof replacer !== "object" ||
+              typeof replacer.length !== "number")) {
+         throw new Error("JSON.stringify");
+      }
+
+      return str("", { "": value });
+   };
+}
+
+//给函数对象增加一个getName的方法，用来返回函数名
+Function.prototype.getName = function(){
+    return this.name || this.toString().match(/function\s*([^(]*)\(/)[1] ;
+}
+
+//判断字符串是否含有中文
+function hasChinese( str )
+{
+   var reg = new RegExp( "[\\u4E00-\\u9FFF]+" ,"g" ) ;
+   return reg.test( str ) ;
+}
+
+/*
+复制指定字段
+src: 数据源(数组) [ { ... } ]
+field: 指定复制的字段(数组，元素是字符串) [ ... ]
+*/
+function copyArrayField( src, field )
+{
+   var dst = [] ;
+   var length = src.length ;
+   var cpLen  = field.length ;
+   for( var i = 0; i < length; ++i )
+   {
+      var row = {} ;
+      for( var k = 0; k < cpLen; ++k )
+      {
+         row[ field[k] ] = src[i][ field[k] ] ;
+      }
+      dst.push( row ) ;
+   }
+   return dst ;
+}
+
+/*
+   获取json的第一层字段
+   json: object的json
+*/
+function getJsonFirstKeys( json )
+{
+   var keys = [] ;
+   $.each( json, function( key ){
+      keys.push( key ) ;
+   } ) ;
+   return keys ;
+}
+
+function parseOneJson( json_array, str, isParseJson, i, len, errType, errJson )
+{
+   var chars, isJson, isEsc, level, isString, start, json ;
+
+   level = 0, isEsc = false, isString = false, start = i ;
+
+   while( i < len )
+	{
+      isJson = true ;
+
+		chars = str.charAt( i ) ;
+
+		if( isEsc )
+      {
+         isEsc = false ;
+      }
+		else
+		{
+			if( ( chars === '{' || chars === '[' ) && isString === false )
+         {
+            ++level ;
+         }
+			else if( ( chars === '}' || chars === ']' ) && isString === false )
+			{
+				--level ;
+				if( level === 0 )
+				{
+					++i ;
+					subStr = str.substring( start, i ) ;
+
+               if( isParseJson )
+               {
+                  try
+                  {
+                     json = JSON.parse( subStr ) ;
+                  }
+                  catch( e )
+                  {
+                     isJson = false ;
+                     json = { " ": subStr } ;
+                  }
+
+                  if( errType == true )
+                  {
+                     errJson.push( !isJson ) ;
+                  }
+                  json_array.push( json ) ;
+               }
+               else
+               {
+                  json_array.push( subStr ) ;
+               }
+					break ;
+				}
+			}
+			else if( chars === '"' )
+         {
+            isString = !isString ;
+         }
+			else if( chars === '\\' )
+         {
+            isEsc = true ;
+         }
+		}
+		++i ;
+	}
+
+   return i ;
+}
+
+//解析响应的Json
+function parseJson2( str, isParseJson, errJson )
+{
+   var jsonArr = [] ;
+	var i = 0, len = str.length ;
+	var chars, end, subStr, json, errType ;
+
+   errType = isArray( errJson ) ;
+
+	while( i < len )
+	{
+		while( i < len )
+      {
+         chars = str.charAt( i ) ;
+         if( chars === '{' )
+         {
+            break ;
+         }
+         ++i ;
+      }
+
+		i = parseOneJson( jsonArr, str, isParseJson, i, len, errType, errJson ) ;
+	}
+
+	return jsonArr ;
 }

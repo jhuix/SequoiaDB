@@ -42,11 +42,11 @@ var remote_check_result_file = "" ;
 var result_file              = "" ;
 
 var progs = null ;
-var spts  = [ "error.js", "common.js", "define.js", "log.js",
+var spts  = [ "common.js", "define.js", "log.js",
               "func.js", "addHostCheckEnv.js" ] ;
 if ( SYS_LINUX == SYS_TYPE )
 {
-   progs = [ "sdb" ] ; 
+   progs = [ "sdb" ] ;
 }
 else
 {
@@ -63,7 +63,7 @@ function _init()
 {
    // 1. get task id
    task_id = getTaskID( SYS_JSON ) ;
-  
+
    // 2. specify log file's name
    try
    {
@@ -104,7 +104,7 @@ function _init()
    {
       // TODO: windows
    }
-   
+
    PD_LOG2( task_id, arguments, PDEVENT, FILE_NAME_ADD_HOST,
             sprintf("Begin to add host[?]", host_ip) ) ;
 }
@@ -130,7 +130,7 @@ function _final()
                sprintf( "Failed to remove add host pre-check result file in localhost, rc: ?, detail: ?",
                         GETLASTERROR(), GETLASTERRMSG() ) ) ;
    }
-   
+
    PD_LOG2( task_id, arguments, PDEVENT, FILE_NAME_ADD_HOST,
             sprintf("Finish adding host[?]", host_ip) ) ;
 }
@@ -158,6 +158,161 @@ function _getLocalDBPacketMD5( install_packet )
                sprintf( errMsg + ", rc: ?, detail: ?", GETLASTERROR(), GETLASTERRMSG() ) ) ;
       exception_handle( SDB_SYS, errMsg ) ;
    }
+}
+
+function _getSdbVersion()
+{
+   try
+   {
+      var cmd = new Cmd() ;
+      var sdbcmPath = adaptPath( installPath ) + OMA_PROG_BIN_SDBCM ;
+      var str = cmd.run( sdbcmPath + " --version ", "", OMA_GTE_VERSION_TIME ) ;
+      var beg = str.indexOf( OMA_MISC_OM_VERSION ) ;
+      var end = str.indexOf( '\n' ) ;
+      var len = OMA_MISC_OM_VERSION.length ;
+
+      version = str.substring( beg + len, end ) ;
+   }
+   catch ( e )
+   {
+      // version 1.8 sp1 and other versions older then 1.8 need this error msg
+      if ( ( (1 == e) && (null == str) ) || ( SDB_TIMEOUT) == e )
+         errMsg = "The OM Agent is not compatible" ;
+      else
+         errMsg = "Failed to get OM Agent's version" ;
+      SYSEXPHANDLE( e ) ;
+      rc = GETLASTERROR() ;
+      PD_LOG( arguments, PDERROR, FILE_NAME_CHECK_HOST,
+              sprintf( errMsg + ", rc: ?, detail: ?", rc, GETLASTERRMSG() ) ) ;
+      exception_handle( rc, errMsg ) ;
+   }
+
+   return version.split( '.' ) ;
+}
+
+function _getLocalInstallPath()
+{
+   var installPath ;
+
+   try
+   {
+      var localInstallInfo = eval( '(' + Oma.getOmaInstallInfo() + ')' ) ;
+      if ( null == localInstallInfo || "undefined" == typeof( localInstallInfo ) )
+         exception_handle( SDB_INVALIDARG, "Invalid db install info in localhost" ) ;
+      installPath = localInstallInfo[INSTALL_DIR] ;
+   }
+   catch ( e )
+   {
+      // when no install info in /etc/default/sequoiadb
+      SYSEXPHANDLE( e ) ;
+      errMsg = sprintf( "Failed to get db install info in localhost[?]", localIP ) ;
+      rc = GETLASTERROR() ;
+      PD_LOG2( task_id, arguments, PDERROR, FILE_NAME_ADD_HOST_CHECK_INFO,
+               sprintf( errMsg + ", rc: ?, detail: ?", rc, GETLASTERRMSG() ) ) ;
+      exception_handle( rc, errMsg ) ;
+   }
+
+   return installPath ;
+}
+
+function _getLocalVersion()
+{
+   var installPath = _getLocalInstallPath() ;
+   var version ;
+
+   try
+   {
+      var cmd = new Cmd() ;
+      var sdbcmPath = adaptPath( installPath ) + OMA_PROG_BIN_SDBCM ;
+      var str = cmd.run( sdbcmPath + " --version ", "", OMA_GTE_VERSION_TIME ) ;
+      var beg = str.indexOf( OMA_MISC_OM_VERSION ) ;
+      var end = str.indexOf( '\n' ) ;
+      var len = OMA_MISC_OM_VERSION.length ;
+
+      version = str.substring( beg + len, end ) ;
+   }
+   catch ( e )
+   {
+      // version 1.8 sp1 and other versions older then 1.8 need this error msg
+      if ( ( (1 == e) && (null == str) ) || ( SDB_TIMEOUT) == e )
+         errMsg = "The OM Agent is not compatible" ;
+      else
+         errMsg = "Failed to get OM Agent's version" ;
+      SYSEXPHANDLE( e ) ;
+      rc = GETLASTERROR() ;
+      PD_LOG( arguments, PDERROR, FILE_NAME_CHECK_HOST,
+              sprintf( errMsg + ", rc: ?, detail: ?", rc, GETLASTERRMSG() ) ) ;
+      exception_handle( rc, errMsg ) ;
+   }
+
+   return version.split( '.' ) ;
+}
+
+function _getRemoteVersion( ssh, installPath )
+{
+   var cmd = installPath + '/' + OMA_PROG_BIN_SDBCM + ' --version' ;
+   var version = "" ;
+
+   try
+   {
+      ssh.exec( cmd ) ;
+      var str = ssh.getLastOut() ;
+      var beg = str.indexOf( OMA_MISC_OM_VERSION ) ;
+      var end = str.indexOf( '\n' ) ;
+      var len = OMA_MISC_OM_VERSION.length ;
+
+      version = str.substring( beg + len, end ) ;
+   }
+   catch( e )
+   {
+      errMsg = sprintf( "Failed to get version: host [?]", hostName ) ;
+      SYSEXPHANDLE( e ) ;
+      rc = GETLASTERROR() ;
+      PD_LOG( arguments, PDERROR, FILE_NAME_CHECK_HOST,
+              sprintf( errMsg + ", rc: ?, detail: ?", rc, GETLASTERRMSG() ) ) ;
+      exception_handle( rc, errMsg ) ;
+   }
+
+   return version ;
+}
+
+function _checkCompatible( remoteVersion, omVersion )
+{
+   var installPath = _getLocalInstallPath() ;
+   var rc = false ;
+
+   try
+   {
+      var cmd = new Cmd() ;
+      var exec = adaptPath( installPath ) + 'compatible.sh' ;
+      var args = remoteVersion + ' E ' + omVersion + ' E --om' ;
+      var str = cmd.run( exec, args, OMA_GTE_VERSION_TIME ) ;
+      str = str.replace( /\r\n/g, '' ) ;
+      str = str.replace( /\n/g, '' ) ;
+      if ( str === 'true' )
+      {
+         rc = true ;
+      }
+      else if ( str !== 'false' )
+      {
+         rc = SDB_SYS ;
+         errMsg = sprintf( "Failed to get compatible", localIP ) ;
+         PD_LOG( arguments, PDERROR, FILE_NAME_CHECK_HOST,
+                 sprintf( errMsg + ", rc: ?, detail: ?", rc, GETLASTERRMSG() ) ) ;
+         exception_handle( rc, errMsg ) ;
+      }
+   }
+   catch ( e )
+   {
+      SYSEXPHANDLE( e ) ;
+      errMsg = sprintf( "Failed to get compatible", localIP ) ;
+      rc = GETLASTERROR() ;
+      PD_LOG( arguments, PDERROR, FILE_NAME_CHECK_HOST,
+              sprintf( errMsg + ", rc: ?, detail: ?", rc, GETLASTERRMSG() ) ) ;
+      exception_handle( rc, errMsg ) ;
+   }
+
+   return rc ;
 }
 
 /* *****************************************************************************
@@ -188,15 +343,14 @@ function _needToAdd( ssh, install_packet, install_sdb_user, install_path, agentS
    var str                 = "" ;
    var retMsg              = "" ;
    var js_files            = "" ;
-   
+
    if ( SYS_LINUX == SYS_TYPE )
    {
       // set execute command run by ./sdb
       /*
-      /tmp/omatmp/bin/sdb -e 'var install_path = "/opt/sequoiadb"' -f '/tmp/omatmp/conf/script/define.js, /tmp/omatmp/conf/script/error.js, /tmp/omatmp/conf/script/log.js, /tmp/omatmp/conf/script/common.js, /tmp/omatmp/conf/script/func.js, /tmp/omatmp/conf/script/addHostCheckEnv.js'
+      /tmp/omatmp/bin/sdb -e 'var install_path = "/opt/sequoiadb"' -f '/tmp/omatmp/conf/script/define.js, /tmp/omatmp/conf/script/log.js, /tmp/omatmp/conf/script/common.js, /tmp/omatmp/conf/script/func.js, /tmp/omatmp/conf/script/addHostCheckEnv.js'
       */
       js_files = "/tmp/omatmp/conf/script/define.js" + ", " ;
-      js_files += "/tmp/omatmp/conf/script/error.js" + ", " ;
       js_files += "/tmp/omatmp/conf/script/log.js" + ", " ;
       js_files += "/tmp/omatmp/conf/script/common.js" + ", " ;
       js_files += "/tmp/omatmp/conf/script/func.js" + ", " ;
@@ -254,7 +408,7 @@ function _needToAdd( ssh, install_packet, install_sdb_user, install_path, agentS
       remote_install_path = obj[INSTALL_DIR] ;
       remote_oma_service  = obj[OMA_SERVICE] ;
       isProgramExist      = obj[ISPROGRAMEXIST] ;
-      
+
       // MD5
       if ( "string" != typeof(remote_md5) || 32 != remote_md5.length )
       {
@@ -304,22 +458,30 @@ function _needToAdd( ssh, install_packet, install_sdb_user, install_path, agentS
       PD_LOG2( task_id, arguments, PDWARNING, FILE_NAME_ADD_HOST, errMsg ) ;
       return true ;
    }
-   // get local install packet's md5
-   try
+
+   var remoteVersion = BUS_JSON[FIELD_HOST_INFO][Version].split( '.' ) ;
+   var localVersion  = _getLocalVersion() ;
+
+   if( remoteVersion.length < 2 )
    {
-      local_md5 = _getLocalDBPacketMD5( install_packet ) ;
+      return false ;
    }
-   catch( e )
+
+   remoteVersion = remoteVersion[0] + '.' + remoteVersion[1] ;
+   localVersion  = localVersion[0]  + '.' + localVersion[1] ;
+
+   if( _checkCompatible( remoteVersion, localVersion ) )
    {
-      return true ;
+      PD_LOG2( task_id, arguments, PDEVENT, FILE_NAME_ADD_HOST,
+               'version compatible' ) ;
+      return false ;
    }
-   if ( local_md5 != remote_md5 )
-   {
-      errMsg = sprintf( "Remote install info's md5[?] is not the same with the one[?] we " +
-                        "are going to install", remote_md5, local_md5 ) ;
-      PD_LOG2( task_id, arguments, PDWARNING, FILE_NAME_ADD_HOST, errMsg ) ;
-      return true ;
-   }
+
+   rc = SDB_SYS ;
+   errMsg = sprintf( "Version incompatible" ) ;
+   PD_LOG2( task_id, arguments, PDSEVERE, FILE_NAME_ADD_HOST,
+            sprintf( errMsg + ", rc: ?, detail: ?", rc, GETLASTERRMSG() ) ) ;
+   exception_handle( rc, errMsg ) ;
 
    return false ;
 }
@@ -339,7 +501,7 @@ function _pushDBPacket( ssh, packet )
    var dest = "" ;
    var cmd  = "" ;
    var packetName = getPacketName( packet ) ;
-   
+
    if ( SYS_LINUX == SYS_TYPE )
    {
       try
@@ -383,7 +545,7 @@ function _startOMAgent( ssh )
    var progPath          = "" ;
    var str               = "" ;
    var str2              = "" ;
-   
+
    try
    {
       remoteOMAInfoObj  = eval( '(' + Oma.getOmaConfigs( result_file ) + ')' ) ;
@@ -452,7 +614,7 @@ function _stopOMAgent( ssh )
    var progPath          = "" ;
    var str               = "" ;
    var str2              = "" ;
-   
+
    try
    {
       remoteOMAInfoObj  = eval( '(' + Oma.getOmaConfigs( result_file ) + ')' ) ;
@@ -514,19 +676,21 @@ function _stopOMAgent( ssh )
    ssh[object]: Ssh object
    sdbuser[string]: the user to be add for running sequoiadb program
    sdbpasswd[string]: the password of sdbuser
+   sdbgroup[string]: the group of user
    omagentservice[string]: the service of OM Agent
    packet[string]: the full name of the packet,
                    e.g. /tmp/packet/sequoiadb-1.8-linux_x86_64-installer.run
-   path[string]: the path where the install packet is in local host, we need 
+   path[string]: the path where the install packet is in local host, we need
                  to push this packet to remote host
 @return void
 ***************************************************************************** */
-function _installDBPacket( ssh, sdbuser, sdbpasswd, omagentservice, packet, path )
+function _installDBPacket( ssh, sdbuser, sdbpasswd, sdbgroup, omagentservice, packet, path )
 {
    var cmd = "" ;
    var option = "" ;
    option += " --mode unattended " + " --prefix " + path ;
    option += " --username " + sdbuser + " --userpasswd " + sdbpasswd ;
+   option += " --groupname " + sdbgroup ;
    option += " --port " + omagentservice ;
    var packetName = getPacketName( packet ) ;
    if ( SYS_LINUX == SYS_TYPE )
@@ -537,14 +701,18 @@ function _installDBPacket( ssh, sdbuser, sdbpasswd, omagentservice, packet, path
          PD_LOG2( task_id, arguments, PDDEBUG, FILE_NAME_ADD_HOST,
                   sprintf( "Install db packet run command: ?", cmd ) ) ;
          ssh.exec( cmd ) ;
+
+         RET_JSON[FIELD_VERSION] = _getRemoteVersion( ssh, path ) ;
       }
       catch ( e )
       {
          SYSEXPHANDLE( e ) ;
          rc = GETLASTERROR() ;
+         var errDetail = GETLASTERRMSG() ;
          errMsg = sprintf( "Failed to install db packet in host[?]", ssh.getPeerIP() ) ;
          PD_LOG2( task_id, arguments, PDERROR, FILE_NAME_ADD_HOST,
-                  sprintf( errMsg + ", rc: ?, detail: ?", rc, GETLASTERRMSG() ) ) ;
+                  sprintf( errMsg + ", rc: ?, detail: ?", rc, errDetail ) ) ;
+
          exception_handle( rc, errMsg ) ;
       }
    }
@@ -571,7 +739,7 @@ function _uninstallDBPacket( ssh, path )
       // try to stop sdbcm
       try
       {
-         cmd = str + OMA_PROG_BIN_SDBCMTOP_L ; 
+         cmd = str + OMA_PROG_BIN_SDBCMTOP_L ;
          ssh.exec( cmd ) ;
       }
       catch ( e )
@@ -597,7 +765,7 @@ function _uninstallDBPacket( ssh, path )
 function main()
 {
    _init() ;
-   
+
    var sdbUser         = null ;
    var sdbPasswd       = null ;
    var sdbUserGroup    = null ;
@@ -623,7 +791,7 @@ function main()
       sdbUserGroup     = BUS_JSON[SdbUserGroup] ;
       installPacket    = BUS_JSON[InstallPacket] ;
       hostInfo         = BUS_JSON[HostInfo] ;
-  
+
       ip               = hostInfo[IP] ;
       RET_JSON[IP]     = ip ;
       user             = hostInfo[User] ;
@@ -658,7 +826,7 @@ function main()
                sprintf( errMsg + ", rc: ?, detail: ?", rc, GETLASTERRMSG() ) ) ;
       exception_handle( rc, errMsg ) ;
    }
-   
+
    // 2. judge whether it's in local host, if so, no need to install
    flag = isInLocalHost( ssh ) ;
    if ( flag )
@@ -668,16 +836,16 @@ function main()
       _final() ;
       return RET_JSON ;
    }
-   
+
    // 3. create temporary directory in remote host
    createTmpDir( ssh ) ;
-      
+
    // 4. push tool programs and js script files to target host for checking
    pushProgAndSpt( ssh, progs, spts ) ;
 
    // 5. check whether need to add current host or not
    flag = _needToAdd( ssh, installPacket, sdbUser, installPath, agentService ) ;
-   if ( false == flag ) 
+   if ( false == flag )
    {
       PD_LOG2( task_id, arguments, PDEVENT, FILE_NAME_ADD_HOST,
                sprintf( "The same kind of SequoiaDB has been installed" +
@@ -695,6 +863,7 @@ function main()
    }
    else
    {
+
       PD_LOG2( task_id, arguments, PDEVENT, FILE_NAME_ADD_HOST,
                sprintf( "Need to install SequoiaDB in target host[?]", ip ) ) ;
       PD_LOG2( task_id, arguments, PDEVENT, FILE_NAME_ADD_HOST,
@@ -704,11 +873,11 @@ function main()
 
    // 6. push db packet to remote host
    _pushDBPacket( ssh, installPacket ) ;
-   
+
    // 7. install db packet
    try
    {
-      _installDBPacket( ssh, sdbUser, sdbPasswd, agentService,
+      _installDBPacket( ssh, sdbUser, sdbPasswd, sdbUserGroup, agentService,
                         installPacket, installPath ) ;
    }
    catch ( e )
@@ -727,10 +896,10 @@ function main()
       {}
       exception_handle( rc, errMsg ) ;
    }
-   
+
    PD_LOG2( task_id, arguments, PDEVENT, FILE_NAME_ADD_HOST,
             sprintf( "Success to install SequoiaDB in target host[?]", ip ) ) ;
-   
+
    // 8. remove temporary directory in remote host
    try
    {
@@ -739,7 +908,7 @@ function main()
    catch( e )
    {
    }
-   
+
    _final() ;
    // return the result
    return RET_JSON ;

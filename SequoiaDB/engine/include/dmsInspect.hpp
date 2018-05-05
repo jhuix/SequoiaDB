@@ -75,8 +75,8 @@ namespace engine
                                        UINT32 inSize,
                                        CHAR * outBuf,
                                        UINT32 outSize,
-                                       SINT32 &pageSize,
-                                       SINT32 &pageNum,
+                                       UINT32 &pageSize,
+                                       UINT32 &pageNum,
                                        UINT64 &secretValue,
                                        SINT32 &err ) ;
 
@@ -85,7 +85,7 @@ namespace engine
                                     CHAR * outBuf,
                                     UINT32 outSize,
                                     const CHAR *expBuffer,
-                                    SINT32 pageNum,
+                                    UINT32 pageNum,
                                     SINT32 &hwmPages,
                                     SINT32 &err ) ;
 
@@ -109,7 +109,7 @@ namespace engine
                                    SINT32 &err ) ;
 
          static UINT32 inspectDataExtent ( _pmdEDUCB *cb,
-                                           void * inBuf,
+                                           CHAR * inBuf,
                                            UINT32 inSize,
                                            CHAR * outBuf,
                                            UINT32 outSize,
@@ -118,9 +118,10 @@ namespace engine
                                            dmsExtentID &nextExtent,
                                            set<dmsRecordID> *ridList,
                                            SINT32 &err,
-                                           utilCompressor *compressor = NULL,
-                                           utilCompressorContext compContext =
-                                             UTIL_INVALID_COMP_CTX ) ;
+                                           dmsCompressorEntry *compressorEntry,
+                                           UINT64 &recordNum,
+                                           UINT64 &compressedNum,
+                                           BOOLEAN capped = FALSE ) ;
 
          static UINT32 inspectDataRecord ( _pmdEDUCB *cb,
                                            void * inBuf,
@@ -131,9 +132,16 @@ namespace engine
                                            dmsOffset &nextRecord,
                                            set<dmsRecordID> *ridList,
                                            SINT32 &err,
-                                           utilCompressor *compressor = NULL,
-                                           utilCompressorContext compContext =
-                                             UTIL_INVALID_COMP_CTX ) ;
+                                           dmsCompressorEntry *compressorEntry,
+                                           BOOLEAN &isCompressed ) ;
+
+         static UINT32 inspectCappedDataRecord( pmdEDUCB *cb,
+                                                dmsCappedRecord *record,
+                                                CHAR *outBuf,
+                                                UINT32 outSize,
+                                                dmsOffset currentOffset,
+                                                SINT32 &err,
+                                                dmsCompressorEntry *compressorEntry ) ;
 
          static UINT32 inspectExtentHeader ( void * inBuf,
                                              UINT32 inSize,
@@ -189,6 +197,54 @@ namespace engine
                                             deque<dmsExtentID> &childExtents,
                                             SINT32 &err ) ;
 
+         static INT32 inspectNormalExtent( CHAR *inBuf, UINT32 inSize,
+                                           CHAR *outBuf, UINT32 outSize,
+                                           UINT16 collectionID,
+                                           dmsCompressorEntry *compressorEntry,
+                                           UINT64 &recordNum,
+                                           UINT64 &compressedNum,
+                                           INT32 &localErr,
+                                           set< dmsRecordID > *ridList,
+                                           pmdEDUCB *cb ) ;
+
+         static INT32 inspectCappedExtent( CHAR *inBuf, UINT32 inSize,
+                                           CHAR *outBuf, UINT32 outSize,
+                                           UINT16 collectionID,
+                                           dmsCompressorEntry *compressorEntry,
+                                           UINT64 &recordNum,
+                                           UINT64 &compressedNum,
+                                           INT32 &localErr,
+                                           pmdEDUCB *cb ) ;
+
+         static UINT32 inspectLobmHeader( void *inBuf, UINT32 inSize,
+                                         CHAR *outBuf, 
+                                         UINT32 outSize, 
+                                         UINT32 sequence,
+                                         UINT32 &pageNum,
+                                         UINT32 &lobmPageSize,
+                                         UINT64 secretValue,
+                                         INT64 fileSize, 
+                                         INT32 &totalErr);
+
+         static UINT32 inspectLobdHeader( void *inBuf, UINT32 inSize,
+                                         CHAR *outBuf,
+                                         UINT32 outSize, 
+                                         UINT32 sequence,
+                                         UINT64 secretValue,
+                                         INT64 fileSize, 
+                                         INT32 &totalErr);
+
+         static UINT32 inspectDmsLobMeta(dmsLobMeta *lobMeta,
+                                        CHAR * outBuf, 
+                                        UINT32 outSize, 
+                                        SINT32 &err);
+
+         static UINT32 inspectDmsLobDataMapBlk(dmsLobDataMapBlk *blk, 
+                                        CHAR * outBuf, 
+                                        UINT32 outSize, 
+                                        UINT16 clId, 
+                                        SINT32 &err);
+                
    } ;
    typedef _dmsInspect dmsInspect ;
 

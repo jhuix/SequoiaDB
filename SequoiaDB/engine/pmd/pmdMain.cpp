@@ -45,6 +45,9 @@
 #include "pdTrace.hpp"
 #include "pmdTrace.hpp"
 #include "pmdController.hpp"
+#include "rtnBackgroundJob.hpp"
+#include "pmdEnv.hpp"
+#include "pmdStartupHstLogger.hpp"
 
 using namespace std;
 using namespace bson;
@@ -76,7 +79,6 @@ namespace engine
       }
 
       rc = pmdGetOptionCB()->init( argc, argv, exePath ) ;
-      // if user only ask for help information, we simply return
       if ( SDB_PMD_HELP_ONLY == rc || SDB_PMD_VERSION_ONLY == rc )
       {
          PMD_SHUTDOWN_DB( SDB_OK ) ;
@@ -105,8 +107,8 @@ namespace engine
       INT32 rc = SDB_OK ;
       SDB_START_TYPE startType = SDB_START_NORMAL ;
       BOOLEAN bOk = TRUE ;
+      pmdStartupHstLogger *logger = pmdGetStartupHstLogger() ;
 
-      //analysis the start type
       rc = pmdGetStartup().init( pmdGetOptionCB()->getDbPath() ) ;
       PD_RC_CHECK( rc, PDERROR, "Start up check failed[rc:%d]", rc ) ;
 
@@ -116,60 +118,15 @@ namespace engine
               pmdGetStartTypeStr( startType ),
               bOk ? "normal" : "abnormal" ) ;
 
-      // Init qgm strategy table
       rc = getQgmStrategyTable()->init() ;
       PD_RC_CHECK( rc, PDERROR, "Init qgm strategy table failed, rc: %d",
                    rc ) ;
 
-   done:
-      return rc ;
-   error:
-      goto done ;
-   }
-
-   static INT32 _pmdPostInit()
-   {
-      INT32 rc = SDB_OK ;
-
-      if ( SDB_ROLE_STANDALONE == pmdGetDBRole() ||
-           SDB_ROLE_OM == pmdGetDBRole() )
+      rc = logger->init() ;
+      if ( SDB_OK == rc )
       {
-         pmdSetPrimary( TRUE ) ;
-
-         if ( !pmdGetStartup().isOK() )
-         {
-            SDB_DPSCB *pLog = sdbGetDPSCB() ;
-            DPS_LSN expectLSN = pLog->expectLsn() ;
-            if ( DPS_INVALID_LSN_OFFSET == expectLSN.offset ||
-                 0 == expectLSN.offset )
-            {
-               /// when rebuild, we can't move the dps to 0, because the new add
-               /// node will sync from lsn 0
-               expectLSN.offset = ossAlign4( (UINT32)sizeof( dpsLogRecordHeader ) ) ;
-            }
-            if ( DPS_INVALID_LSN_VERSION == expectLSN.version )
-            {
-               expectLSN.version = DPS_INVALID_LSN_VERSION + 1 ;
-            }
-
-            pmdEDUCB *cb = pmdGetThreadEDUCB() ;
-            rc = rtnRebuildDB( cb ) ;
-            PD_RC_CHECK( rc, PDERROR, "Failed to rebuild database, rc: %d",
-                         rc ) ;
-
-            // cut all dps
-            rc = pLog->move( 0, expectLSN.version ) ;
-            if ( rc )
-            {
-               PD_LOG( PDERROR, "Move dps to begin failed, rc: %d", rc ) ;
-               goto error ;
-            }
-            /// then move to non-zero
-            pLog->move( expectLSN.offset, expectLSN.version ) ;
-            PD_LOG( PDEVENT, "Clean dps logs succeed." ) ;
-            PD_LOG( PDEVENT, "Rebuild database succeed." ) ;
-            pmdGetStartup().ok( TRUE ) ;
-         }
+         PD_LOG( PDWARNING, "Failed to init start-up logger, rc: %d", rc );
+         rc = SDB_OK ;
       }
 
    done:
@@ -178,19 +135,55 @@ namespace engine
       goto done ;
    }
 
-   // based on millisecond
+   static void  _pmdOnRebuildEnd( INT32 rc )
+   {
+      if ( SDB_OK == rc )
+      {
+         pmdGetKRCB()->callPrimaryChangeHandler( TRUE,
+                                                 SDB_EVT_OCCUR_BEFORE ) ;
+         pmdSetPrimary( TRUE ) ;
+         pmdGetKRCB()->callPrimaryChangeHandler( TRUE,
+                                                 SDB_EVT_OCCUR_AFTER ) ;
+      }
+      else
+      {
+         PMD_SHUTDOWN_DB( rc ) ;
+      }
+   }
+
+   static INT32 _pmdPostInit()
+   {
+      if ( SDB_ROLE_STANDALONE == pmdGetDBRole() ||
+           SDB_ROLE_OM == pmdGetDBRole() )
+      {
+         if ( !pmdGetStartup().isOK() )
+         {
+            rtnStartRebuildJob( (RTN_ON_REBUILD_DONE_FUNC)_pmdOnRebuildEnd ) ;
+         }
+         else
+         {
+            pmdGetKRCB()->callPrimaryChangeHandler( TRUE,
+                                                    SDB_EVT_OCCUR_BEFORE ) ;
+            pmdSetPrimary( TRUE ) ;
+            pmdGetKRCB()->callPrimaryChangeHandler( TRUE,
+                                                    SDB_EVT_OCCUR_AFTER ) ;
+         }
+      }
+
+      return SDB_OK ;
+   }
+
    #define PMD_START_WAIT_TIME         ( 60000 )
 
    // PD_TRACE_DECLARE_FUNCTION ( SDB_PMDMSTTHRDMAIN, "pmdMasterThreadMain" )
    INT32 pmdMasterThreadMain ( INT32 argc, CHAR** argv )
    {
-      INT32      rc       = SDB_OK ;
+      INT32 rc                             = SDB_OK ;
       PD_TRACE_ENTRY ( SDB_PMDMSTTHRDMAIN );
-      pmdKRCB   *krcb     = pmdGetKRCB () ;
-      UINT32     startTimerCount = 0 ;
-      CHAR      verText[ OSS_MAX_PATHSIZE + 1 ] = { 0 } ;
+      pmdKRCB *krcb                        = pmdGetKRCB () ;
+      UINT32 startTimerCount               = 0 ;
+      CHAR verText[ OSS_MAX_PATHSIZE + 1 ] = { 0 } ;
 
-      // 1. read command line first
       rc = pmdResolveArguments ( argc, argv ) ;
       if ( rc )
       {
@@ -203,11 +196,9 @@ namespace engine
          return rc ;
       }
 
-      // 2. enalble pd log
       sdbEnablePD( pmdGetOptionCB()->getDiagLogPath(),
                    pmdGetOptionCB()->diagFileNum() ) ;
       setPDLevel( (PDLEVEL)( pmdGetOptionCB()->getDiagLevel() ) ) ;
-      // enalble pd audit
       sdbEnableAudit( pmdGetOptionCB()->getAuditLogPath(),
                       pmdGetOptionCB()->auditFileNum() ) ;
       setAuditMask( pmdGetOptionCB()->auditMask() ) ;
@@ -220,57 +211,39 @@ namespace engine
                "Start sequoiadb(%s) [%s]...",
                pmdGetOptionCB()->krcbRole(), verText ) ;
 
-      // 3. printf all configs
       {
          BSONObj confObj ;
          krcb->getOptionCB()->toBSON( confObj ) ;
          PD_LOG( PDEVENT, "All configs: %s", confObj.toString().c_str() ) ;
       }
 
-      // 4. dump limit info
       {
-         ossProcLimits limitInfo ;
-         rc = limitInfo.init() ;
-         if ( SDB_SYS == rc )
+         PD_LOG( PDEVENT, "dump limit info:\n%s",
+                 pmdGetLimit()->str().c_str() ) ;
+         INT64 sort = -1 ;
+         INT64 hard = -1 ;
+         if ( !pmdGetLimit()->getLimit( OSS_LIMIT_VIRTUAL_MEM, sort, hard ) )
          {
-            /// the system not implement, do nothing
+            PD_LOG( PDWARNING, "can not get limit of memory space!" ) ;
          }
-         else if ( SDB_OK != rc )
+         else if ( -1 != sort || -1 != hard )
          {
-            PD_LOG( PDWARNING, "can not init limit info:%d", rc ) ;
-         }
-         else
-         {
-            PD_LOG( PDEVENT, "dump limit info:\n%s", limitInfo.str().c_str() ) ;
-            INT64 sort = -1 ;
-            INT64 hard = -1 ;
-            if ( !limitInfo.getLimit( OSS_LIMIT_VIRTUAL_MEM, sort, hard ) )
-            {
-               PD_LOG( PDWARNING, "can not get limit of memory space!" ) ;
-            }
-            else if ( -1 != sort || -1 != hard )
-            {
-               PD_LOG( PDWARNING, "virtual memory is not unlimited!" ) ;
-            }
+            PD_LOG( PDWARNING, "virtual memory is not unlimited!" ) ;
          }
       }
 
-      // 5. handlers and init global mem
       rc = pmdEnableSignalEvent( pmdGetOptionCB()->getDiagLogPath(),
                                  (PMD_ON_QUIT_FUNC)pmdOnQuit ) ;
       PD_RC_CHECK ( rc, PDERROR, "Failed to enable trap, rc: %d", rc ) ;
 
-      // 6. register cbs
       sdbGetPMDController()->registerCB( pmdGetDBRole() ) ;
 
-      // 7. system init
       rc = _pmdSystemInit() ;
       if ( rc )
       {
          goto error ;
       }
 
-      // 8. inti krcb
       rc = krcb->init() ;
       if ( rc )
       {
@@ -278,14 +251,12 @@ namespace engine
          goto error ;
       }
 
-      // 9. post init
       rc = _pmdPostInit() ;
       if ( rc )
       {
          goto error ;
       }
 
-      // wait until all daemon threads start
       while ( PMD_IS_DB_UP() && startTimerCount < PMD_START_WAIT_TIME &&
               !krcb->isBusinessOK() )
       {
@@ -307,13 +278,9 @@ namespace engine
       {
          EDUID agentEDU = PMD_INVALID_EDUID ;
          pmdEDUMgr *eduMgr = pmdGetKRCB()->getEDUMgr() ;
-         // Then start pipe listener for "fast status check" service
-         // Note this listener doesn't need to authenticate
-         // It's only valid for status check, not for any status change
          eduMgr->startEDU ( EDU_TYPE_PIPESLISTENER,
                             (void*)pmdGetOptionCB()->getServiceAddr(),
                             &agentEDU ) ;
-         eduMgr->regSystemEDU ( EDU_TYPE_PIPESLISTENER, agentEDU ) ;
 
          rc = eduMgr->waitUntil( agentEDU, PMD_EDU_RUNNING ) ;
          PD_RC_CHECK( rc, PDERROR, "Wait pipe listener to running "
@@ -322,21 +289,16 @@ namespace engine
 
 #if defined (_LINUX)
       {
-         // once all threads starts ( especially we need to make sure the
-         // TcpListener thread is successfully started ), we can rename the
-         // process. Otherwise if TcpListener failed
          CHAR pmdProcessName [ OSS_RENAME_PROCESS_BUFFER_LEN + 1 ] = {0} ;
          ossSnprintf ( pmdProcessName, OSS_RENAME_PROCESS_BUFFER_LEN,
                        "%s(%s) %s", utilDBTypeStr( pmdGetDBType() ),
                        pmdGetOptionCB()->getServiceAddr(),
                        utilDBRoleShortStr( pmdGetDBRole() ) ) ;
-         // rename the process to append port number and service type
          ossEnableNameChanges ( argc, argv ) ;
          ossRenameProcess ( pmdProcessName ) ;
       }
 #endif // _LINUX
 
-      // Now master thread get into big loop and check shutdown flag
       while ( PMD_IS_DB_UP() )
       {
          ossSleepsecs ( 1 ) ;

@@ -38,13 +38,14 @@
 #include "omDef.hpp"
 #include "omagentDef.hpp"
 
-// business type
-#define OMA_BUS_TYPE_SEQUOIADB OM_BUSINESS_SEQUOIADB
-#define OMA_BUS_TYPE_ZOOKEEPER OM_BUSINESS_ZOOKEEPER
-#define OMA_BUS_TYPE_SPARK     OM_BUSINESS_SPARK
-#define OMA_BUS_TYPE_HDFS      OM_BUSINESS_HDFS
+#define OMA_BUS_TYPE_SEQUOIADB         OM_BUSINESS_SEQUOIADB
+#define OMA_BUS_TYPE_ZOOKEEPER         OM_BUSINESS_ZOOKEEPER
+#define OMA_BUS_TYPE_SEQUOIASQL_OLAP   OM_BUSINESS_SEQUOIASQL_OLAP
+#define OMA_BUS_TYPE_SEQUOIASQL_OLTP   OM_BUSINESS_SEQUOIASQL_OLTP
+#define OMA_BUS_TYPE_SEQUOIASQL        OM_BUSINESS_SEQUOIASQL
+#define OMA_BUS_TYPE_SPARK             OM_BUSINESS_SPARK
+#define OMA_BUS_TYPE_HDFS              OM_BUSINESS_HDFS
 
-// field
 #define OMA_FIELD_HOSTINFO                         "HostInfo" /* OM_REST_FIELD_HOST_INFO */
 #define OMA_FIELD_SSH_PORT                         "SshPort" /* OM_BSON_FIELD_HOST_SSHPORT */
 #define OMA_FIELD_AGENT_PORT                       "AgentPort" /* OM_BSON_FIELD_AGENT_PORT */
@@ -56,6 +57,7 @@
 #define OMA_FIELD_TRANSACTION_ID                   "TransactionID" /* OM_BSON_FIELD_TRANSACTION_ID */
 #define OMA_FIELD_PACKET_PATH                      "PacketPath"
 #define OMA_FIELD_CONFIG                           "Config" /* OM_CONFIGURE_FIELD_CONFIG */
+#define OMA_FIELD_PACKAGES                         "Packages"
 
 #define OMA_FIELD_ZOOID3                           "zooid"
 #define OMA_FIELD_INSTALLPATH3                     "installpath"
@@ -79,6 +81,7 @@
 #define OMA_FIELD_IP                               "IP"
 #define OMA_FIELD_IP2                              "Ip"
 #define OMA_FIELD_INFO                             "Info"
+#define OMA_FIELD_OMA                              "OMA"
 
 
 #define OMA_FIELD_PING                             "Ping"
@@ -88,7 +91,6 @@
 #define OMA_FIELD_AGENT_IS_RUNNING                 "IsRunning"
 #define OMA_FIELD_INSTALL_PATH                     "InstallPath"
 
-#define OMA_FIELD_RC                               "Rc"
 #define OMA_FIELD_ERRNO                            "errno"
 #define OMA_FIELD_DETAIL                           "detail"
 #define OMA_FIELD_HASRUNNING                       "HasRunning"
@@ -159,7 +161,6 @@
 #define OMA_FIELD_USERTAG2                         "usertag"
 #define OMA_FIELD_USERTAG3                         "usertag"
 
-// host info
 #define OMA_FIELD_HOST                             "Host"
 #define OMA_FIELD_OS                               "OS"
 #define OMA_FIELD_OM                               "OM"
@@ -172,45 +173,37 @@
 #define OMA_FIELD_NET                              "Net"
 #define OMA_FIELD_NETCARDS                         "Netcards"
 #define OMA_FIELD_PORT                             "Port"
+#define OMA_FIELD_PORT2                            "port"
 #define OMA_FIELD_SERVICE                          "Service"
 #define OMA_FIELD_SAFETY                           "Safety"
 #define OMA_FIELD_SERVERINFO                       "ServerInfo"
 
-// om
 #define OMA_FIELD_VERSION                          "Version"
 #define OMA_FIELD_PATH                             "Path"
 
-// memory
 #define OMA_FIELD_SIZE                             "Size"
 #define OMA_FIELD_MODEL                            "Model"
 #define OMA_FIELD_FREE                             "Free"
 #define OMA_FIELD_UNIT                             "Unit"
 
-// Disk
 #define OMA_FIELD_NAME                             "Name"
 #define OMA_FIELD_FILESYSTEM                       "Filesystem"
 #define OMA_FIELD_MOUNT                            "Mount"
 #define OMA_FIELD_ISLOCAL                          "IsLocal"
 #define OMA_FIELD_USED                             "Used"
 
-// cpu
 #define OMA_FIELD_ID                               "ID"
 #define OMA_FIELD_CORE                             "Core"
 #define OMA_FIELD_MODEL                            "Model"
 #define OMA_FIELD_FREQ                             "Freq"
 
-// net
 #define OMA_FIELD_BANDWIDTH                        "Bandwidth"
 
-// port
 #define OMA_FIELD_STATUS                           "Status"
 
-// service
 
-// safety
 #define OMA_FIELD_CONTEXT                          "Context"
 
-// ssql exec
 #define OMA_FIELD_DBUSER                           "DbUser"
 #define OMA_FIELD_DBPASSWD                         "DbPasswd"
 #define OMA_FIELD_DBNAME                           "DbName"
@@ -222,13 +215,10 @@
 #define OMA_FIELD_ROWNUM                           "RowNum"
 #define OMA_FIELD_ROWVALUE                         "Value"
 
-// business
 
 
-// install db business result
 
 
-// config file
 #define OMA_OPTION_DATAGROUPNAME                   "datagroupname"
 #define OMA_OPTION_HELP                            PMD_OPTION_HELP
 #define OMA_OPTION_VERSION                         PMD_OPTION_VERSION
@@ -268,6 +258,7 @@
 #define OMA_OPTION_TRACEON                         PMD_OPTION_TRACEON
 #define OMA_OPTION_TRACEBUFSZ                      PMD_OPTION_TRACEBUFSZ
 #define OMA_OPTION_SHARINGBRK                      PMD_OPTION_SHARINGBRK
+#define OMA_OPTION_DMS_CHK_INTERVAL                PMD_OPTION_DMS_CHK_INTERVAL
 #define OMA_OPTION_INDEX_SCAN_STEP                 PMD_OPTION_INDEX_SCAN_STEP
 #define OMA_OPTION_START_SHIFT_TIME                PMD_OPTION_START_SHIFT_TIME
 #define OMA_OPTION_PREFINST                        PMD_OPTION_PREFINST

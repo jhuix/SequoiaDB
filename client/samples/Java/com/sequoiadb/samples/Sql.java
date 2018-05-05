@@ -48,9 +48,13 @@ public class Sql {
 			sdb.execUpdate(sql);
 			// select from table
 			sql = "select * from " + csFullName;
-			DBCursor cursor = sdb.exec(sql);
-			while(cursor.hasNext())
-				System.out.println(cursor.getNext());
+			DBCursor cursor = cursor = sdb.exec(sql);
+			try {
+				while(cursor.hasNext())
+					System.out.println(cursor.getNext());
+			} finally {
+				cursor.close();
+			}
 		} catch (BaseException e) {
 			e.printStackTrace();
 		}

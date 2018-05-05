@@ -18,15 +18,15 @@
  *    Win:
  *       cl /Foinsert.obj /c insert.c /I..\..\include /wd4047
  *       cl /Focommon.obj /c common.c /I..\..\include /wd4047
- *       link /OUT:insert.exe /LIBPATH:..\..\lib sdbc.lib insert.obj common.obj
- *       copy ..\..\lib\sdbc.dll .
+ *       link /OUT:insert.exe /LIBPATH:..\..\lib\c\debug\dll sdbcd.lib insert.obj common.obj
+ *       copy ..\..\lib\c\debug\dll\sdbcd.dll .
  *    Static Linking:
  *    Linux: cc insert.c common.c -o insert.static -I../../include -O0
  *           -ggdb ../../lib/libstaticsdbc.a -lm -ldl -lpthread
  *    Win:
  *       cl /Foinsertstatic.obj /c insert.c /I..\..\include /wd4047 /DSDB_STATIC_BUILD
  *       cl /Focommonstatic.obj /c common.c /I..\..\include /wd4047 /DSDB_STATIC_BUILD
- *       link /OUT:insertstatic.exe /LIBPATH:..\..\lib staticsdbc.lib insertstatic.obj commonstatic.obj
+ *       link /OUT:insertstatic.exe /LIBPATH:..\..\lib\c\debug\static staticsdbcd.lib insertstatic.obj commonstatic.obj
  * Run:
  *    Linux: LD_LIBRARY_PATH=<path for libsdbc.so> ./insert <hostname> <servicename> \
  *           <Username> <Username>
@@ -61,6 +61,7 @@ INT32 main ( INT32 argc, CHAR **argv )
    // define local variables
    // initialize them before use
    bson obj ;
+   bson_decimal decimal ;
    INT32 rc = SDB_OK ;
 
    // read argument
@@ -106,6 +107,12 @@ INT32 main ( INT32 argc, CHAR **argv )
    bson_init( &obj ) ;
    bson_append_string( &obj, "name", "tom" ) ;
    bson_append_int( &obj, "age", 24 ) ;
+   decimal_init( &decimal ) ;
+   rc = decimal_from_str( "1.234", &decimal ) ;
+   CHECK_RC ( rc, "Failed to get decimal from str" ) ;
+   rc = bson_append_decimal( &obj, "score", &decimal ) ;
+   CHECK_RC ( rc, "Failed to append decimal" ) ;
+   decimal_free( &decimal ) ;
    rc = bson_finish( &obj ) ;
    CHECK_RC ( rc, "Failed to build bson" ) ;
 
@@ -140,6 +147,7 @@ INT32 main ( INT32 argc, CHAR **argv )
    }
 
 done:
+   bson_destroy( &obj ) ;
    // disconnect the connection
    sdbDisconnect ( connection ) ;
    // release the local variables

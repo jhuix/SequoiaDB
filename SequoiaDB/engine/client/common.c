@@ -39,16 +39,23 @@
 #include "ossUtil.h"
 #include "msgCatalogDef.h"
 #include "oss.h"
+#include "msg.h"
 #include "../bson/lib/md5.h"
 
 #ifndef offsetof
 #define offsetof(TYPE, MEMBER) ((size_t) &((TYPE *)0)->MEMBER)
 #endif
+#define CACHED_CHECK_TIME_INTERVAL 300
+#define MAX_CACHE_SLOT_NUMBER      1000
+#define CLINET_CS_NAME_SIZE        300
 
 static const INT32 clientDefaultVersion = 1 ;
 static const INT16 clientDefaultW = 0 ;
 static const UINT64 clientDefaultRouteID = 0 ;
 static const SINT32 clientDefaultFlags = 0 ;
+static BOOLEAN cacheEnabled = TRUE ;
+static UINT32  cachedTimeInterval = 300 ;   // default is 300 seconds
+static UINT32  maxCachedSlotCount = 1000 ;
 static INT32 clientCheckBuffer ( CHAR **ppBuffer, INT32 *bufferSize,
                            INT32 packetLength )
 {
@@ -82,29 +89,18 @@ error :
 
 static BOOLEAN bson_endian_convert ( CHAR *data, off_t *off, BOOLEAN l2r )
 {
-   // object size after conversion
    INT32 objaftersize = 0 ;
-   // object size before conversion
    INT32 objbeforesize = *(INT32*)&data[*off] ;
-   // offset before conversion, this is used for sanity check by end of function
    off_t beginOff = *off ;
    INT32 objrealsize = 0 ;
-   // convert from before size to after-size
    ossEndianConvert4 ( objbeforesize, objaftersize ) ;
-   // assign size to after-size
    *(INT32*)&data[*off] = objaftersize ;
-   // the real size
    objrealsize = l2r?objbeforesize:objaftersize ;
-   // increase offset by 4
    *off += sizeof(INT32) ;
-   // loop until hitting '\0; for end of bson
    while ( BSON_EOO != data[*off] )
    {
-      // get bson element type
       CHAR type = data[*off] ;
-      // move offset to next in order to skip type
       *off += sizeof(CHAR) ;
-      // skip element name, note element name is a string ended up with '\0'
       *off += ossStrlen ( &data[*off] ) + 1 ;
       switch ( type )
       {
@@ -120,13 +116,10 @@ static BOOLEAN bson_endian_convert ( CHAR *data, off_t *off, BOOLEAN l2r )
       case BSON_CODE :
       case BSON_SYMBOL :
       {
-         // for those 3 types, there are 4 bytes length plus a string
-         // the length is the length of string plus '\0'
          INT32 len = *(INT32*)&data[*off] ;
          INT32 newlen = 0 ;
          ossEndianConvert4 ( len, newlen ) ;
          *(INT32*)&data[*off] = newlen ;
-         // 4 for length, then string with '\0'
          *off += sizeof(INT32) + (l2r?len:newlen) ;
          break ;
       }
@@ -140,13 +133,10 @@ static BOOLEAN bson_endian_convert ( CHAR *data, off_t *off, BOOLEAN l2r )
       }
       case BSON_BINDATA :
       {
-         // for bindata, there are 4 bytes length, 1 byte subtype and data
-         // note length is the real length of data
          INT32 len = *(INT32*)&data[*off] ;
          INT32 newlen ;
          ossEndianConvert4 ( len, newlen ) ;
          *(INT32*)&data[*off] = newlen ;
-         // 4 for length, 1 for subtype, then data
          *off += sizeof(INT32) + sizeof(CHAR) + (l2r?len:newlen) ;
          break ;
       }
@@ -155,18 +145,15 @@ static BOOLEAN bson_endian_convert ( CHAR *data, off_t *off, BOOLEAN l2r )
       case BSON_MINKEY :
       case BSON_MAXKEY :
       {
-         // nothing in those types
          break ;
       }
       case BSON_OID :
       {
-         // do we need to do conversion for this one? let's skip it first
          *off += 12 ;
          break ;
       }
       case BSON_BOOL :
       {
-         // one byte for true or false
          *off += 1 ;
          break ;
       }
@@ -181,41 +168,33 @@ static BOOLEAN bson_endian_convert ( CHAR *data, off_t *off, BOOLEAN l2r )
       }
       case BSON_REGEX :
       {
-         // two cstring, each with string
-         // for regex
          *off += ossStrlen ( &data[*off] ) + 1 ;
-         // for options
          *off += ossStrlen ( &data[*off] ) + 1 ;
          break ;
       }
       case BSON_DBREF :
       {
-         // dbref is 4 bytes lenth + string + 12 bytes
          INT32 len = *(INT32*)&data[*off] ;
          INT32 newlen = 0 ;
          ossEndianConvert4 ( len, newlen ) ;
          *(INT32*)&data[*off] = newlen ;
-         // 4 for length, then string, note len already included '\0' ;
          *off += sizeof(INT32) + (l2r?len:newlen) ;
          *off += 12 ;
          break ;
       }
       case BSON_CODEWSCOPE :
       {
-         // 4 bytes and 4 bytes + string, then obj
          INT32 value = 0 ;
          INT32 len, newlen ;
          BOOLEAN rc ;
          ossEndianConvert4 ( *(INT32*)&data[*off], value ) ;
          *(INT32*)&data[*off] = value ;
          *off += sizeof(INT32) ;
-         // then string
          len = *(INT32*)&data[*off] ;
          newlen = 0 ;
          ossEndianConvert4 ( len, newlen ) ;
          *(INT32*)&data[*off] = newlen ;
          *off += sizeof(INT32) + (l2r?len:newlen) ;
-         // then object
          rc = bson_endian_convert ( &data[*off], off, l2r ) ;
          if ( !rc )
             return rc ;
@@ -231,7 +210,6 @@ static BOOLEAN bson_endian_convert ( CHAR *data, off_t *off, BOOLEAN l2r )
       }
       case BSON_TIMESTAMP :
       {
-         // timestamp is with 2 4-bytes
          INT32 value = 0 ;
          ossEndianConvert4 ( *(INT32*)&data[*off], value ) ;
          *(INT32*)&data[*off] = value ;
@@ -249,13 +227,659 @@ static BOOLEAN bson_endian_convert ( CHAR *data, off_t *off, BOOLEAN l2r )
          *off += sizeof(INT64) ;
          break ;
       }
+      case BSON_DECIMAL :
+      {
+         INT32 size    = 0 ;
+         INT32 newSize = 0 ;
+         INT32 value4  = 0 ;
+         INT16 value2  = 0 ;
+         INT32 i       = 0 ;
+         INT32 ndigits = 0 ;
+         size = *(INT32*)&data[*off] ;
+         ossEndianConvert4 ( size, newSize ) ;
+         *(INT32*)&data[*off] = newSize ;
+         *off += sizeof(INT32) ;
+
+         ossEndianConvert4 ( *(INT32*)&data[*off], value4 ) ;
+         *(INT32*)&data[*off] = value4 ;
+         *off += sizeof(INT32) ;
+
+         ossEndianConvert2 ( *(INT16*)&data[*off], value2 ) ;
+         *(INT16*)&data[*off] = value2 ;
+         *off += sizeof(INT16) ;
+
+         ossEndianConvert2 ( *(INT16*)&data[*off], value2 ) ;
+         *(INT16*)&data[*off] = value2 ;
+         *off += sizeof(INT16) ;
+
+         ndigits = ( ( l2r?size:newSize ) - DECIMAL_HEADER_SIZE ) / 
+                   ( sizeof( INT16 ) ) ;
+         for ( i = 0 ; i < ndigits; i++ )
+         {
+            ossEndianConvert2 ( *(INT16*)&data[*off], value2 ) ;
+            *(INT16*)&data[*off] = value2 ;
+            *off += sizeof(INT16) ;
+         }
+      }
       } // switch
    } // while ( BSON_EOO != data[*off] )
-   // jump off BSON_EOO at end of bson
    *off += sizeof(CHAR) ;
    if ( *off - beginOff != objrealsize )
       return FALSE ;
    return TRUE ;
+}
+
+INT32 hash_table_create_node( const CHAR *key, htbNode **node )
+{
+   INT32 rc = SDB_OK ;
+   CHAR *ptr =  NULL ;
+
+   if ( NULL == key )
+   {
+      goto done ;
+   }
+
+   ptr = ( CHAR * )SDB_OSS_MALLOC( sizeof( htbNode ) ) ;
+   if ( NULL == ptr )
+   {
+      rc = SDB_OOM ;
+      goto error ;
+   }
+
+   *node = ( htbNode *)ptr ;
+
+   ptr = ( CHAR * )SDB_OSS_MALLOC( ossStrlen( key ) + 1 ) ;
+   if ( NULL == ptr )
+   {
+      rc = SDB_OOM ;
+      goto error ;
+   }
+   ossStrcpy( ptr, key ) ;
+   (*node)->name = ptr ;
+
+done:
+   return rc ;
+error:
+   if ( NULL != (*node)->name )
+   {
+      SDB_OSS_FREE( (*node)->name ) ;
+      (*node)->name = NULL ;
+   }
+   if ( NULL != *node )
+   {
+      SDB_OSS_FREE( *node ) ;
+      *node = NULL ;
+   }
+   goto done ;
+}
+
+INT32 hash_table_destroy_node( htbNode **node )
+{
+   if ( NULL == node || NULL == *node )
+   {
+      goto done ;
+   }
+
+   if ( NULL != (*node)->name )
+   {
+      SDB_OSS_FREE( (*node)->name ) ;
+      (*node)->name = NULL ;
+   }
+   SDB_OSS_FREE ( *node ) ;
+   *node = NULL ;
+
+done:
+   return SDB_OK ;
+}
+
+INT32 hash_table_insert( hashTable *tb, htbNode *node )
+{
+   UINT32 hashV = 0 ;
+   UINT32 locate = 0 ;
+
+   if ( NULL == tb || NULL == tb->node )
+   {
+      goto done ;
+   }
+
+   if ( NULL == node )
+   {
+      goto done ;
+   }
+
+   if ( NULL == node->name )
+   {
+      goto done ;
+   }
+
+   hashV = ossHash( node->name, ossStrlen( node->name ) ) ;
+   locate = hashV % tb->capacity ;
+
+   if ( NULL != tb->node[ locate ] )
+   {
+      htbNode *toFree = tb->node[ locate ] ;
+      hash_table_destroy_node( &toFree ) ;
+   }
+
+   tb->node[ locate ] = node ;
+
+done:
+   return SDB_OK ;
+}
+
+INT32 hash_table_remove( hashTable *tb, const CHAR *key, BOOLEAN dropCS )
+{
+   UINT32 hashV = 0 ;
+   UINT32 locate = 0 ;
+   UINT32 index = 0 ;
+
+   if ( NULL == tb || NULL == tb->node )
+   {
+      goto done ;
+   }
+
+   if ( NULL == key )
+   {
+      goto done ;
+   }
+
+   if ( !dropCS )
+   {
+      hashV = ossHash( key, strlen( key ) ) ;
+      locate = hashV % tb->capacity ;
+
+      if ( NULL != tb->node[ locate ] )
+      {
+         htbNode *toFree = tb->node[ locate ] ;
+         if ( NULL == tb->node[ locate ]->name ||
+              0 == ossStrncmp( toFree->name, key, ossStrlen( key ) ) )
+         {
+            hash_table_destroy_node( &toFree ) ;
+            tb->node[ locate ] = NULL ;
+         }
+      }
+   }
+   else
+   {
+      for ( ; index < tb->capacity ; ++index )
+      {
+         htbNode *toFree = tb->node[ index ] ;
+         if ( NULL != toFree )
+         {
+            if ( NULL == tb->node[ index ]->name ||
+                 0 == ossStrncmp( toFree->name, key, ossStrlen( key ) ) )
+            {
+               hash_table_destroy_node( &toFree ) ;
+               tb->node[ index ] = NULL ;
+            }
+         }
+      }
+   }
+
+done:
+   return SDB_OK ;
+}
+
+INT32 hash_table_fetch( hashTable *tb, const CHAR *key, htbNode **node )
+{
+   UINT32 hashV = 0 ;
+   UINT32 locate = 0 ;
+
+   if ( NULL == tb || NULL == tb->node )
+   {
+      goto done ;
+   }
+
+   if ( NULL == key )
+   {
+      goto done ;
+   }
+
+   hashV = ossHash( key, strlen( key ) ) ;
+   locate = hashV % tb->capacity ;
+
+   if (   NULL != tb->node[ locate ] &&
+        ( NULL != tb->node[ locate ]->name &&
+          0 == ossStrncmp( tb->node[ locate ]->name, key, strlen( key ) ) ) )
+   {
+      *node = tb->node[ locate ] ;
+   }
+   else
+   {
+      *node = NULL ;
+   }
+
+done:
+   return SDB_OK ;
+}
+
+INT32 hash_table_create( hashTable **tb, const UINT32 bucketSize )
+{
+   INT32 rc = SDB_OK ;
+   CHAR *ptr = NULL ;
+
+   if ( !cacheEnabled )
+   {
+      goto done ;
+   }
+
+   if ( NULL == tb )
+   {
+      goto done ;
+   }
+
+   ptr = ( CHAR * )SDB_OSS_MALLOC( sizeof(hashTable) ) ;
+   if ( NULL == ptr )
+   {
+      rc = SDB_OOM ;
+      goto error ;
+   }
+   *tb = ( hashTable * )ptr ;
+   (*tb)->capacity = bucketSize ;
+
+   ptr = ( CHAR * )SDB_OSS_MALLOC( sizeof(htbNode *) * bucketSize ) ;
+   if ( NULL == ptr )
+   {
+      rc = SDB_OOM ;
+      goto error ;
+   }
+   ossMemset( ptr, 0, sizeof(htbNode *) * bucketSize ) ;
+   (*tb)->node = (htbNode **)ptr ;
+
+done:
+   return rc ;
+error:
+   if ( NULL != (*tb)->node )
+   {
+      SDB_OSS_FREE( (*tb)->node ) ;
+      (*tb)->node = NULL ;
+   }
+
+   if ( NULL != (*tb) )
+   {
+      SDB_OSS_FREE( *tb ) ;
+      *tb = NULL ;
+   }
+
+   goto done ;
+}
+
+INT32 hash_table_destroy( hashTable **tb )
+{
+   UINT32 idx = 0 ;
+   if ( !cacheEnabled )
+   {
+      goto done ;
+   }
+
+   if ( NULL == tb )
+   {
+      goto done ;
+   }
+
+   if ( NULL == *tb )
+   {
+      goto done ;
+   }
+
+   for ( ; idx < (*tb)->capacity ; ++idx )
+   {
+      htbNode *node = ( htbNode * )( (*tb)->node[ idx ] ) ;
+      if ( NULL != node )
+      {
+         hash_table_destroy_node( &node ) ;
+      }
+   }
+
+   SDB_OSS_FREE( (*tb)->node ) ;
+   SDB_OSS_FREE( *tb ) ;
+   (*tb) = NULL ;
+
+done:
+   return SDB_OK ;
+}
+
+INT32 insertCachedObject( hashTable *tb, const CHAR *key )
+{
+   INT32 rc       = SDB_OK ;
+   htbNode *node  = NULL ;
+   UINT64 curTime = 0 ;
+
+   if ( !cacheEnabled )
+   {
+      goto done ;
+   }
+
+   if ( NULL == tb )
+   {
+      goto done ;
+   }
+
+   if ( NULL == key )
+   {
+      rc = SDB_INVALIDARG ;
+      goto error ;
+   }
+
+   rc = hash_table_create_node( key, &node ) ;
+   if ( SDB_OK != rc )
+   {
+      goto error ;
+   }
+
+   if ( NULL == node )
+   {
+      rc = SDB_INVALIDARG ;
+      goto error ;
+   }
+
+   curTime = (UINT64)time( NULL ) ;
+   node->lastTime = curTime ;
+
+   rc = hash_table_insert( tb, node ) ;
+   if ( SDB_OK != rc )
+   {
+      goto error ;
+   }
+
+done:
+   return rc ;
+error:
+   if ( NULL == node )
+   {
+      hash_table_destroy_node( &node ) ;
+   }
+   goto done ;
+}
+
+INT32 removeCachedObject( hashTable *tb, const CHAR *key, BOOLEAN dropCS )
+{
+   INT32 rc = SDB_OK ;
+
+   if ( !cacheEnabled )
+   {
+      goto done ;
+   }
+
+   if ( NULL == tb )
+   {
+      goto done ;
+   }
+
+   if ( NULL == key )
+   {
+      rc = SDB_INVALIDARG ;
+      goto error ;
+   }
+
+   rc = hash_table_remove( tb, key, dropCS ) ;
+   if ( SDB_OK != rc )
+   {
+      goto error ;
+   }
+
+done:
+   return rc ;
+error:
+   goto done ;
+}
+
+BOOLEAN fetchCachedObject( hashTable *tb, const CHAR *key )
+{
+   INT32 rc       = SDB_OK ;
+   htbNode *node  = NULL ;
+   UINT64 curTime = 0 ;
+
+   if ( !cacheEnabled )
+   {
+      rc = SDB_INVALIDARG ;
+      goto error ;
+   }
+
+   if ( NULL == tb )
+   {
+      goto done ;
+   }
+
+   if ( NULL == key )
+   {
+      rc = SDB_INVALIDARG ;
+      goto error ;
+   }
+
+   rc = hash_table_fetch( tb, key, &node ) ;
+   if ( SDB_OK != rc )
+   {
+      goto error ;
+   }
+
+   curTime = (UINT64)time( NULL ) ;
+   if ( NULL != node && curTime - node->lastTime < cachedTimeInterval )
+   {
+
+   }
+   else
+   {
+      rc = SDB_INVALIDARG ;
+   }
+
+done:
+   return ( SDB_OK == rc ) ;
+error:
+   goto done ;
+}
+
+INT32 updateCachedObject( const INT32 code, hashTable *tb, const CHAR *key )
+{
+   INT32 rc       = SDB_OK ;
+   htbNode *node  = NULL ;
+   UINT64 curTime = 0 ;
+   CHAR *pos      = NULL ;
+   CHAR csName[ CLINET_CS_NAME_SIZE + 1 ] = { 0 } ;
+
+   if ( !cacheEnabled )
+   {
+      goto done ;
+   }
+
+   if ( NULL == tb )
+   {
+      goto done ;
+   }
+
+   if ( NULL == key )
+   {
+      rc = SDB_INVALIDARG ;
+      goto error ;
+   }
+
+   if ( SDB_DMS_NOTEXIST == code )
+   {
+      removeCachedObject( tb, key, FALSE ) ;
+   }
+   else if ( SDB_DMS_CS_NOTEXIST == code )
+   {
+      pos = ossStrchr( key, '.' ) ;
+      if ( NULL != pos )
+      {
+         UINT32 csLen = pos - key ;
+         if ( csLen > CLINET_CS_NAME_SIZE )
+         {
+            csLen = CLINET_CS_NAME_SIZE ;
+         }
+         ossStrncpy( csName, key, csLen ) ;
+      }
+      else
+      {
+         ossStrncpy( csName, key, CLINET_CS_NAME_SIZE ) ;
+      }
+      removeCachedObject( tb, csName, TRUE ) ;
+   }
+   else if ( SDB_OK == rc )
+   {
+      pos = ossStrchr( key, '.' ) ;
+      if ( NULL != pos )
+      {
+         UINT32 csLen = pos - key ;
+         if ( csLen > CLINET_CS_NAME_SIZE )
+         {
+            csLen = CLINET_CS_NAME_SIZE ;
+         }
+         ossStrncpy( csName, key, csLen ) ;
+         rc = hash_table_fetch( tb, csName, &node ) ;
+         if ( SDB_OK != rc )
+         {
+            goto error ;
+         }
+
+         if ( NULL == node )
+         {
+            rc = insertCachedObject( tb, csName ) ;
+         }
+         else
+         {
+            curTime = (UINT64)time( NULL ) ;
+            node->lastTime = curTime ;
+         }
+      }
+      rc = hash_table_fetch( tb, key, &node ) ;
+      if ( SDB_OK != rc )
+      {
+         goto error ;
+      }
+
+      if ( NULL == node )
+      {
+         rc = insertCachedObject( tb, key ) ;
+      }
+      else
+      {
+         curTime = (UINT64)time( NULL ) ;
+         node->lastTime = curTime ;
+      }
+   }
+
+done:
+   return rc ;
+error:
+   goto done ;
+}
+
+INT32 initCacheStrategy( BOOLEAN enableCacheStrategy,
+                         const UINT32 timeInterval )
+{
+   if ( enableCacheStrategy )
+   {
+      cacheEnabled = TRUE ;
+      cachedTimeInterval = ( ( 0 != timeInterval ) ?
+                             timeInterval : CACHED_CHECK_TIME_INTERVAL ) ;
+   }
+   else
+   {
+      cacheEnabled = FALSE ;
+      cachedTimeInterval  = CACHED_CHECK_TIME_INTERVAL ;
+   }
+
+   return SDB_OK ;
+}
+
+INT32 initHashTable( hashTable **tb )
+{
+   INT32 rc = SDB_OK ;
+   if ( !cacheEnabled )
+   {
+      goto done ;
+   }
+
+   if ( NULL == tb )
+   {
+      goto done ;
+   }
+
+   if ( NULL != *tb )
+   {
+      hash_table_destroy( tb ) ;
+   }
+
+   rc = hash_table_create( tb, maxCachedSlotCount ) ;
+   if ( SDB_OK != rc )
+   {
+      goto error ;
+   }
+
+done:
+   return rc ;
+error:
+   goto done ;
+}
+
+INT32 releaseHashTable( hashTable **tb )
+{
+   INT32 rc = SDB_OK ;
+
+   if ( NULL == tb )
+   {
+      goto done ;
+   }
+
+   rc = hash_table_destroy( tb ) ;
+   if ( SDB_OK != rc )
+   {
+      goto error ;
+   }
+
+done:
+   return rc ;
+error:
+   goto done ;
+}
+
+#define _QUERY_FORCE_HINT          0x00000080
+#define _QUERY_PARALLED            0x00000100
+#define _QUERY_WITH_RETURNDATA     0x00000200
+#define _QUERY_PREPARE_MORE        0x00004000
+#define _QUERY_FLAG_END            0x00000000
+
+struct _QueryFlagStat
+{
+   UINT32 _original ;
+   UINT32 _new ;
+} ;
+typedef struct _QueryFlagStat QueryFlagStat ;
+
+INT32 regulateQueryFlags( INT32 *newFlags, const INT32 flags )
+{
+   static QueryFlagStat stats[] = {
+      { _QUERY_FLAG_END, _QUERY_FLAG_END }
+   } ;
+   INT32 rc = SDB_OK ;
+   INT32 i = 0 ;
+   INT32 num = sizeof(stats) / sizeof(QueryFlagStat) - 1 ;
+   INT32 erasedFlags = flags ;
+   INT32 mergedFlags = 0 ;
+   
+   if ( NULL == newFlags )
+   {
+      rc = SDB_INVALIDARG ;
+      goto error ;
+   }
+
+   for ( i = 0; i < num; i++ )
+   {
+      INT32 originalFlag = (INT32)(stats[i]._original) ;
+      INT32 newFlag = (INT32)(stats[i]._new) ;
+      if ( ( erasedFlags & originalFlag ) && 
+           ( originalFlag != newFlag ) )
+      {
+         erasedFlags &= ~originalFlag ;
+         mergedFlags |= newFlag ;
+      }
+   }
+   *newFlags = (erasedFlags | mergedFlags) ;
+done:
+   return rc ;
+error:
+   goto done ;
 }
 
 static void clientEndianConvertHeader ( MsgHeader *pHeader )
@@ -275,7 +899,7 @@ INT32 clientCheckRetMsgHeader( const CHAR *pSendBuf, const CHAR *pRecvBuf,
    INT32 rc          = SDB_OK ;
    INT32 tmpOpCode   = 0 ;
    INT32 sendOpCode  = 0 ;
-   UINT32 recvOpCode = 0 ;
+   INT32 recvOpCode = 0 ;
    if ( NULL == pSendBuf || NULL == pRecvBuf )
    {
       rc = SDB_INVALIDARG ;
@@ -283,7 +907,7 @@ INT32 clientCheckRetMsgHeader( const CHAR *pSendBuf, const CHAR *pRecvBuf,
    }
    tmpOpCode = ((MsgHeader*)pSendBuf)->opCode ;
    ossEndianConvertIf ( tmpOpCode, sendOpCode, endianConvert ) ;
-   recvOpCode = (UINT32)(((MsgHeader*)pRecvBuf)->opCode) ;
+   recvOpCode = (((MsgHeader*)pRecvBuf)->opCode) ;
    if ( MAKE_REPLY_TYPE( sendOpCode ) != recvOpCode )
    {
       rc = SDB_UNEXPECTED_RESULT ;
@@ -336,25 +960,20 @@ INT32 clientBuildUpdateMsg ( CHAR **ppBuffer, INT32 *bufferSize,
       goto error ;
    }
 
-   // now the buffer is large enough
    pUpdate = (MsgOpUpdate*)(*ppBuffer) ;
    ossEndianConvertIf ( flag, pUpdate->flags, endianConvert ) ;
    ossEndianConvertIf ( clientDefaultVersion, pUpdate->version,
                         endianConvert ) ;
    ossEndianConvertIf ( clientDefaultW, pUpdate->w, endianConvert ) ;
-   // nameLength does NOT include '\0'
    nameLength = ossStrlen ( CollectionName ) ;
    ossEndianConvertIf ( nameLength, pUpdate->nameLength, endianConvert ) ;
-   // header assignment
    pUpdate->header.requestID           = reqID ;
    pUpdate->header.opCode              = opCode ;
    pUpdate->header.messageLength       = packetLength ;
    pUpdate->header.routeID.value       = clientDefaultRouteID ;
    pUpdate->header.TID                 = tid ;
-   // copy collection name
    ossStrncpy ( pUpdate->name, CollectionName, nameLength ) ;
    pUpdate->name[nameLength] = 0 ;
-   // get the offset of the first bson obj
    offset = ossRoundUpToMultipleX( offsetof(MsgOpUpdate, name) +
                                    nameLength + 1,
                                    4 ) ;
@@ -400,7 +1019,6 @@ INT32 clientBuildUpdateMsg ( CHAR **ppBuffer, INT32 *bufferSize,
       }
 
       rc = bson_endian_convert ( (char*)bson_data(&newselector), &off, TRUE ) ;
-      // 0 for false, which is error
       if ( rc == 0 )
       {
          goto endian_convert_done ;
@@ -439,7 +1057,6 @@ endian_convert_done :
       else
          rc = SDB_OK ;
    }
-   // sanity test
    if ( offset != packetLength )
    {
       ossPrintf ( "Invalid packet length"OSS_NEWLINE ) ;
@@ -607,13 +1224,11 @@ INT32 clientBuildInsertMsg ( CHAR **ppBuffer, INT32 *bufferSize,
       ossPrintf ( "Failed to check buffer, rc = %d"OSS_NEWLINE, rc ) ;
       goto error ;
    }
-   // now the buffer is large enough
    pInsert                       = (MsgOpInsert*)(*ppBuffer) ;
    ossEndianConvertIf ( clientDefaultVersion, pInsert->version,
                                               endianConvert ) ;
    ossEndianConvertIf ( clientDefaultW, pInsert->w, endianConvert ) ;
    ossEndianConvertIf ( flag, pInsert->flags, endianConvert ) ;
-   // nameLength does NOT include '\0'
    nameLength = ossStrlen ( CollectionName ) ;
    ossEndianConvertIf( nameLength, pInsert->nameLength, endianConvert ) ;
    pInsert->header.requestID     = reqID ;
@@ -621,10 +1236,8 @@ INT32 clientBuildInsertMsg ( CHAR **ppBuffer, INT32 *bufferSize,
    pInsert->header.messageLength = packetLength ;
    pInsert->header.routeID.value = 0 ;
    pInsert->header.TID           = ossGetCurrentThreadID() ;
-   // copy collection name
    ossStrncpy ( pInsert->name, CollectionName, nameLength ) ;
    pInsert->name[nameLength]=0 ;
-   // get the offset of the first bson obj
    offset = ossRoundUpToMultipleX( offsetof(MsgOpInsert, name) +
                                    nameLength + 1,
                                    4 ) ;
@@ -665,7 +1278,6 @@ endian_convert_done :
       else
          rc = SDB_OK ;
    }
-   // sanity test
    if ( offset != packetLength )
    {
       ossPrintf ( "Invalid packet length"OSS_NEWLINE ) ;
@@ -738,13 +1350,11 @@ INT32 clientBuildQueryMsg  ( CHAR **ppBuffer, INT32 *bufferSize,
       goto error ;
    }
    nameLength = ossStrlen ( CollectionName ) ;
-   // now the buffer is large enough
    pQuery                        = (MsgOpQuery*)(*ppBuffer) ;
    ossEndianConvertIf ( clientDefaultVersion, pQuery->version,
                          endianConvert ) ;
    ossEndianConvertIf ( clientDefaultW, pQuery->w, endianConvert ) ;
    ossEndianConvertIf ( flag, pQuery->flags, endianConvert ) ;
-   // nameLength does NOT include '\0'
    ossEndianConvertIf ( nameLength, pQuery->nameLength, endianConvert ) ;
    ossEndianConvertIf ( numToSkip, pQuery->numToSkip, endianConvert ) ;
    ossEndianConvertIf ( numToReturn, pQuery->numToReturn, endianConvert ) ;
@@ -754,28 +1364,22 @@ INT32 clientBuildQueryMsg  ( CHAR **ppBuffer, INT32 *bufferSize,
    pQuery->header.routeID.value  = 0 ;
    pQuery->header.TID            = ossGetCurrentThreadID() ;
 
-   // copy collection name
    ossStrncpy ( pQuery->name, CollectionName, nameLength ) ;
    pQuery->name[nameLength]=0 ;
-   // get the offset of the first bson obj
    offset = ossRoundUpToMultipleX( offsetof(MsgOpQuery, name) +
                                    nameLength + 1,
                                    4 ) ;
 
    if ( !endianConvert )
    {
-      // write query condition
       ossMemcpy ( &((*ppBuffer)[offset]), bson_data(query), bson_size(query)) ;
       offset += ossRoundUpToMultipleX( bson_size(query), 4 ) ;
-      // write field select
       ossMemcpy ( &((*ppBuffer)[offset]), bson_data(fieldSelector),
                   bson_size(fieldSelector) ) ;
       offset += ossRoundUpToMultipleX( bson_size(fieldSelector), 4 ) ;
-      // write order by clause
       ossMemcpy ( &((*ppBuffer)[offset]), bson_data(orderBy),
                   bson_size(orderBy) ) ;
       offset += ossRoundUpToMultipleX( bson_size(orderBy), 4 ) ;
-      // write optimizer hint
       ossMemcpy ( &((*ppBuffer)[offset]), bson_data(hint),
                   bson_size(hint) ) ;
       offset += ossRoundUpToMultipleX( bson_size(hint), 4 ) ;
@@ -867,7 +1471,6 @@ endian_convert_done :
       else
          rc = SDB_OK ;
    }
-   // sanity test
    if ( offset != packetLength )
    {
       ossPrintf ( "Invalid packet length"OSS_NEWLINE ) ;
@@ -948,9 +1551,7 @@ INT32 clientBuildGetMoreMsg ( CHAR **ppBuffer, INT32 *bufferSize,
       ossPrintf ( "Failed to check buffer, rc = %d"OSS_NEWLINE, rc ) ;
       goto error ;
    }
-   // now the buffer is large enough
    pGetMore                       = (MsgOpGetMore*)(*ppBuffer) ;
-   // nameLength does NOT include '\0'
    ossEndianConvertIf ( numToReturn, pGetMore->numToReturn, endianConvert ) ;
    ossEndianConvertIf ( contextID, pGetMore->contextID, endianConvert ) ;
    pGetMore->header.requestID     = reqID ;
@@ -1004,22 +1605,18 @@ INT32 clientBuildDeleteMsg ( CHAR **ppBuffer, INT32 *bufferSize,
       goto error ;
    }
    nameLength = ossStrlen ( CollectionName ) ;
-   // now the buffer is large enough
    pDelete                       = (MsgOpDelete*)(*ppBuffer) ;
    ossEndianConvertIf ( clientDefaultVersion, pDelete->version, endianConvert ) ;
    ossEndianConvertIf ( clientDefaultW, pDelete->w, endianConvert ) ;
    ossEndianConvertIf ( flag, pDelete->flags, endianConvert ) ;
-   // nameLength does NOT include '\0'
    ossEndianConvertIf ( nameLength, pDelete->nameLength, endianConvert ) ;
    pDelete->header.requestID     = reqID ;
    pDelete->header.opCode        = MSG_BS_DELETE_REQ ;
    pDelete->header.messageLength = packetLength ;
    pDelete->header.routeID.value = 0 ;
    pDelete->header.TID           = ossGetCurrentThreadID() ;
-   // copy collection name
    ossStrncpy ( pDelete->name, CollectionName, nameLength ) ;
    pDelete->name[nameLength]=0 ;
-   // get the offset of the first bson obj
    offset = ossRoundUpToMultipleX( offsetof(MsgOpDelete, name) +
                                    nameLength + 1,
                                    4 ) ;
@@ -1081,7 +1678,6 @@ endian_convert_done :
       else
          rc = SDB_OK ;
    }
-   // sanity test
    if ( offset != packetLength )
    {
       ossPrintf ( "Invalid packet length"OSS_NEWLINE ) ;
@@ -1132,8 +1728,6 @@ INT32 clientBuildKillContextsMsg ( CHAR **ppBuffer, INT32 *bufferSize,
    INT32 rc               = SDB_OK ;
    MsgOpKillContexts *pKC = NULL ;
    SINT32 i               = 0 ;
-   // aligned by 8 since contextIDs are 64 bits
-   // so we don't need to manually align it, it must be 8 bytes aligned already
    INT32 packetLength = offsetof(MsgOpKillContexts, contextIDs) +
                         sizeof ( SINT64 ) * (numContexts) ;
    if ( packetLength < 0 )
@@ -1148,7 +1742,6 @@ INT32 clientBuildKillContextsMsg ( CHAR **ppBuffer, INT32 *bufferSize,
       ossPrintf ( "Failed to check buffer, rc = %d"OSS_NEWLINE, rc ) ;
       goto error ;
    }
-   // now the buffer is large enough
    pKC                       = (MsgOpKillContexts*)(*ppBuffer) ;
    pKC->header.requestID     = reqID ;
    pKC->header.opCode        = MSG_BS_KILL_CONTEXT_REQ ;
@@ -1167,7 +1760,6 @@ INT32 clientBuildKillContextsMsg ( CHAR **ppBuffer, INT32 *bufferSize,
    }
    else
    {
-       // copy collection name
        ossMemcpy ( (CHAR*)(&pKC->contextIDs[0]), (CHAR*)pContextIDs,
                     sizeof(SINT64)*pKC->numContexts ) ;
    }
@@ -1227,12 +1819,10 @@ INT32 clientExtractReply ( CHAR *pBuffer, SINT32 *flag, SINT64 *contextID,
    {
       INT32 offset, count ;
       clientEndianConvertHeader ( &pReply->header ) ;
-      // convert variables endianess
       pReply->flags       = *flag ;
       pReply->contextID   = *contextID ;
       pReply->startFrom   = *startFrom ;
       pReply->numReturned = *numReturned ;
-      // we need to take care of all records in the reply message
       offset = ossRoundUpToMultipleX( sizeof(MsgOpReply), 4 ) ;
       count = 0 ;
       while ( count < *numReturned && offset < pReply->header.messageLength )
@@ -1339,7 +1929,6 @@ INT32 clientAppendOID ( bson *obj, bson_iterator *ret )
       }
       else
       {
-         // if we failed to allocate memory, let's return OOM
          rc = SDB_OOM ;
          goto error ;
       }
@@ -1372,48 +1961,35 @@ INT32 clientReplicaGroupExtractNode ( const CHAR *data,
       rc = SDB_INVALIDARG ;
       goto done ;
    }
-   // bson_init_finished_data does not accept const CHAR*, however since we are
-   // NOT going to perform any change, it's safe to cast const CHAR* to CHAR*
-   // here
    bson_init_finished_data ( &obj, (CHAR*)data ) ;
-   // find the host name
    if ( BSON_STRING == bson_find ( &ele, &obj, CAT_HOST_FIELD_NAME ) )
    {
       ossStrncpy ( pHostName, bson_iterator_string ( &ele ),
                    hostNameSize ) ;
    }
 
-   // find the node id
    if ( BSON_INT == bson_find ( &ele, &obj, CAT_NODEID_NAME ) )
    {
       *pNodeID = bson_iterator_int ( &ele ) ;
    }
 
-   // walk through services
    if ( BSON_ARRAY != bson_find ( &ele, &obj, CAT_SERVICE_FIELD_NAME ) )
    {
-      // the service is not array
       rc = SDB_SYS ;
       goto error ;
    }
    {
       const CHAR *serviceList = bson_iterator_value ( &ele ) ;
       bson_iterator_from_buffer ( &ele, serviceList ) ;
-      // loop for all elements in Services
       while ( bson_iterator_next ( &ele ) )
       {
          bson intObj ;
          bson_init ( &intObj ) ;
-         // make sure each element is object and construct intObj object
-         // bson_init_finished_data does not accept const CHAR*,
-         // however since we are NOT going to perform any change, it's safe
-         // to cast const CHAR* to CHAR* here
          if ( BSON_OBJECT == bson_iterator_type ( &ele ) &&
               BSON_OK == bson_init_finished_data ( &intObj,
                          (CHAR*)bson_iterator_value ( &ele ) ) )
          {
             bson_iterator k ;
-            // look for Type
             if ( BSON_INT != bson_find ( &k, &intObj,
                                          CAT_SERVICE_TYPE_FIELD_NAME ) )
             {
@@ -1421,7 +1997,6 @@ INT32 clientReplicaGroupExtractNode ( const CHAR *data,
                bson_destroy ( &intObj ) ;
                goto error ;
             }
-            // if we find the right service, let's record the service name
             if ( MSG_ROUTE_LOCAL_SERVICE == bson_iterator_int ( &k ) )
             {
                if ( BSON_STRING == bson_find ( &k, &intObj,
@@ -2149,24 +2724,19 @@ INT32 clientBuildAggrRequest( CHAR **ppBuffer, INT32 *bufferSize,
       ossPrintf ( "Failed to check buffer, rc = %d"OSS_NEWLINE, rc ) ;
       goto error ;
    }
-   // now the buffer is large enough
    pAggr = (MsgOpAggregate*)(*ppBuffer) ;
    ossEndianConvertIf ( clientDefaultVersion, pAggr->version,
                                               endianConvert ) ;
    ossEndianConvertIf ( clientDefaultW, pAggr->w, endianConvert ) ;
    ossEndianConvertIf ( clientDefaultFlags, pAggr->flags, endianConvert ) ;
-   // nameLength does NOT include '\0'
-   //nameLength = ossStrlen ( CollectionName ) ;
    ossEndianConvertIf( nameLength, pAggr->nameLength, endianConvert ) ;
    pAggr->header.requestID     = 0 ;
    pAggr->header.opCode        = MSG_BS_AGGREGATE_REQ ;
    pAggr->header.messageLength = packetLength ;
    pAggr->header.routeID.value = 0 ;
    pAggr->header.TID           = ossGetCurrentThreadID() ;
-   // copy collection name
    ossStrncpy ( pAggr->name, CollectionName, nameLength ) ;
    pAggr->name[nameLength]=0 ;
-   // get the offset of the first bson obj
    offset = ossRoundUpToMultipleX( offsetof(MsgOpInsert, name) +
                                    nameLength + 1,
                                    4 ) ;
@@ -2207,7 +2777,6 @@ endian_convert_done :
       else
          rc = SDB_OK ;
    }
-   // sanity test
    if ( offset != packetLength )
    {
       ossPrintf ( "Invalid packet length"OSS_NEWLINE ) ;
@@ -2351,7 +2920,6 @@ INT32 clientBuildTestMsg( CHAR **ppBuffer, INT32 *bufferSize,
       goto error ;
    }
    msgOpMsg = (MsgOpMsg*)(*ppBuffer) ;
-   // append the massage header
    msgOpMsg->header.requestID     = reqID ;
    msgOpMsg->header.opCode        = MSG_BS_MSG_REQ ;
    msgOpMsg->header.messageLength = len ;
@@ -2601,6 +3169,54 @@ error:
    goto done ;
 }
 
+INT32 clientBuildLockLobMsg( CHAR ** ppBuffer, INT32 *bufferSize,
+                             INT64 offset, INT64 length,
+                             SINT32 flags, SINT16 w,
+                             SINT64 contextID, UINT64 reqID,
+                             BOOLEAN endianConvert )
+{
+   INT32 rc = SDB_OK ;
+   bson obj ;
+
+   bson_init( &obj ) ;
+
+   rc = bson_append_long( &obj, FIELD_NAME_LOB_OFFSET, offset ) ;
+   if ( SDB_OK != rc )
+   {
+      rc = SDB_DRIVER_BSON_ERROR ;
+      goto error ;
+   }
+
+   rc = bson_append_long( &obj, FIELD_NAME_LOB_LENGTH, length ) ;
+   if ( SDB_OK != rc )
+   {
+      rc = SDB_DRIVER_BSON_ERROR ;
+      goto error ;
+   }
+
+   rc = bson_finish( &obj ) ;
+   if ( SDB_OK != rc )
+   {
+      rc = SDB_DRIVER_BSON_ERROR ;
+      goto error ;
+   }
+
+   rc = clientBuildLobMsg( ppBuffer, bufferSize,
+                           MSG_BS_LOB_LOCK_REQ, &obj,
+                           flags, w, contextID, reqID, NULL,
+                           NULL, NULL, endianConvert ) ;
+   if ( SDB_OK != rc )
+   {
+      goto error ;
+   }
+
+done:
+   bson_destroy( &obj ) ;
+   return rc ;
+error:
+   goto done ;
+}
+
 INT32 clientBuildReadLobMsg( CHAR **ppBuffer, INT32 *bufferSize,
                              UINT32 len, SINT64 lobOffset,
                              SINT32 flags, SINT64 contextID,
@@ -2663,6 +3279,27 @@ error:
    goto done ;   
 }
 
+INT32 clientBuildTruncateLobMsg( CHAR **ppBuffer, INT32 *bufferSize,
+                                 const bson *meta,
+                                 SINT32 flags, SINT16 w,
+                                 UINT64 reqID,
+                                 BOOLEAN endianConvert )
+{
+   INT32 rc = SDB_OK ;
+   rc = clientBuildLobMsg( ppBuffer, bufferSize,
+                           MSG_BS_LOB_TRUNCATE_REQ, meta,
+                           flags, w, -1, reqID,
+                           NULL, NULL, NULL, endianConvert ) ;
+   if ( SDB_OK != rc )
+   {
+      goto error ;
+   }
+done:
+   return rc ;
+error:
+   goto done ;   
+}
+
 INT32 clientBuildRemoveLobMsgCpp( CHAR **ppBuffer, INT32 *bufferSize,
                                   const CHAR *pMeta,
                                   SINT32 flags, SINT16 w,
@@ -2672,6 +3309,27 @@ INT32 clientBuildRemoveLobMsgCpp( CHAR **ppBuffer, INT32 *bufferSize,
    INT32 rc = SDB_OK ;
    rc = clientBuildLobMsgCpp( ppBuffer, bufferSize,
                               MSG_BS_LOB_REMOVE_REQ, pMeta,
+                              flags, w, -1, reqID,
+                              NULL, NULL, NULL, endianConvert ) ;
+   if ( SDB_OK != rc )
+   {
+      goto error ;
+   }
+done:
+   return rc ;
+error:
+   goto done ;   
+}
+
+INT32 clientBuildTruncateLobMsgCpp( CHAR **ppBuffer, INT32 *bufferSize,
+                                    const CHAR *pMeta,
+                                    SINT32 flags, SINT16 w,
+                                    UINT64 reqID,
+                                    BOOLEAN endianConvert )
+{
+   INT32 rc = SDB_OK ;
+   rc = clientBuildLobMsgCpp( ppBuffer, bufferSize,
+                              MSG_BS_LOB_TRUNCATE_REQ, pMeta,
                               flags, w, -1, reqID,
                               NULL, NULL, NULL, endianConvert ) ;
    if ( SDB_OK != rc )

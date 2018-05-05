@@ -28,6 +28,8 @@
  *    limitations under the License.
  */
 #include "ossFeat.h"
+#include "ossTypes.h"
+#include "oss.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -46,6 +48,7 @@
 #include <WinBase.h>
 #endif
 
+static int jsCompatibility = 0;
 const int initialBufferSize = 0;
 
 /* only need one of these */
@@ -73,6 +76,8 @@ void LocalTime ( time_t *Time, struct tm *TM );
 /* ----------------------------
    READING
    ------------------------------ */
+
+static int bson_sprint_decimal_length_iterator ( const bson_iterator *i ) ;
 
 
 SDB_EXPORT bson* bson_create( void ) {
@@ -213,36 +218,35 @@ struct bson_machine_pid {
    unsigned short _pid ;
 } ;
 static struct bson_machine_pid bson_ourMachineAndPid ;
-int bson_oid_initialized = 0 ;
 #pragma pack()
+
+static void _initOid( void )
+{
+    unsigned long long n = 0 ;
+    unsigned short pid = 0 ;
+    srand ( (unsigned int)time(NULL) ) ;
+#if defined (_WIN32)
+    {
+       unsigned int a=0, b=0 ;
+       pid = (unsigned short) GetCurrentProcessId () ;
+       rand_s ( &a ) ;
+       rand_s ( &b ) ;
+       n = (((unsigned long long)a)<<32) | b ;
+    }
+#elif defined (__linux__) || defined (_AIX)
+    pid = (unsigned short) getpid () ;
+    n = (((unsigned long long)random())<<32) | random() ;
+#endif
+    memcpy ( &bson_ourMachineAndPid, &n, sizeof(struct bson_machine_pid) ) ;
+    bson_ourMachineAndPid._pid = pid ;
+}
+
 SDB_EXPORT void bson_oid_gen( bson_oid_t *oid ) {
     static int incr = 0;
     int i;
     int t = time( NULL );
-    // initialize system machine and pid for first time entry
-    if ( !bson_oid_initialized )
-    {
-       unsigned long long n = 0 ;
-       unsigned short pid = 0 ;
-       bson_oid_initialized = 1 ;
-       srand ( (unsigned int)time(NULL) ) ;
-       // generate a system id
-#if defined (_WIN32)
-       {
-          unsigned int a=0, b=0 ;
-          pid = (unsigned short) GetCurrentProcessId () ;
-          rand_s ( &a ) ;
-          rand_s ( &b ) ;
-          n = (((unsigned long long)a)<<32) | b ;
-       }
-#elif defined (__linux__) || defined (_AIX)
-       pid = (unsigned short) getpid () ;
-       n = (((unsigned long long)random())<<32) | random() ;
-#endif
-       // fold in pid to bson_ourMachineAndPid
-       memcpy ( &bson_ourMachineAndPid, &n, sizeof(struct bson_machine_pid) ) ;
-       bson_ourMachineAndPid._pid = pid ;
-    }
+    static ossOnce initOnce = OSS_ONCE_INIT ;
+    ossOnceRun( &initOnce, _initOid );
     if( oid_inc_func )
         i = oid_inc_func();
 #if defined(_WIN32)
@@ -252,7 +256,6 @@ SDB_EXPORT void bson_oid_gen( bson_oid_t *oid ) {
     else
         i = __sync_fetch_and_add(&incr, 1);
 #endif
-        //i = incr++;
     memset ( oid, 0, sizeof(bson_oid_t) ) ;
     {
        unsigned char *source = (unsigned char *)&t ;
@@ -270,9 +273,6 @@ SDB_EXPORT void bson_oid_gen( bson_oid_t *oid ) {
 #endif
        memcpy ( &oid->ints[1], &bson_ourMachineAndPid,
                 sizeof(bson_ourMachineAndPid) ) ;
-       //memcpy ( ((unsigned char*)&oid->ints[1]) + sizeof(bson_ourMachineAndPid),
-       //         &i, 3 ) ;
-       // apply i to last 3 bytes
        source = (unsigned char *)&i ;
        dest = (unsigned char*)&oid->ints[2] ;
 #if defined (SDB_BIG_ENDIAN)
@@ -321,15 +321,106 @@ SDB_EXPORT int bson_sprint ( char *buffer, int bufsize, const bson *b ) {
       return 0 ; \
 }
 
-static void bson_sprint_raw_concat ( char **pbuf, int *left, const char *data )
+static int strlen_a ( const char *data )
 {
-    unsigned int tempsize = strlen ( data ) ;
+   int len = 0 ;
+   if ( !data )
+   {
+      return 0 ;
+   }
+   while ( data && *data )
+   {
+      if ( data[0] == '\"' ||
+           data[0] == '\\' ||
+           data[0] == '\b' ||
+           data[0] == '\f' ||
+           data[0] == '\n' ||
+           data[0] == '\r' ||
+           data[0] == '\t' )
+      {
+         ++len ;
+      }
+      ++len ;
+      ++data ;
+   }
+   return len ;
+}
+
+static void bson_sprint_raw_concat ( char **pbuf, int *left, const char *data, int isString )
+{
+    unsigned int tempsize = 0 ;
+    char *pTempBuffer = *pbuf ;
+
+    if( isString )
+    {
+       tempsize = strlen_a( data ) ;
+    }
+    else
+    {
+       tempsize = strlen( data ) ;
+    }
     tempsize = tempsize > (unsigned int)(*left) ? (unsigned int)(*left) : tempsize ;
-    memcpy ( *pbuf, data, tempsize ) ;
+
+    if( isString )
+    {
+       unsigned int i = 0 ;
+       for ( i = 0; i < tempsize; ++i )
+       {
+          switch( *data )
+          {
+          case '\"':
+             pTempBuffer[i] = '\\' ;
+             ++i ;
+             pTempBuffer[i] = '"' ;
+             break ;
+          case '\\':
+             pTempBuffer[i] = '\\' ;
+             ++i ;
+             pTempBuffer[i] = '\\' ;
+             break ;
+          case '\b':
+             pTempBuffer[i] = '\\' ;
+             ++i ;
+             pTempBuffer[i] = 'b' ;
+             break ;
+          case '\f':
+             pTempBuffer[i] = '\\' ;
+             ++i ;
+             pTempBuffer[i] = 'f' ;
+             break ;
+          case '\n':
+             pTempBuffer[i] = '\\' ;
+             ++i ;
+             pTempBuffer[i] = 'n' ;
+             break ;
+          case '\r':
+             pTempBuffer[i] = '\\' ;
+             ++i ;
+             pTempBuffer[i] = 'r' ;
+             break ;
+          case '\t':
+             pTempBuffer[i] = '\\' ;
+             ++i ;
+             pTempBuffer[i] = 't' ;
+             break ;
+          default:
+             pTempBuffer[i] = *data ;
+             break ;
+          }
+          ++data ;
+       }
+    }
+    else
+    {
+       memcpy( *pbuf, data, tempsize ) ;
+    }
+
     *left -= tempsize ;
     *pbuf += tempsize ;
 }
 
+/* Comment unused function to clean compile warning. If you want to use it, just
+ * remove this comment.
 static void bson_sprint_hex_concat ( char **pbuf, int *left, const char *data, unsigned int size )
 {
    unsigned int tempsize = size * 2 ;
@@ -342,6 +433,7 @@ static void bson_sprint_hex_concat ( char **pbuf, int *left, const char *data, u
       tempsize -= 2 ;
    }
 }
+*/
 
 SDB_EXPORT int bson_sprint_iterator ( char **pbuf, int *left, bson_iterator *i,
                                       char delChar )
@@ -360,64 +452,37 @@ SDB_EXPORT int bson_sprint_iterator ( char **pbuf, int *left, bson_iterator *i,
    {
       case BSON_DOUBLE:
       {
+         double valNum = bson_iterator_double( i ) ;
+         int sign = 0 ;
          char temp[64] = {0} ;
-         sprintf ( temp, "%.16g", bson_iterator_double( i ) ) ;
-         bson_sprint_raw_concat ( pbuf, left, temp ) ;
+         if( bson_is_inf( valNum, &sign ) == 0 )
+         {
+            sprintf ( temp, "%.16g", valNum ) ;
+            bson_sprint_raw_concat ( pbuf, left, temp, 0 ) ;
+         }
+         else
+         {
+            if( sign == 1 )
+            {
+               bson_sprint_raw_concat( pbuf, left, "Infinity", 0 ) ;
+            }
+            else
+            {
+               bson_sprint_raw_concat( pbuf, left, "-Infinity", 0 ) ;
+            }
+         }
          CHECK_LEFT ( left )
          break;
       }
       case BSON_STRING:
-      {
-         const char *temp = bson_iterator_string( i ) ;
-         int tempSize = strlen( temp ) ;
-         int i = 0 ;
-         char tempChar[2] = { 0, 0 } ;
-         bson_sprint_raw_concat ( pbuf, left, delCharStr ) ;
-         CHECK_LEFT ( left )
-         for ( i = 0; i < tempSize; ++i )
-         {
-            switch( *( temp + i ) )
-            {
-            case '\"':
-               bson_sprint_raw_concat ( pbuf, left, "\\\"" ) ;
-               break ;
-            case '\\':
-               bson_sprint_raw_concat ( pbuf, left, "\\\\" ) ;
-               break ;
-            case '\b':
-               bson_sprint_raw_concat ( pbuf, left, "\\b" ) ;
-               break ;
-            case '\f':
-               bson_sprint_raw_concat ( pbuf, left, "\\f" ) ;
-               break ;
-            case '\n':
-               bson_sprint_raw_concat ( pbuf, left, "\\n" ) ;
-               break ;
-            case '\r':
-               bson_sprint_raw_concat ( pbuf, left, "\\r" ) ;
-               break ;
-            case '\t':
-               bson_sprint_raw_concat ( pbuf, left, "\\t" ) ;
-               break ;
-            default:
-               tempChar[0] = *( temp + i ) ;
-               bson_sprint_raw_concat ( pbuf, left, tempChar ) ;
-               break ;
-            }
-            CHECK_LEFT ( left )
-         }
-         bson_sprint_raw_concat ( pbuf, left, delCharStr ) ;
-         CHECK_LEFT ( left )
-         break;
-      }
       case BSON_SYMBOL:
       {
          const char *temp = bson_iterator_string( i ) ;
-         bson_sprint_raw_concat ( pbuf, left, delCharStr ) ;
+         bson_sprint_raw_concat ( pbuf, left, delCharStr, 0 ) ;
          CHECK_LEFT ( left )
-         bson_sprint_raw_concat ( pbuf, left, temp ) ;
+         bson_sprint_raw_concat ( pbuf, left, temp, 1 ) ;
          CHECK_LEFT ( left )
-         bson_sprint_raw_concat ( pbuf, left, delCharStr ) ;
+         bson_sprint_raw_concat ( pbuf, left, delCharStr, 0 ) ;
          CHECK_LEFT ( left )
          break;
       }
@@ -425,11 +490,11 @@ SDB_EXPORT int bson_sprint_iterator ( char **pbuf, int *left, bson_iterator *i,
       {
          char oidhex[25];
          bson_oid_to_string( bson_iterator_oid( i ), oidhex );
-         bson_sprint_raw_concat ( pbuf, left, "{ \"$oid\": \"" ) ;
+         bson_sprint_raw_concat ( pbuf, left, "{ \"$oid\": \"", 0 ) ;
          CHECK_LEFT ( left )
-         bson_sprint_raw_concat ( pbuf, left, oidhex ) ;
+         bson_sprint_raw_concat ( pbuf, left, oidhex, 0 ) ;
          CHECK_LEFT ( left )
-         bson_sprint_raw_concat ( pbuf, left, "\" }" ) ;
+         bson_sprint_raw_concat ( pbuf, left, "\" }", 0 ) ;
          CHECK_LEFT ( left )
          break;
       }
@@ -437,7 +502,7 @@ SDB_EXPORT int bson_sprint_iterator ( char **pbuf, int *left, bson_iterator *i,
       {
          char temp[6] = {0} ;
          sprintf ( temp, "%s", (bson_iterator_bool( i ) ? "true" : "false") ) ;
-         bson_sprint_raw_concat ( pbuf, left, temp ) ;
+         bson_sprint_raw_concat ( pbuf, left, temp, 0 ) ;
          CHECK_LEFT ( left )
          break;
       }
@@ -447,16 +512,15 @@ SDB_EXPORT int bson_sprint_iterator ( char **pbuf, int *left, bson_iterator *i,
          time_t timer = bson_iterator_date( i ) / 1000 ;
          struct tm psr;
          LocalTime ( &timer, &psr ) ;
-         if ( (psr.tm_year + 1900) >= 1900 && (psr.tm_year + 1900) <= 9999 )
-         {         
-            // [ 1900-01-01, 9999-12-31 ]
+         if ( (psr.tm_year + 1900) >= 0 && (psr.tm_year + 1900) <= 9999 )
+         {
             sprintf ( temp, "{ \"$date\": \"%04d-%02d-%02d\" }", psr.tm_year + 1900, psr.tm_mon + 1, psr.tm_mday ) ;
          }
          else
          {
             sprintf ( temp, "{ \"$date\": %lld }", (unsigned long long)bson_iterator_date( i ) ) ;
          }
-         bson_sprint_raw_concat ( pbuf, left, temp ) ;
+         bson_sprint_raw_concat ( pbuf, left, temp, 0 ) ;
          CHECK_LEFT ( left )
          break;
       }
@@ -468,10 +532,8 @@ SDB_EXPORT int bson_sprint_iterator ( char **pbuf, int *left, bson_iterator *i,
          char *pBase64Buf = NULL ;
          char *pBin_data = NULL ;
          sprintf ( temp, "\", \"$type\": \"%u\" }", (unsigned char)bson_iterator_bin_type ( i ) ) ;
-         bson_sprint_raw_concat ( pbuf, left, "{ \"$binary\": \"" ) ;
+         bson_sprint_raw_concat ( pbuf, left, "{ \"$binary\": \"", 0 ) ;
          CHECK_LEFT ( left )
-         //bson_sprint_hex_concat ( pbuf, left, bson_iterator_bin_data ( i ),
-         //                         bson_iterator_bin_len ( i ) ) ;
          bin_size = bson_iterator_bin_len ( i ) ;
          if( bin_size > 0 )
          {
@@ -489,69 +551,67 @@ SDB_EXPORT int bson_sprint_iterator ( char **pbuf, int *left, bson_iterator *i,
                pBase64Buf = NULL ;
                return 0 ;
             }
-            bson_sprint_raw_concat ( pbuf, left, pBase64Buf ) ;
+            bson_sprint_raw_concat ( pbuf, left, pBase64Buf, 0 ) ;
             free( pBase64Buf ) ;
             CHECK_LEFT ( left )
          }
-         bson_sprint_raw_concat ( pbuf, left, temp ) ;
+         bson_sprint_raw_concat ( pbuf, left, temp, 0 ) ;
          CHECK_LEFT ( left )
          break;
       }
       case BSON_UNDEFINED:
       {
          char *temp = "{ \"$undefined\": 1 }" ;
-         bson_sprint_raw_concat ( pbuf, left, temp ) ;
+         bson_sprint_raw_concat ( pbuf, left, temp, 0 ) ;
          CHECK_LEFT ( left )
          break;
       }
       case BSON_NULL:
       {
          char *temp = "null" ;
-         bson_sprint_raw_concat ( pbuf, left, temp ) ;
+         bson_sprint_raw_concat ( pbuf, left, temp, 0 ) ;
          CHECK_LEFT ( left )
          break;
       }
       case BSON_MINKEY:
       {
          char *temp = "{ \"$minKey\": 1 }" ;
-         bson_sprint_raw_concat ( pbuf, left, temp ) ;
+         bson_sprint_raw_concat ( pbuf, left, temp, 0 ) ;
          CHECK_LEFT ( left )
          break;
       }
       case BSON_MAXKEY:
       {
          char *temp = "{ \"$maxKey\": 1 }" ;
-         bson_sprint_raw_concat ( pbuf, left, temp ) ;
+         bson_sprint_raw_concat ( pbuf, left, temp, 0 ) ;
          CHECK_LEFT ( left )
          break;
       }
       case BSON_REGEX:
       {
-         char temp[256] = {0} ;
-         char opts[64] = {0} ;
-         sprintf ( temp, "%s", bson_iterator_regex( i ) ) ;
-         sprintf ( opts, "%s", bson_iterator_regex_opts ( i ) ) ;
-         bson_sprint_raw_concat ( pbuf, left, "{ \"$regex\": \"" ) ;
+         bson_sprint_raw_concat ( pbuf, left, "{ \"$regex\": \"", 0 ) ;
          CHECK_LEFT ( left )
-         bson_sprint_raw_concat ( pbuf, left, temp ) ;
+         bson_sprint_raw_concat ( pbuf, left, bson_iterator_regex( i ), 1 ) ;
          CHECK_LEFT ( left )
-         bson_sprint_raw_concat ( pbuf, left, "\", \"$options\": \"" ) ;
+         bson_sprint_raw_concat ( pbuf, left, "\", \"$options\": \"", 0 ) ;
          CHECK_LEFT ( left )
-         bson_sprint_raw_concat ( pbuf, left, opts ) ;
+         bson_sprint_raw_concat ( pbuf, left, bson_iterator_regex_opts( i ), 0 ) ;
          CHECK_LEFT ( left )
-         bson_sprint_raw_concat ( pbuf, left, "\" }" ) ;
+         bson_sprint_raw_concat ( pbuf, left, "\" }", 0 ) ;
          CHECK_LEFT ( left )
          break;
       }
       case BSON_CODE:
       {
-         char temp[128] = {0} ;
-         sprintf ( temp, "%s", bson_iterator_code( i ) ) ;
-         bson_sprint_raw_concat ( pbuf, left, delCharStr ) ;
+         bson_sprint_raw_concat ( pbuf, left, "{ \"$code\": \"", 0 ) ;
          CHECK_LEFT ( left )
-         bson_sprint_raw_concat ( pbuf, left, temp ) ;
+         bson_sprint_raw_concat ( pbuf, left, delCharStr, 0 ) ;
          CHECK_LEFT ( left )
-         bson_sprint_raw_concat ( pbuf, left, delCharStr ) ;
+         bson_sprint_raw_concat ( pbuf, left, bson_iterator_code( i ), 1 ) ;
+         CHECK_LEFT ( left )
+         bson_sprint_raw_concat ( pbuf, left, delCharStr, 0 ) ;
+         CHECK_LEFT ( left )
+         bson_sprint_raw_concat ( pbuf, left, "\" }", 0 ) ;
          CHECK_LEFT ( left )
          break;
       }
@@ -559,15 +619,65 @@ SDB_EXPORT int bson_sprint_iterator ( char **pbuf, int *left, bson_iterator *i,
       {
          char temp[32] = {0} ;
          sprintf ( temp, "%d", bson_iterator_int( i ) ) ;
-         bson_sprint_raw_concat ( pbuf, left, temp ) ;
+         bson_sprint_raw_concat ( pbuf, left, temp, 0 ) ;
          CHECK_LEFT ( left )
          break;
       }
       case BSON_LONG:
       {
-         char temp[32] = {0} ;
-         sprintf ( temp, "%lld", ( long long )bson_iterator_long( i ) ) ;
-         bson_sprint_raw_concat ( pbuf, left, temp ) ;
+         char temp[64] = {0} ;
+         const char *pFormat = 0 ;
+         long long num = ( long long )bson_iterator_long( i );
+         if (!bson_get_js_compatibility())
+         {
+            pFormat = "%lld" ;
+         }
+         else
+         {
+            if ( num >= OSS_SINT64_JS_MIN && num <= OSS_SINT64_JS_MAX )
+            {
+               pFormat = "%lld" ;
+            }
+            else
+            {
+               pFormat = "{ \"$numberLong\": \"%lld\" }" ;
+            }
+         }
+         sprintf ( temp, pFormat, num ) ;
+         bson_sprint_raw_concat ( pbuf, left, temp, 0 ) ;
+         CHECK_LEFT ( left )
+         break;
+      }
+      case BSON_DECIMAL:
+      {
+         bson_decimal decimal = DECIMAL_DEFAULT_VALUE ;
+         char *temp  = NULL ;
+         int tmpSize = 0 ;
+         int tmpRC   = 0 ;
+
+         bson_iterator_decimal( i, &decimal ) ;
+         decimal_to_jsonstr_len( decimal.sign, decimal.weight, decimal.dscale,
+                                 decimal.typemod, &tmpSize ) ;
+
+         temp = (char *)malloc( tmpSize ) ;
+         if ( !temp )
+         {
+            decimal_free( &decimal ) ;
+            return 0 ;
+         }
+
+         memset( temp, 0, tmpSize ) ;
+         tmpRC = decimal_to_jsonstr( &decimal, temp, tmpSize ) ;
+         if ( 0 != tmpRC )
+         {
+            decimal_free( &decimal ) ;
+            free( temp ) ;
+            return 0 ;
+         }
+
+         bson_sprint_raw_concat ( pbuf, left, temp, 0 ) ;
+         decimal_free( &decimal ) ;
+         free( temp ) ;
          CHECK_LEFT ( left )
          break;
       }
@@ -583,7 +693,7 @@ SDB_EXPORT int bson_sprint_iterator ( char **pbuf, int *left, bson_iterator *i,
          sprintf ( temp, "{ \"$timestamp\": \"%04d-%02d-%02d-%02d.%02d.%02d.%06d\" }",
                    psr.tm_year + 1900, psr.tm_mon + 1, psr.tm_mday, psr.tm_hour,
                    psr.tm_min, psr.tm_sec, ts.i ) ;
-         bson_sprint_raw_concat ( pbuf, left, temp ) ;
+         bson_sprint_raw_concat ( pbuf, left, temp, 0 ) ;
          CHECK_LEFT ( left )
          break;
       }
@@ -601,6 +711,24 @@ SDB_EXPORT int bson_sprint_iterator ( char **pbuf, int *left, bson_iterator *i,
          CHECK_LEFT ( left )
          break;
       }
+      case BSON_DBREF:
+      {
+         char oidhex[25] ;
+         bson_oid_to_string( bson_iterator_dbref_oid( i ), oidhex ) ;
+
+         bson_sprint_raw_concat ( pbuf, left, "{ \"$db\" : \"", 0 ) ;
+         CHECK_LEFT ( left )
+         bson_sprint_raw_concat ( pbuf, left, bson_iterator_dbref( i ), 1 ) ;
+         CHECK_LEFT ( left )
+         bson_sprint_raw_concat ( pbuf, left, "\", \"$id\" : \"", 0 ) ;
+         CHECK_LEFT ( left )
+         bson_sprint_raw_concat ( pbuf, left, oidhex, 0 ) ;
+         CHECK_LEFT ( left )
+         bson_sprint_raw_concat ( pbuf, left, "\" }", 0 ) ;
+         CHECK_LEFT ( left )
+
+         break ;
+      }
       default:
          return 0 ;
    }
@@ -617,12 +745,12 @@ SDB_EXPORT int bson_sprint_raw ( char **pbuf, int *left, const char *data, int i
     bson_iterator_from_buffer( &i, data );
     if ( isobj )
     {
-       bson_sprint_raw_concat ( pbuf, left, "{ " ) ;
+       bson_sprint_raw_concat ( pbuf, left, "{ ", 0 ) ;
        CHECK_LEFT ( left )
     }
     else
     {
-        bson_sprint_raw_concat ( pbuf, left, "[ " ) ;
+        bson_sprint_raw_concat ( pbuf, left, "[ ", 0 ) ;
        CHECK_LEFT ( left )
     }
     while ( bson_iterator_next( &i ) ) {
@@ -631,7 +759,7 @@ SDB_EXPORT int bson_sprint_raw ( char **pbuf, int *left, const char *data, int i
             break;
         if ( !first )
         {
-           bson_sprint_raw_concat ( pbuf, left, ", " ) ;
+           bson_sprint_raw_concat ( pbuf, left, ", ", 0 ) ;
             CHECK_LEFT ( left )
         }
         else
@@ -639,13 +767,13 @@ SDB_EXPORT int bson_sprint_raw ( char **pbuf, int *left, const char *data, int i
         key = bson_iterator_key( &i );
         if ( isobj )
         {
-           bson_sprint_raw_concat ( pbuf, left, "\"" ) ;
+           bson_sprint_raw_concat ( pbuf, left, "\"", 0 ) ;
            CHECK_LEFT ( left )
-           bson_sprint_raw_concat ( pbuf, left, key ) ;
+           bson_sprint_raw_concat ( pbuf, left, key, 1 ) ;
            CHECK_LEFT ( left )
-           bson_sprint_raw_concat ( pbuf, left, "\"" ) ;
+           bson_sprint_raw_concat ( pbuf, left, "\"", 0 ) ;
            CHECK_LEFT ( left )
-           bson_sprint_raw_concat ( pbuf, left, ": " ) ;
+           bson_sprint_raw_concat ( pbuf, left, ": ", 0 ) ;
            CHECK_LEFT ( left )
         }
         if ( !bson_sprint_iterator ( pbuf, left, &i, '"' ) )
@@ -653,15 +781,36 @@ SDB_EXPORT int bson_sprint_raw ( char **pbuf, int *left, const char *data, int i
     }
     if ( isobj )
     {
-       bson_sprint_raw_concat ( pbuf, left, " }" ) ;
+       bson_sprint_raw_concat ( pbuf, left, " }", 0 ) ;
        CHECK_LEFT ( left )
     }
     else
     {
-        bson_sprint_raw_concat ( pbuf, left, " ]" ) ;
+       bson_sprint_raw_concat ( pbuf, left, " ]", 0 ) ;
        CHECK_LEFT ( left )
     }
     return 1 ;
+}
+
+int bson_sprint_decimal_length_iterator ( const bson_iterator *i )
+{
+   int sign     = SDB_DECIMAL_POS ;
+   int weight   = 0 ;
+   int scale    = 0 ;
+   int typemod  = 0 ;
+   int size     = 0 ;
+   if ( bson_iterator_type ( i ) != BSON_DECIMAL )
+   {
+      return 0 ;
+   }
+
+   bson_iterator_decimal_scale( i, &sign, &scale ) ;
+   bson_iterator_decimal_weight( i, &weight ) ;
+   bson_iterator_decimal_typemod( i, &typemod ) ;
+
+   decimal_to_jsonstr_len( sign, weight, scale, typemod, &size ) ;
+
+   return size ;
 }
 
 SDB_EXPORT int bson_sprint_length_iterator ( bson_iterator *i )
@@ -697,8 +846,9 @@ SDB_EXPORT int bson_sprint_length_iterator ( bson_iterator *i )
       total += 5 ;
       break ;
    case BSON_DATE :
-      /* { "$date": "YYYY-MM-DD" } */
-      total += 26 ;
+      /* { "$date": "YYYY-MM-DD" } or */
+      /* { "$date": +/-number } +/-number max length 20 */
+      total += 34 ;
       break ;
    case BSON_BINDATA :
       /* { "$binary" : "<bin data>", "$type" : "<type>" } */
@@ -713,7 +863,7 @@ SDB_EXPORT int bson_sprint_length_iterator ( bson_iterator *i )
       break ;
    case BSON_REGEX :
       /* "{ "$regex" : "<regexstr>", "$options" : "<optionsstr>" }" */
-      total += 34 + strlen ( bson_iterator_regex ( i ) ) +
+      total += 34 + strlen ( bson_iterator_regex ( i ) ) * 2 +
                     strlen ( bson_iterator_regex_opts ( i ) ) ;
       break ;
    case BSON_CODE :
@@ -723,7 +873,19 @@ SDB_EXPORT int bson_sprint_length_iterator ( bson_iterator *i )
       total += 16 ;
       break ;
    case BSON_LONG :
-      total += 32 ;
+   {
+      if (!bson_get_js_compatibility())
+      {
+         total += 32 ;
+      }
+      else
+      {
+         total += 64 ;
+      }
+      break ;
+   }
+   case BSON_DECIMAL :
+      total += bson_sprint_decimal_length_iterator( i ) ;
       break ;
    case BSON_TIMESTAMP :
       /* { "$timestamp": "YYYY-MM-DD-HH.MM.SS.mmmmmm" } */
@@ -741,6 +903,12 @@ SDB_EXPORT int bson_sprint_length_iterator ( bson_iterator *i )
       int len = bson_sprint_length_raw ( bson_iterator_value ( i ), 0 ) ;
       if ( 0 == len ) return 0 ;
       total += len ;
+      break ;
+   }
+   case BSON_DBREF :
+   {
+      /* { "$db" : "xxxx", "$id" : "<24-digits oid>" } */
+      total += ( 64 + strlen ( bson_iterator_dbref ( i ) ) * 2 ) ;
       break ;
    }
    default :
@@ -774,7 +942,6 @@ SDB_EXPORT int bson_sprint_length_raw ( const char *data, int isobj ) {
         key = bson_iterator_key( &i );
         if ( isobj )
         {
-            // "<key>"<SPC>:<SPC>
             total += 5 + strlen( key );
         }
         k = bson_sprint_length_iterator ( &i ) ;
@@ -789,7 +956,6 @@ SDB_EXPORT int bson_sprint_length_raw ( const char *data, int isobj ) {
 
 SDB_EXPORT int bson_sprint_length( const bson *b ) {
     if ( ! b ) return 0 ;
-    // additional '\0' is in bson_sprint_length_raw
     return bson_sprint_length_raw( b->data, 1 ) ;
 }
 
@@ -991,6 +1157,9 @@ SDB_EXPORT bson_type bson_iterator_next( bson_iterator *i ) {
     case BSON_INT:
         ds = 4;
         break;
+    case BSON_DECIMAL:
+        bson_iterator_decimal_size( i, &ds ) ;
+        break;
     case BSON_LONG:
     case BSON_DOUBLE:
     case BSON_TIMESTAMP:
@@ -1053,6 +1222,11 @@ SDB_EXPORT const char *bson_iterator_value( const bson_iterator *i ) {
 }
 
 /* types */
+short bson_iterator_int16_raw( const bson_iterator *i ) {
+    short out;
+    bson_little_endian16( &out, bson_iterator_value( i ) );
+    return out;
+}
 
 int bson_iterator_int_raw( const bson_iterator *i ) {
     int out;
@@ -1088,6 +1262,27 @@ SDB_EXPORT int bson_iterator_int( const bson_iterator *i ) {
         return bson_iterator_long_raw( i );
     case BSON_DOUBLE:
         return bson_iterator_double_raw( i );
+    case BSON_DECIMAL:
+    {
+        int result = 0 ;
+        bson_decimal decimal = DECIMAL_DEFAULT_VALUE ;
+        result = decimal_from_bsonvalue( bson_iterator_value( i ), &decimal ) ;
+        if ( 0 != result )
+        {
+            decimal_free( &decimal ) ;
+            return BSON_ERROR ;
+        }
+
+        result = decimal_to_int( &decimal ) ;
+        if ( 0 != result )
+        {
+            decimal_free( &decimal ) ;
+            return BSON_ERROR ;
+        }
+
+        decimal_free( &decimal ) ;
+        return BSON_OK ;
+    }
     default:
         return 0;
     }
@@ -1101,9 +1296,137 @@ SDB_EXPORT double bson_iterator_double( const bson_iterator *i ) {
         return bson_iterator_long_raw( i );
     case BSON_DOUBLE:
         return bson_iterator_double_raw( i );
+    case BSON_DECIMAL:
+    {
+        double result = 0.0 ;
+        bson_decimal decimal = DECIMAL_DEFAULT_VALUE ;
+        decimal_from_bsonvalue( bson_iterator_value( i ), &decimal ) ;
+        result = decimal_to_double( &decimal ) ;
+        decimal_free( &decimal ) ;
+        return result ;
+    }
     default:
         return 0;
     }
+}
+
+SDB_EXPORT int bson_iterator_decimal_weight( const bson_iterator *i,
+                                             int *weight )
+{
+   const char *value = NULL ;
+   short tmpWeight   = 0 ;
+   if ( bson_iterator_type( i ) != BSON_DECIMAL )
+   {
+      return BSON_ERROR ;
+   }
+
+   value = bson_iterator_value( i ) ;
+
+   value += 4 ;   // size
+   value += 4 ;   // typemod
+   value += 2 ;   // scale
+   bson_little_endian16( &tmpWeight, value ) ;
+
+   *weight = tmpWeight ;
+
+   return BSON_OK ;
+}
+
+SDB_EXPORT int bson_iterator_decimal_size( const bson_iterator *i,
+                                           int *size )
+{
+   const char *value = NULL ;
+   if ( bson_iterator_type( i ) != BSON_DECIMAL )
+   {
+      return BSON_ERROR ;
+   }
+
+   value = bson_iterator_value( i ) ;
+   bson_little_endian32( size, value ) ;
+
+   return BSON_OK ;
+}
+
+SDB_EXPORT int bson_iterator_decimal_typemod( const bson_iterator *i,
+                                              int *typemod )
+{
+   const char *value = NULL ;
+   if ( bson_iterator_type( i ) != BSON_DECIMAL )
+   {
+      return BSON_ERROR ;
+   }
+
+   value = bson_iterator_value( i ) ;
+   value += 4 ;   // size
+
+   bson_little_endian32( typemod, value ) ;
+
+   return BSON_OK ;
+}
+
+
+SDB_EXPORT int bson_iterator_decimal_scale( const bson_iterator *i,
+                                            int *sign, int *scale )
+{
+   const char *value = NULL ;
+   short tmpScale    = 0 ;
+   if ( bson_iterator_type( i ) != BSON_DECIMAL )
+   {
+      return BSON_ERROR ;
+   }
+
+   value = bson_iterator_value( i ) ;
+
+   value += 4 ;   // size
+   value += 4 ;   // typemod
+   bson_little_endian16( &tmpScale, value ) ;
+
+   *sign  = tmpScale & DECIMAL_SIGN_MASK ;
+   *scale = tmpScale & DECIMAL_DSCALE_MASK ;
+
+   return BSON_OK ;
+}
+
+SDB_EXPORT int bson_iterator_decimal( const bson_iterator *i,
+                                      bson_decimal *decimal )
+{
+   bson_type type ;
+   int rc = 0 ;
+
+   decimal_free( decimal ) ;
+   type = bson_iterator_type( i ) ;
+   if ( BSON_INT == type )
+   {
+      int tmp = bson_iterator_int_raw( i ) ;
+      rc = decimal_from_int( tmp, decimal ) ;
+   }
+   else if ( BSON_LONG == type )
+   {
+      int64_t tmp = bson_iterator_long_raw( i ) ;
+      rc = decimal_from_long( tmp, decimal ) ;
+   }
+   else if ( BSON_DOUBLE == type )
+   {
+      double tmp = bson_iterator_double_raw( i ) ;
+      rc = decimal_from_double( tmp , decimal ) ;
+   }
+   else if ( BSON_DECIMAL == type )
+   {
+      rc = decimal_from_bsonvalue( bson_iterator_value( i ), decimal ) ;
+   }
+   else
+   {
+      rc = -1 ;
+   }
+
+   if ( 0 == rc )
+   {
+      return BSON_OK ;
+   }
+   else
+   {
+      return BSON_ERROR ;
+   }
 }
 
 SDB_EXPORT int64_t bson_iterator_long( const bson_iterator *i ) {
@@ -1114,6 +1437,15 @@ SDB_EXPORT int64_t bson_iterator_long( const bson_iterator *i ) {
         return bson_iterator_long_raw( i );
     case BSON_DOUBLE:
         return bson_iterator_double_raw( i );
+    case BSON_DECIMAL:
+    {
+        int64_t result = 0 ;
+        bson_decimal decimal = DECIMAL_DEFAULT_VALUE ;
+        decimal_from_bsonvalue( bson_iterator_value( i ), &decimal ) ;
+        result = decimal_to_long( &decimal ) ;
+        decimal_free( &decimal ) ;
+        return result ;
+    }
     default:
         return 0;
     }
@@ -1151,6 +1483,15 @@ SDB_EXPORT bson_bool_t bson_iterator_bool( const bson_iterator *i ) {
         return bson_iterator_long_raw( i ) != 0;
     case BSON_DOUBLE:
         return bson_iterator_double_raw( i ) != 0;
+    case BSON_DECIMAL:
+    {
+        bson_bool_t result = 0 ;
+        bson_decimal decimal = DECIMAL_DEFAULT_VALUE ;
+        decimal_from_bsonvalue( bson_iterator_value( i ), &decimal ) ;
+        result = decimal_is_zero( &decimal ) ;
+        decimal_free( &decimal ) ;
+        return !result ;
+    }
     case BSON_EOO:
     case BSON_NULL:
         return 0;
@@ -1231,6 +1572,15 @@ SDB_EXPORT const char *bson_iterator_regex_opts( const bson_iterator *i ) {
 
 }
 
+SDB_EXPORT const char *bson_iterator_dbref( const bson_iterator *i ) {
+    return bson_iterator_value( i ) + 4;
+}
+
+SDB_EXPORT bson_oid_t *bson_iterator_dbref_oid( const bson_iterator *i ) {
+    const char *p = bson_iterator_dbref( i );
+    return ( bson_oid_t * )( p + strlen( p ) + 1 );
+}
+
 SDB_EXPORT void bson_iterator_subobject( const bson_iterator *i, bson *sub ) {
     bson_init_data( sub, ( char * )bson_iterator_value( i ) );
     _bson_reset( sub );
@@ -1281,6 +1631,12 @@ void bson_append( bson *b, const void *data, int len ) {
     memcpy( b->cur , data , len );
     b->cur += len;
 }
+
+void bson_append16( bson *b, const void *data ) {
+    bson_little_endian16( b->cur, data );
+    b->cur += 2;
+}
+
 
 void bson_append32( bson *b, const void *data ) {
     bson_little_endian32( b->cur, data );
@@ -1383,11 +1739,9 @@ static int bson_append_estart( bson *b, int type, const char *name, const int da
         bson_builder_error( b );
         return BSON_ERROR;
     }
-    // check nested array's field
     if ( _bson_is_nested_array( b ) ) {
        char c = '0' ;
        if ( len == 2 ) {
-          // check whether the field name is "x" (x is 0/1/2/3/...) or not
           c = (char)(name[0]) ;
           if ( c < '0' || c > '9' ) {
              bson_builder_error( b );
@@ -1408,7 +1762,6 @@ static int bson_append_estart( bson *b, int type, const char *name, const int da
              }
           }
        } else {
-          // name is "", return error
           bson_builder_error( b );
           return BSON_ERROR ;
        }
@@ -1435,6 +1788,72 @@ SDB_EXPORT int bson_append_long( bson *b, const char *name, const int64_t i ) {
         return BSON_ERROR;
     bson_append64( b , &i );
     return BSON_OK;
+}
+
+SDB_EXPORT int bson_append_decimal( bson *b, const char *name,
+                                    const bson_decimal *decimal )
+{
+   int i = 0 ;
+   int size = DECIMAL_HEADER_SIZE + decimal->ndigits * sizeof( short ) ;
+   int typemod  = decimal->typemod ;
+   short dscale = ( decimal->dscale & DECIMAL_DSCALE_MASK ) | decimal->sign ;
+   short weight = decimal->weight ;
+   if ( bson_append_estart( b , BSON_DECIMAL, name, size ) == BSON_ERROR )
+        return BSON_ERROR;
+
+   bson_append32( b, &size ) ;
+   bson_append32( b, &typemod ) ;
+   bson_append16( b, &dscale ) ;
+   bson_append16( b, &weight ) ;
+   for ( i = 0 ; i < decimal->ndigits; i++ )
+   {
+      bson_append16( b, &decimal->digits[i] ) ;
+   }
+
+   return BSON_OK ;
+}
+
+SDB_EXPORT int bson_append_decimal3( bson *b, const char *name,
+                                     const char *value )
+{
+   int rc = 0 ;
+   bson_decimal decimal = DECIMAL_DEFAULT_VALUE ;
+
+   rc = decimal_from_str( value, &decimal ) ;
+   if ( 0 != rc )
+   {
+      return BSON_ERROR ;
+   }
+
+   rc = bson_append_decimal( b, name, &decimal ) ;
+   decimal_free( &decimal ) ;
+
+   return rc ;
+}
+
+
+SDB_EXPORT int bson_append_decimal2( bson *b, const char *name,
+                                     const char *value, int precision,
+                                     int scale )
+{
+   int rc = 0 ;
+   bson_decimal decimal = DECIMAL_DEFAULT_VALUE ;
+   rc = decimal_init1( &decimal, precision, scale ) ;
+   if ( 0 != rc )
+   {
+      return BSON_ERROR ;
+   }
+
+   rc = decimal_from_str( value, &decimal ) ;
+   if ( 0 != rc )
+   {
+      return BSON_ERROR ;
+   }
+
+   rc = bson_append_decimal( b, name, &decimal ) ;
+   decimal_free( &decimal ) ;
+
+   return rc ;
 }
 
 SDB_EXPORT int bson_append_double( bson *b, const char *name, const double d ) {
@@ -1482,6 +1901,35 @@ int bson_append_string_base( bson *b, const char *name,
     if ( bson_check_string( b, ( const char * )value, sl - 1 ) == BSON_ERROR )
         return BSON_ERROR;
     if ( bson_append_estart( b, type, name, 4 + sl ) == BSON_ERROR ) {
+        return BSON_ERROR;
+    }
+    bson_append32( b , &sl );
+    bson_append( b , value , sl - 1 );
+    bson_append( b , "\0" , 1 );
+    return BSON_OK;
+}
+
+int bson_append_string_not_utf8( bson *b, const char *name, const char *value, int len ) {
+
+    int sl = len + 1;
+
+    if ( bson_check_string( b, ( const char * )value, sl - 1 ) == BSON_ERROR ) {
+        int i;
+
+        if ( !( b->err & BSON_NOT_UTF8 ) ) {
+            return BSON_ERROR;
+        }
+
+        for ( i = 0; i < len; i++ ) {
+            if ( '\0' == value[i] ) {
+                return BSON_ERROR;
+            }
+        }
+
+        b->err &= ~BSON_NOT_UTF8;
+    }
+
+    if ( bson_append_estart( b, BSON_STRING, name, 4 + sl ) == BSON_ERROR ) {
         return BSON_ERROR;
     }
     bson_append32( b , &sl );
@@ -1658,7 +2106,6 @@ SDB_EXPORT int bson_append_time_t( bson *b, const char *name, time_t secs ) {
 
 SDB_EXPORT int bson_append_start_object( bson *b, const char *name ) {
     if ( bson_append_estart( b, BSON_OBJECT, name, 5 ) == BSON_ERROR ) return BSON_ERROR;
-    // make sure the bson doesn't have too many embedded layers
     if ( b->stackPos >= BSON_MAX_STACK_SIZE-1 ) return BSON_ERROR ;
     b->stack[ b->stackPos ] = b->cur - b->data;
     b->stackType[ b->stackPos ] = (char)BSON_OBJECT ;
@@ -1669,7 +2116,6 @@ SDB_EXPORT int bson_append_start_object( bson *b, const char *name ) {
 
 SDB_EXPORT int bson_append_start_array( bson *b, const char *name ) {
     if ( bson_append_estart( b, BSON_ARRAY, name, 5 ) == BSON_ERROR ) return BSON_ERROR;
-    // make sure the bson doesn't have too many embedded layers
     if ( b->stackPos >= BSON_MAX_STACK_SIZE-1 ) return BSON_ERROR ;
     b->stack[ b->stackPos ] = b->cur - b->data;
     b->stackType[ b->stackPos ] = (char)BSON_ARRAY ;
@@ -1685,7 +2131,7 @@ SDB_EXPORT int bson_append_finish_object( bson *b ) {
     bson_append_byte( b , 0 );
 
     --b->stackPos ;
-    b->stackType[ b->stackPos ] = (char)(-1) ;    
+    b->stackType[ b->stackPos ] = (char)(-1) ;
     start = b->data + b->stack[ b->stackPos ];
     i = b->cur - start;
     bson_little_endian32( start, &i );
@@ -1806,6 +2252,43 @@ SDB_EXPORT void bson_swap_endian32( void *outp, const void *inp ) {
     out[3] = in[0];
 }
 
+SDB_EXPORT void bson_swap_endian16( void *outp, const void *inp ) {
+    const char *in = ( const char * )inp;
+    char *out = ( char * )outp;
+
+    out[0] = in[1];
+    out[1] = in[0];
+}
+
+SDB_EXPORT bson_bool_t bson_is_inf( double d, int *pSign )
+{
+    volatile double tmp = d ;
+    if( ( tmp == d ) && ( ( tmp - d ) != 0.0 ) )
+    {
+        if( pSign )
+        {
+            *pSign = ( d < 0.0 ? -1 : 1 ) ;
+        }
+        return 1 ;
+    }
+    if( pSign )
+    {
+        *pSign = 0 ;
+    }
+    return 0 ;
+}
+
+SDB_EXPORT void bson_set_js_compatibility(int compatible)
+{
+    jsCompatibility = compatible;
+}
+
+SDB_EXPORT int bson_get_js_compatibility()
+{
+    return jsCompatibility;
+}
+
+
 void LocalTime ( time_t *Time, struct tm *TM )
 {
    if ( !Time || !TM )
@@ -1813,9 +2296,6 @@ void LocalTime ( time_t *Time, struct tm *TM )
 #if defined (__linux__ ) || defined (_AIX)
    localtime_r( Time, TM ) ;
 #elif defined (_WIN32)
-   // The Time represents the seconds elapsed since midnight (00:00:00),
-   // January 1, 1970, UTC. This value is usually obtained from the time
-   // function.
    localtime_s( TM, Time ) ;
 #endif
 }

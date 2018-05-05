@@ -276,7 +276,19 @@ namespace engine
       {
          if ( !itr->value.attr().empty() )
          {
-            builder.appendNull( itr->value.attr().toString()) ;
+            string name = itr->value.attr().toString() ;
+
+            const CHAR *dollarArray = ossStrstr( name.c_str(), ".$[" ) ;
+            if ( NULL == dollarArray )
+            {
+               builder.appendNull( name ) ;
+            }
+            else
+            {
+               INT32 at = INT32(dollarArray - name.c_str()) ;
+               name.at( at ) = '\0';
+               builder.appendNull( StringData( name.c_str(), UINT32(at) ) ) ;
+            }
          }
       }
 
@@ -291,8 +303,8 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY( SDB__QGMSELECTOR__CREATEVALUEWITHEXPR ) ;
-      CHAR row[16] ;
-      _qgmValueTuple v( row, 16, TRUE ) ;
+      CHAR row[32] ;
+      _qgmValueTuple v( row, 32, TRUE ) ;
       INT16 vType = 0 ;
 
       if ( !e.isNumber() )
@@ -312,6 +324,19 @@ namespace engine
       if ( ( INT16 )bson::EOO == vType )
       {
          builder.appendNull( fieldName ) ;
+      }
+      else if ( ( INT16 )bson::NumberDecimal == vType )
+      {
+         bson::bsonDecimal decimal ;
+
+         rc = decimal.fromBsonValue( (const CHAR *)v.getValue() ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "failed to get decimal from bsonvalue:%d", rc ) ;
+            goto error ;
+         }
+
+         builder.append( fieldName, decimal ) ;
       }
       else if ( ( INT16 )bson::NumberLong == vType )
       {

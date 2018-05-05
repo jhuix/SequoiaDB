@@ -65,7 +65,7 @@ if( "LINUX" == OS_TYPE_IN_JS_LOG )
       LOG_FILE_PATH = currentPath + "/../conf/log/" ;
    else
       LOG_FILE_PATH = currentPath + "../conf/log/" ;
-   
+
    JS_LOG_FILE   = LOG_FILE_PATH + LOG_FILE_NAME ;
    LOG_NEW_LINE  = "\n" ;
 }
@@ -77,7 +77,7 @@ else
       LOG_FILE_PATH = currentPath + "\\..\\conf\\log\\" ;
    else
       LOG_FILE_PATH = currentPath + "..\\conf\\log\\" ;
-   
+
    JS_LOG_FILE  = LOG_FILE_PATH + LOG_FILE_NAME ;
    LOG_NEW_LINE = "\r\n" ;
 }
@@ -189,7 +189,7 @@ function _genSpace( num )
 }
 
 /* *****************************************************************************
-@discretion: format one line of the log information 
+@discretion: format one line of the log information
 @author: Tanzhaobo
 @parameter
    inputStr[string]: one line of content to be formatted
@@ -211,13 +211,13 @@ function _formatOneLine( inputStr, key, indent )
    }
    else
    {
-      retStr = arr[0] + " " + key + arr[1] + LOG_NEW_LINE ; 
+      retStr = arr[0] + " " + key + arr[1] + LOG_NEW_LINE ;
    }
    return retStr ;
-} 
+}
 
 /* *****************************************************************************
-@discretion: format the log information 
+@discretion: format the log information
 @author: Tanzhaobo
 @parameter
    contentStr[string]: the content to be formatted
@@ -231,7 +231,7 @@ function _formatLogInfo( contentStr, keyArr, indent )
    var i = 0 ;
    var arr = contentStr.split( LOG_NEW_LINE ) ;
    for( i = 0; i < keyArr.length; i++ )
-      retStr += _formatOneLine( arr[i], keyArr[i], 42 ) ; 
+      retStr += _formatOneLine( arr[i], keyArr[i], 42 ) ;
    for( ; i < arr.length; i++ )
       retStr += arr[i] + LOG_NEW_LINE ;
 
@@ -305,7 +305,7 @@ function _sprintf() {
 @return the log file
 ***************************************************************************** */
 function _getJsLogFile( type )
-{  
+{
    switch( type )
    {
    case LOG_GENERIC:
@@ -326,26 +326,26 @@ function _getJsLogFile( type )
 @discretion: write the log message to the log file
 @author: Tanzhaobo
 @parameter
-   type[number]: 
+   type[number]:
    infoStr[string]: the log message to write
 @return void
 ***************************************************************************** */
 function _write2File( type, infoStr )
-{  
+{
    var file            = null ;
    var logFileFullName = "" ;
    var errMsg          = "" ;
-      
+
    if ( LOG_NONE == type )
    {
       print( infoStr ) ;
       return ;
    }
-      
+
    try
    {
       logFileFullName = _getJsLogFile( type ) ;
-      file = new File( logFileFullName ) ;
+      file = new File( logFileFullName, 0644 ) ;
    }
    catch( e )
    {
@@ -416,33 +416,45 @@ function getLogLevel()
 
 /* *****************************************************************************
 @discretion: write the log
-@author: Tanzhaobo
+@author: David Li
+@date: 2016/5/26
 @parameter
    type[number]: the log type, -1 for none, -2 for general log,
       when type > 0, it is task type
-   argsObj[object]: the arguments object of the function which invoked PD_LOG
    level[number]: 0-5, the log level
-   func[string]: which function PD_LOG2 is invoked 
+   funcName[string]: the function name PD_LOG2 is invoked
    line[number]: which line PD_LOG2 is invoked
    file[string]: which file PD_LOG is invoked
    message[string]: the log message
 @return void
 ***************************************************************************** */
-function PD_LOG3( type, argsObj, level, func, line, file, message )
+function PD_LOG_BASIC( type, level, funcName, line, file, message )
 {
-   var funcName  = "" ;
    var formatStr = "" ;
    var logInfo   = "" ;
    var levelStr  = "" ;
-   
+
    if ( "number" == typeof( level ) && level > JS_LOG_LEVEL )
+   {
       return ;
-   funcName = (argsObj.callee.toString().replace(/function\s?/mi, "").split("("))[0] ;
+   }
+
+   if ( funcName == undefined || "string" != typeof( funcName ) )
+   {
+      funcName = "" ;
+   }
+
+   if ( message instanceof Error )
+   {
+      message = message.toString() ;
+   }
 
    levelStr = _getPDLevelDesp(level) ;
    if ( PDERROR >= level )
+   {
       levelStr = "*" + levelStr ;
-   
+   }
+
    try
    {
       formatStr = "%s [%5d][%5d][%7s]: %s(%s)%s" ;
@@ -458,6 +470,26 @@ function PD_LOG3( type, argsObj, level, func, line, file, message )
                          message, file + ":" + funcName, LOG_NEW_LINE ) ;
    }
    _write2File( type, logInfo ) ;
+}
+
+/* *****************************************************************************
+@discretion: write the log
+@author: Tanzhaobo
+@parameter
+   type[number]: the log type, -1 for none, -2 for general log,
+      when type > 0, it is task type
+   argsObj[object]: the arguments object of the function which invoked PD_LOG
+   level[number]: 0-5, the log level
+   func[string]: which function PD_LOG2 is invoked
+   line[number]: which line PD_LOG2 is invoked
+   file[string]: which file PD_LOG is invoked
+   message[string]: the log message
+@return void
+***************************************************************************** */
+function PD_LOG3( type, argsObj, level, func, line, file, message )
+{
+   var funcName = (argsObj.callee.toString().replace(/function\s?/mi, "").split("("))[0] ;
+   return PD_LOG_BASIC( type, level, funcName, line, file, message ) ;
 }
 
 /* *****************************************************************************
@@ -527,3 +559,90 @@ function PD_LOG_DEBUG2( type, argsObj, level, file, message )
    PD_LOG2( type, argsObj, level, file, message ) ;
    setLogLevel( oldLevel ) ;
 }
+
+/* *****************************************************************************
+Logger Class
+@description: write log
+@author: David Li
+@date: 2016/5/26
+usage:
+    new Logger(fileName);
+    new Logger(fileName, taskId);
+    Logger.setTaskId(taskId);       // set taskId to logger, throw error when taskId exists yet
+    Logger.logComm(level, message); // log to common file
+    Logger.logTask(level, message); // log to task file, throw error when called before setting taskId
+    Logger.log(level, message);     // log to common file before setting taskId,
+                                    // and log to task file after setting taskId
+examples:
+    var logger = new Logger("install.js");
+    logger.logComm(PDERROR, "invalid args"); // log to common file
+    logger.log(PDERROR, "invalid args");     // log to common file before setting taskId
+    logger.setTaskId(5);
+    logger.logTask(PDERROR, "invalid args"); // log to task file, throw error when called before setting taskId
+    logger.log(PDEVENT, "begin installing"); // log to task file after setting taskId
+
+    var logger = new Logger("install.js", 5);
+    logger.logComm(PDERROR, "invalid args"); // log to common file
+    logger.logTask(PDERROR, "invalid args"); // log to task file
+    logger.log(PDEVENT, "begin installing"); // log to task file
+***************************************************************************** */
+var Logger = function(fileName, taskId) {
+    if (fileName == undefined || typeof(fileName) != "string") {
+        throw "fileName must be string in Logger";
+    }
+    this.fileName = fileName;
+    if (taskId != undefined) {
+        if (typeof(taskId) != "number") {
+            throw "taskId must be number";
+        }
+        this.taskId = taskId;
+        setTaskLogFileName(taskId);
+    }
+};
+
+Logger.prototype.setTaskId = function(taskId) {
+    if (this.taskId != undefined) {
+        throw "taskId exists when call Logger.setTaskId()";
+    }
+    if (typeof(taskId) != "number") {
+        throw "taskId must be number";
+    }
+    this.taskId = taskId;
+    setTaskLogFileName(taskId);
+};
+
+Logger.prototype.log = function (level, message) {
+    var funcName = "";
+    if (Logger.prototype.log.caller) {
+        funcName = Logger.prototype.log.caller.name;
+    }
+
+    var type = LOG_GENERIC;
+    if (this.taskId != undefined) {
+        type = this.taskId;
+    }
+
+    PD_LOG_BASIC(type, level, funcName, 0, this.fileName, message);
+};
+
+Logger.prototype.logComm = function (level, message) {
+    var funcName = "";
+    if (Logger.prototype.logComm.caller) {
+        funcName = Logger.prototype.logComm.caller.name;
+    }
+
+    PD_LOG_BASIC(LOG_GENERIC, level, funcName, 0, this.fileName, message);
+};
+
+Logger.prototype.logTask = function (level, message) {
+    if (undefined == this.taskId || "number" != typeof(this.taskId)) {
+        throw "taskId unavailable in Logger.logTask()";
+    }
+
+    var funcName = "";
+    if (Logger.prototype.logTask.caller) {
+        funcName = Logger.prototype.logTask.caller.name;
+    }
+
+    PD_LOG_BASIC(this.taskId, level, funcName, 0, this.fileName, message);
+};

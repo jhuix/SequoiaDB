@@ -38,9 +38,7 @@
 #include "core.hpp"
 #include "oss.hpp"
 
-/// safe to share grammar across threads.
 #define BOOST_SPIRIT_THREADSAFE
-/// set the start limit
 #define BOOST_SPIRIT_GRAMMAR_STARTRULE_TYPE_LIMIT 20
 
 #include <boost/spirit/include/classic_ast.hpp>
@@ -67,7 +65,6 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
 
    struct _sqlGrammar : public grammar<_sqlGrammar>, SDBObject
    {
-         /// sql type start
       const static INT32 SQL = 0 ;
       const static INT32 SELECT = 1 ;
       const static INT32 INSERT = 2 ;
@@ -81,9 +78,7 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
       const static INT32 DROPINDEX = 10 ;    //--10
       const static INT32 LISTCS = 11 ;
       const static INT32 LISTCL = 12 ;
-         /// sql type end
 
-         /// term start
       const static INT32   WHERE = 13 ;
       const static INT32   SET = 14 ;
       const static INT32   AND = 15 ;
@@ -119,43 +114,36 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
       const static INT32   ROLLBACK = 45 ;
       const static INT32   COMMIT = 46 ;
       const static INT32   DATE = 47 ;
-      const static INT32   MTHMACH = 48 ;
       const static INT32   LIKE = 49 ;
       const static INT32   SPLITBY = 50 ;
 
-      /// do not use IN coz windows
       const static INT32   INN = 51;
       const static INT32   NOT = 52;
       const static INT32   NULLL = 53;
       const static INT32   IS = 54;
-         /// trem end
+      const static INT32   ISNOT = 55;
+      const static INT32   OID = 56;
+      const static INT32   TIMESTAMP = 57;
+      const static INT32   DECIMAL = 58 ;
 
-      /// math start
-      const static INT32 ADD = 55 ;
-      const static INT32 SUB = 56 ;
-      const static INT32 MULTIPLY = 57 ;
-      const static INT32 DIVIDE = 58 ;
-      const static INT32 MOD = 59 ;
-      /// math end
+      const static INT32 ADD = 80 ;
+      const static INT32 SUB = 81 ;
+      const static INT32 MULTIPLY = 82 ;
+      const static INT32 DIVIDE = 83 ;
+      const static INT32 MOD = 84 ;
 
-         /// factor start
       const static INT32   DBATTR = 1000 ;
-         /// factor end
 
-         /// base type start
       const static INT32   DIGITAL = 1001 ;
       const static INT32   STR = 1002 ;
       const static INT32   BOOL_TRUE = 1003 ;
       const static INT32   BOOL_FALSE = 1004 ;
-         /// base type end
 
       const static INT32   SQLMAX = 10000 ;
 
       template <typename ScannerT>
       struct definition
       {
-         /// we define all the rules here.
-         /// it can be defined in different files if necessary.
 
          SQL_RULE(SQL) sql ;
          SQL_RULE(SELECT) select ;
@@ -211,6 +199,10 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
          SQL_RULE(SPLITBY) splitby ;
          SQL_RULE(NULLL) nulll ;
          SQL_RULE(IS) is;
+         SQL_RULE(ISNOT) isnot ;
+         SQL_RULE(OID) oid ;
+         SQL_RULE(TIMESTAMP) timestamp ;
+         SQL_RULE(DECIMAL) decimal ;
 
          SQL_RULE(DBATTR) dbattr ;
 
@@ -225,7 +217,6 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
          SQL_RULE(DIVIDE) divide ;
          SQL_RULE(MOD) mod ;
 
-         /// logical rule for parsing.
          rule<ScannerT> graph ;
          rule<ScannerT> wCondition ;
          rule<ScannerT> oCondition ;
@@ -247,7 +238,7 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
          rule<ScannerT> expr_factor ;
          rule<ScannerT> expr_group ;
          rule<ScannerT> expr;
-         
+         rule<ScannerT> commValue ;
 
          const SQL_RULE(SQL) &start() const
          {
@@ -258,13 +249,13 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
          {
             digital = leaf_node_d[
                           lexeme_d[!(ch_p('+')|ch_p('-'))>>+digit_p >>
-                          !('.'>>+digit_p)>>!((ch_p('e')|ch_p('E')\
-                           >> !(ch_p('+')|ch_p('-')))>>+digit_p)]
+                          !('.'>>+digit_p)>>!(((ch_p('e')|ch_p('E')) >>
+                          !(ch_p('+')|ch_p('-')))>>+digit_p)]
                           ];
 
             bool_true = as_lower_d[ str_p("true") ] ;
 
-            bool_false = as_lower_d[ str_p("false") ] ;         
+            bool_false = as_lower_d[ str_p("false") ] ;
 
             graph = (anychar_p - ( ch_p('"')|ch_p('\0')|ch_p('\'')))
                     | str_p("\\\\")
@@ -278,7 +269,7 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
                    | ( inner_node_d[ch_p('\'')
                                >> leaf_node_d[+graph]
                                >> ch_p('\'')])
-                   | ( no_node_d[ch_p('\'')] >> no_node_d[ch_p('\'')]); 
+                   | ( no_node_d[ch_p('\'')] >> no_node_d[ch_p('\'')]);
 
             dbattrchar = anychar_p - ( ch_p('=')
                                        |ch_p('<')
@@ -297,9 +288,7 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
                                        |ch_p('/')
                                        |ch_p('%')) ;
 
-            dbattr = leaf_node_d[
-                             lexeme_d[+(dbattrchar)]
-                             ] ;
+            dbattr = leaf_node_d[ lexeme_d[+(dbattrchar)] ] ;
 
             as = as_lower_d[str_p("as")] ;
 
@@ -335,6 +324,8 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
 
             is = as_lower_d[str_p("is")] ;
 
+            isnot = leaf_node_d[ is >> SQL_BLANKORNO >> nott ] ;
+
             lbrackets = ch_p('(') ;
 
             rbrackets = ch_p(')') ;
@@ -361,7 +352,11 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
 
             mod = ch_p('%') ;
 
-            expr_factor = func |digital | str | dbattr
+            commValue = digital | str | nulll | oid |
+                        date | timestamp | decimal |
+                        bool_true | bool_false ;
+
+            expr_factor = func | digital | str | dbattr
                           | (inner_node_d[lbrackets
                                       >> SQL_BLANKORNO
                                       >> expr
@@ -375,13 +370,12 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
             expr = expr_group % ( SQL_BLANKORNO
                                   >> root_node_d[( add | sub )]
                                   >> SQL_BLANKORNO  ) ;
-                   
 
             func = leaf_node_d[dbattr
                                >> SQL_BLANKORNO
                                >> lbrackets
                                >> SQL_BLANKORNO
-                               >> *((dbattrchar |blank_p| ch_p(',')) - rbrackets)
+                               >> *( dbattr % ( SQL_BLANKORNO >> comma >> SQL_BLANKORNO ) )
                                >> SQL_BLANKORNO
                                >> rbrackets] ;
 
@@ -393,6 +387,29 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
                                >> SQL_BLANKORNO
                                >> no_node_d[rbrackets] ;
 
+            oid = root_node_d[as_lower_d[str_p("oid")]]
+                               >> SQL_BLANKORNO
+                               >> no_node_d[lbrackets]
+                               >> SQL_BLANKORNO
+                               >> str
+                               >> SQL_BLANKORNO
+                               >> no_node_d[rbrackets] ;
+
+            timestamp = root_node_d[as_lower_d[str_p("timestamp")]]
+                               >> SQL_BLANKORNO
+                               >> no_node_d[lbrackets]
+                               >> SQL_BLANKORNO
+                               >> str
+                               >> SQL_BLANKORNO
+                               >> no_node_d[rbrackets] ;
+
+            decimal = root_node_d[as_lower_d[str_p("decimal")]]
+                               >> SQL_BLANKORNO
+                               >> no_node_d[lbrackets]
+                               >> SQL_BLANKORNO
+                               >> digital
+                               >> SQL_BLANKORNO
+                               >> no_node_d[rbrackets] ;
 
             partition = no_node_d[as_lower_d[str_p("partition")]]
                         >> SQL_BLANK
@@ -443,10 +460,7 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
                                   >> SQL_BLANK
                                   >> as_lower_d[str_p("by")]]]
                       >> SQL_BLANK
-                      >> (oFields
-                           % ( SQL_BLANKORNO
-                               >> no_node_d[comma]
-                               >> SQL_BLANKORNO)) ;
+                      >> oFields ;
 
             splitby = root_node_d[leaf_node_d[as_lower_d[str_p("split")]
                                   >> SQL_BLANK
@@ -470,25 +484,27 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
 
             inFactor = no_node_d[lbrackets]
                        >> SQL_BLANKORNO
-                       >> (digital | str | date )
+                       >> ( commValue )
                            % ( SQL_BLANKORNO
                                >> root_node_d[comma]
                                >> SQL_BLANKORNO )
                        >> SQL_BLANKORNO
                        >> no_node_d[rbrackets];
-                       
 
-            /// lt and gt must be behind the others.
             wFactor = ( dbattr
                         >> SQL_BLANKORNO
-                        >> root_node_d[(eg|lte|gte
-                                        |ne|lt|gt|is)]
+                        >> root_node_d[(eg|lte|gte|ne|lt|gt)]
                         >> SQL_BLANKORNO
-                        >> ( digital | nulll |str | date |(dbattr - (bool_true | bool_false)) ) )
+                        >> ( commValue | dbattr ) )
+                      |( dbattr
+                        >> SQL_BLANK
+                        >> root_node_d[(isnot|is)]
+                        >> SQL_BLANK
+                        >> ( commValue | dbattr ) )
                       |( dbattr
                          >> SQL_BLANK
                          >> root_node_d[in]
-                         >> SQL_BLANK
+                         >> SQL_BLANKORNO
                          >> inFactor )
                       |( dbattr
                          >>SQL_BLANK
@@ -500,17 +516,11 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
                                       >> wCondition
                                       >> SQL_BLANKORNO
                                       >> rbrackets])
-                      | root_node_d[nott] >> SQL_BLANK >> wFactor
-                      | ( dbattr
-                         >> SQL_BLANKORNO
-                         >> root_node_d[eg|ne|lte|gte|lt|gt]
-                         >> SQL_BLANKORNO
-                         >> ( bool_true | bool_false ) );
+                      | root_node_d[nott] >> SQL_BLANK >> wFactor ;
 
             oFactor = ( dbattr
                         >> SQL_BLANKORNO
-                        >> root_node_d[(eg|lte|gte
-                                        |ne|lt|gt)]
+                        >> root_node_d[(eg|lte|gte|ne|lt|gt)]
                         >> SQL_BLANKORNO
                         >> dbattr )
                       | (inner_node_d[lbrackets
@@ -548,12 +558,10 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
 
             fDomain = ( fSrc
                         >> SQL_BLANK
-                        >> root_node_d[innerj |louterj
-                                    |routerj |fouterj]
+                        >> root_node_d[innerj |louterj|routerj |fouterj]
                         >> SQL_BLANK
                         >> fSrc
-                        >> !( SQL_BLANK
-                              >> on ))
+                        >> !( SQL_BLANK >> on ) )
                       | fSrc ;
 
             from = root_node_d[as_lower_d[str_p("from")]]
@@ -577,7 +585,7 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
 
             assign = dbattr >> SQL_BLANKORNO
                        >> root_node_d[eg] >> SQL_BLANKORNO
-                       >> ( digital | str |date) ;
+                       >> commValue ;
 
             set = no_node_d[as_lower_d[str_p("set")]]
                   >> SQL_BLANK
@@ -586,39 +594,36 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
                         >> root_node_d[comma]
                         >> SQL_BLANKORNO)  ;
 
-            iFields = no_node_d[lbrackets]
-                      >> SQL_BLANKORNO
-                      >> dbattr % (SQL_BLANKORNO
-                                   >>root_node_d[comma]
-                                   >> SQL_BLANKORNO)
-                      >> SQL_BLANKORNO
-                      >> no_node_d[rbrackets] ;
+            iFields = no_node_d[ lbrackets ]
+                  >>  SQL_BLANKORNO
+                  >>  dbattr % ( SQL_BLANKORNO
+                              >> root_node_d[comma]
+                              >> SQL_BLANKORNO )
+                  >>  SQL_BLANKORNO
+                  >>  no_node_d[ rbrackets ] ;
 
-            iValues = no_node_d[lbrackets]
-                      >> SQL_BLANKORNO
-                      >> (digital | str |date) % (SQL_BLANKORNO
-                                            >>root_node_d[comma]
-                                            >> SQL_BLANKORNO)
-                      >> SQL_BLANKORNO
-                      >> no_node_d[rbrackets] ;
+            iValues = no_node_d[ lbrackets ]
+                   >> SQL_BLANKORNO
+                   >> ( commValue ) % ( SQL_BLANKORNO
+                                     >> root_node_d[comma]
+                                     >> SQL_BLANKORNO )
+                   >> SQL_BLANKORNO
+                   >> no_node_d[ rbrackets ] ;
 
-            iSrc = ( iFields
+            iSrc = ( SQL_BLANKORNO
+                     >> iFields
                      >> SQL_BLANK
-                     >> no_node_d[as_lower_d[str_p("values")]]
-                     >> SQL_BLANK
+                     >> no_node_d[ as_lower_d[str_p("values")] ]
+                     >> SQL_BLANKORNO
                      >> iValues )
-                   | ( no_node_d[lbrackets]
-                       >> SQL_BLANKORNO
-                       >> select
-                       >> SQL_BLANKORNO
-                       >> no_node_d[rbrackets]
-                       >> !( SQL_BLANK
-                             >> as
-                             >> SQL_BLANK
-                             >> dbattr))
-                   | select ;
+                   | ( SQL_BLANKORNO
+                    >> no_node_d[ lbrackets ]
+                    >> SQL_BLANKORNO
+                    >> select
+                    >> SQL_BLANKORNO
+                    >> no_node_d[ rbrackets ] )
+                   | ( SQL_BLANK >> select ) ;
 
-            ////
 
             select = no_node_d[as_lower_d[str_p("select")]]
                      >> SQL_BLANK
@@ -629,8 +634,10 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
                      >> !( SQL_BLANK >> groupby )
                      >> !( SQL_BLANK >> splitby )
                      >> !( SQL_BLANK >> orderby )
-                     >> !( SQL_BLANK >> limit )
-                     >> !( SQL_BLANK >> offset )
+                     >> (
+                          ( SQL_BLANK >> limit >> !( SQL_BLANK >> offset ) )
+                         |( !( SQL_BLANK >> offset ) >> !( SQL_BLANK >> limit ) )
+                        )
                      >> !( SQL_BLANK >> hint ) ;
 
             insert = no_node_d[as_lower_d[str_p("insert")]]
@@ -638,19 +645,27 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
                      >> no_node_d[as_lower_d[str_p("into")]]
                      >> SQL_BLANK
                      >> dbattr
-                     >> ( ( SQL_BLANKORNO >> iFields
-                            >> SQL_BLANK
-                            >> no_node_d[as_lower_d[str_p("values")]]
-                            >> SQL_BLANKORNO
-                            >> iValues )
-                          | SQL_BLANK >> select) ;
+                     >> ( ( SQL_BLANKORNO
+                       >> iFields
+                       >> SQL_BLANK
+                       >> no_node_d[ as_lower_d[str_p("values")] ]
+                       >> SQL_BLANKORNO
+                       >> iValues )
+                      | ( SQL_BLANKORNO
+                       >> no_node_d[ lbrackets ]
+                       >> SQL_BLANKORNO
+                       >> select
+                       >> SQL_BLANKORNO
+                       >> no_node_d[ rbrackets ] )
+                      | ( SQL_BLANK >> select ) ) ;
 
             update = no_node_d[as_lower_d[str_p("update")]]
                      >> SQL_BLANK
                      >> dbattr
                      >> SQL_BLANK
                      >> set
-                     >> !( SQL_BLANK >> where ) ;
+                     >> !( SQL_BLANK >> where )
+                     >> !( SQL_BLANK >> hint ) ;
 
             del = no_node_d[as_lower_d[str_p("delete")]]
                   >> SQL_BLANK
@@ -692,11 +707,6 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
                     >> SQL_BLANK
                     >> leaf_node_d[dbattr] ;
 
-            /// hope to get: |--(id:6)
-            ///                  |--(value:foo, id:44)
-            /// but have no idea how.
-            /// now we get:  |--(value:foo, id:6)
-            /// the same to crtcs, crtcl, dropcl.
             dropcs = no_node_d[as_lower_d[str_p("drop")]]
                      >> SQL_BLANK
                      >>no_node_d[as_lower_d[str_p("collectionspace")]]
@@ -766,6 +776,7 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
    } ;
 
    typedef struct _sqlGrammar SQL_GRAMMAR ;
+
 }
 
 #endif

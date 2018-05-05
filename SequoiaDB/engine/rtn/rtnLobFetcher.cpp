@@ -185,8 +185,8 @@ namespace engine
       PD_TRACE_EXITRC( SDB__RTNLOBFETCHER_FETCH, rc ) ;
       return rc ;
    error:
-      _fini() ;
       _lastErr = rc ;
+      _fini() ;
       goto done ;
    }
 
@@ -217,8 +217,8 @@ namespace engine
 
    void _rtnLobFetcher::close( INT32 cause )
    {
-      _fini() ;
       _lastErr = cause ;
+      _fini() ;
    }
 
 }

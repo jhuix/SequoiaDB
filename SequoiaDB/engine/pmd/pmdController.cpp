@@ -37,7 +37,6 @@
 #include "pmdController.hpp"
 #include "pmd.hpp"
 #include "pmdCB.hpp"
-#include "rtnPageCleanerJob.hpp"
 #include "rtnDictCreatorJob.hpp"
 #include "../bson/lib/md5.hpp"
 #include "ossDynamicLoad.hpp"
@@ -46,11 +45,9 @@
 
 namespace engine
 {
-   // Session Time out
    #define PMD_REST_SESSION_TIMEOUT             ( 3 * 60 * 60 * 1000 )
    #define PMD_FIX_BUFF_CATCH_NUMBER            ( 100 )
 
-   // max rest body size
    #define PMD_REST_MAX_BODY_SIZE               ( 64 * 1024 * 1024 )
 
    #define PMD_FIX_PTR_SIZE(x)                  ( x + sizeof(INT32) )
@@ -109,9 +106,7 @@ namespace engine
          PD_RC_CHECK( rc, PDERROR, "Failed to init fap module, rc: %d", rc ) ;
       }
 
-      // 1. create tcp listerner
       port = pOptCB->getServicePort() ;
-      // memory will be freed in fini
       _pTcpListener = SDB_OSS_NEW ossSocket( port ) ;
       if ( !_pTcpListener )
       {
@@ -128,7 +123,6 @@ namespace engine
                    "rc: %d", port, rc ) ;
       PD_LOG( PDEVENT, "Listerning on port[%d]", port ) ;
 
-      // 2. create http listerner
       rc = ossGetPort( pOptCB->getRestService(), port ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to get port by service name: %s, "
                    "rc: %d", pOptCB->getRestService(), rc ) ;
@@ -166,35 +160,26 @@ namespace engine
       rc = _restAdptor.init( _fixBufSize, _maxRestBodySize, _restTimeout ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to init rest adaptor, rc: %d", rc ) ;
 
-      // start time sync edu
       rc = pEDUMgr->startEDU( EDU_TYPE_SYNCCLOCK, NULL, &eduID ) ;
       PD_RC_CHECK( rc, PDERROR, "Start sync clock edu failed, rc: %d", rc ) ;
-      pEDUMgr->regSystemEDU( EDU_TYPE_SYNCCLOCK, eduID ) ;
 
-      // start db monitor edu
       rc = pEDUMgr->startEDU( EDU_TYPE_DBMONITOR, NULL, &eduID ) ;
       PD_RC_CHECK( rc, PDERROR, "Start db monitor edu failed, rc: %d", rc ) ;
-      pEDUMgr->regSystemEDU( EDU_TYPE_DBMONITOR, eduID ) ;
 
 #if defined ( _LINUX )
-      // start signal test
       if ( pmdGetOptionCB()->getSignalInterval() > 0 )
       {
          pmdEDUCB *mainCB = pmdGetThreadEDUCB() ;
          rc = pEDUMgr->startEDU( EDU_TYPE_SIGNALTEST, (void*)mainCB, &eduID ) ;
          PD_RC_CHECK( rc, PDERROR, "Start signal test edu failed, rc: %d", rc ) ;
-         pEDUMgr->regSystemEDU( EDU_TYPE_SIGNALTEST, eduID ) ;
       }
 #endif // _LINUX
 
-      // start tcp listern edu and http listerner edu
       rc = pEDUMgr->startEDU( EDU_TYPE_TCPLISTENER, (void*)_pTcpListener,
                               &eduID ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to start tcp listerner, rc: %d",
                    rc ) ;
-      pEDUMgr->regSystemEDU( EDU_TYPE_TCPLISTENER, eduID ) ;
 
-      // wait until tcp listener starts
       rc = pEDUMgr->waitUntil ( eduID, PMD_EDU_RUNNING ) ;
       PD_RC_CHECK( rc, PDERROR, "Wait Tcp Listerner active failed, rc: %d",
                    rc ) ;
@@ -203,9 +188,7 @@ namespace engine
                               &eduID ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to start rest listerner, rc: %d",
                    rc ) ;
-      pEDUMgr->regSystemEDU( EDU_TYPE_RESTLISTENER, eduID ) ;
 
-      // wait until http listener starts
       rc = pEDUMgr->waitUntil ( eduID, PMD_EDU_RUNNING ) ;
       PD_RC_CHECK( rc, PDERROR, "Wait rest Listener active failed, rc: %d",
                    rc ) ;
@@ -214,28 +197,17 @@ namespace engine
       PD_RC_CHECK( rc, PDERROR, "active Foreign module failed, rc: %d",
                    rc ) ;
 
-      // For non-coord nodes, we need to start page cleaners
       if ( SDB_ROLE_COORD != pmdGetDBRole() )
       {
-         UINT32 pageTaskNum = pmdGetOptionCB()->getPageCleanNum() ;
-         UINT32 pageIntervel = pmdGetOptionCB()->getPageCleanInterval() ;
-         // start page flush background task
-         for ( UINT32 i = 0; i < pageTaskNum ; ++i )
-         {
-            startPageCleanerJob( NULL, (INT32)pageIntervel ) ;
-         }
-         // start load job
          rtnStartLoadJob() ;
       }
 
-      // For data nodes(both primary and slavery nodes), we need to start
-      // dictionary creating threads.
-      if ( SDB_ROLE_DATA == pmdGetDBRole()
-           || SDB_ROLE_STANDALONE == pmdGetDBRole() )
+      if ( SDB_ROLE_DATA == pmdGetDBRole() ||
+           SDB_ROLE_STANDALONE == pmdGetDBRole() )
       {
          rc = startDictCreatorJob( NULL ) ;
-         PD_RC_CHECK( rc, PDERROR, "Start dictionary creating job thread failed, "
-                      "rc: %d", rc ) ;
+         PD_RC_CHECK( rc, PDERROR, "Start dictionary creating job "
+                      "thread failed, rc: %d", rc ) ;
       }
 
    done:
@@ -264,7 +236,6 @@ namespace engine
 
       finishForeignModule() ;
 
-      // release fix buff catch
       _ctrlLatch.get() ;
       for ( UINT32 i = 0 ; i < _vecFixBuf.size() ; ++i )
       {
@@ -273,7 +244,6 @@ namespace engine
       _vecFixBuf.clear() ;
       _ctrlLatch.release() ;
 
-      // release session info
       restSessionInfo *pSessionInfo = NULL ;
       map<string, restSessionInfo*>::iterator it = _mapSessions.begin() ;
       while( it != _mapSessions.end() )
@@ -289,9 +259,32 @@ namespace engine
       return SDB_OK ;
    }
 
+   void _pmdController::onConfigChange()
+   {
+      setPDLevel( (PDLEVEL)( pmdGetOptionCB()->getDiagLevel() ) ) ;
+
+      setDiagFileNum( pmdGetOptionCB()->diagFileNum() ) ;
+      setAuditFileNum( pmdGetOptionCB()->auditFileNum() ) ;
+
+      setAuditMask( pmdGetOptionCB()->auditMask() ) ;
+      initCurAuditMask( getAuditMask() ) ;
+
+      pmdGetKRCB()->getBuffPool()->enablePerfStat(
+         pmdGetOptionCB()->isEnabledPerfStat() ) ;
+      pmdGetKRCB()->getBuffPool()->setMaxCacheSize(
+         pmdGetOptionCB()->getMaxCacheSize() ) ;
+      pmdGetKRCB()->getBuffPool()->setMaxCacheJob(
+         pmdGetOptionCB()->getMaxCacheJob() ) ;
+
+      pmdGetKRCB()->getSyncMgr()->setMaxSyncJob(
+         pmdGetOptionCB()->getMaxSyncJob() ) ;
+      pmdGetKRCB()->getSyncMgr()->setSyncDeep(
+         pmdGetOptionCB()->isSyncDeep() ) ;
+
+   }
+
    void _pmdController::registerCB( SDB_ROLE dbrole )
    {
-      // For data node we need DPS ( log ), Transaction, Cluster and Bufferpool
       if ( SDB_ROLE_DATA == dbrole )
       {
          PMD_REGISTER_CB( sdbGetDPSCB() ) ;        // DPS
@@ -299,15 +292,12 @@ namespace engine
          PMD_REGISTER_CB( sdbGetClsCB() ) ;        // CLS
          PMD_REGISTER_CB( sdbGetBPSCB() ) ;        // BPS
       }
-      // For coord node we need Transaction, Coordinator and FMP
       else if ( SDB_ROLE_COORD == dbrole )
       {
          PMD_REGISTER_CB( sdbGetTransCB() ) ;      // TRANS
          PMD_REGISTER_CB( sdbGetCoordCB() ) ;      // COORD
          PMD_REGISTER_CB( sdbGetFMPCB () ) ;       // FMP
       }
-      // For catalog node we need DPS ( log ), Transaction, Cluster, Catalog
-      // Bufferpool and Authentication
       else if ( SDB_ROLE_CATALOG == dbrole )
       {
          PMD_REGISTER_CB( sdbGetDPSCB() ) ;        // DPS
@@ -317,15 +307,12 @@ namespace engine
          PMD_REGISTER_CB( sdbGetBPSCB() ) ;        // BPS
          PMD_REGISTER_CB( sdbGetAuthCB() ) ;       // AUTH
       }
-      // For standalone mode we need DPS ( log ), Transaction and Bufferpool
       else if ( SDB_ROLE_STANDALONE == dbrole )
       {
          PMD_REGISTER_CB( sdbGetDPSCB() ) ;        // DPS
          PMD_REGISTER_CB( sdbGetTransCB() ) ;      // TRANS
          PMD_REGISTER_CB( sdbGetBPSCB() ) ;        // BPS
       }
-      // For OM we need DPS ( log ), transaction, bufferpool, Authentication
-      // and OMService
       else if ( SDB_ROLE_OM == dbrole )
       {
          PMD_REGISTER_CB( sdbGetDPSCB() ) ;        // DPS
@@ -334,8 +321,6 @@ namespace engine
          PMD_REGISTER_CB( sdbGetAuthCB() ) ;       // AUTH
          PMD_REGISTER_CB( sdbGetOMManager() ) ;    // OMSVC
       }
-      // Everyone need DMS ( data management ), Runtime, SQL, Aggregator
-      // and Controller
       PMD_REGISTER_CB( sdbGetDMSCB() ) ;           // DMS
       PMD_REGISTER_CB( sdbGetRTNCB() ) ;           // RTN
       PMD_REGISTER_CB( sdbGetSQLCB() ) ;           // SQL
@@ -382,12 +367,9 @@ namespace engine
       return pSessionInfo ;
    }
 
-   // The caller is responsible to free memory
    restSessionInfo* _pmdController::newSessionInfo( const string & userName,
                                                     UINT32 localIP )
    {
-      // memory will be freed in releaseSessionInfo ( manual release )and
-      // _checkSession ( timeout release )
       restSessionInfo *newSession = SDB_OSS_NEW restSessionInfo ;
       if( !newSession )
       {
@@ -395,22 +377,14 @@ namespace engine
          goto error ;
       }
 
-      // get lock
       _ctrlLatch.get() ;
       newSession->_attr._sessionID = ossPack32To64( localIP, _sequence++ ) ;
       ossStrncpy( newSession->_attr._userName, userName.c_str(),
                   SESSION_USER_NAME_LEN ) ;
-      // add to session map
       _mapSessions[ _makeID( newSession ) ] = newSession ;
-      // add to user session map
       _add2UserMap( userName, newSession ) ;
-      // attach session
       newSession->_inNum.inc() ;
-      // release lock
       _ctrlLatch.release() ;
-      // The session will be locked once it's created, and the caller will
-      // start working on the session. Once the work is done, the session will
-      // be unlocked ( detached or destroyed )
       newSession->lock() ;
 
    done:
@@ -436,7 +410,6 @@ namespace engine
             detachSessionInfo( pInfo ) ;
          }
 
-         // if no one is using the session, let's remove the session
          if ( !pInfo->isIn() )
          {
             SDB_OSS_DEL pInfo ;
@@ -463,31 +436,21 @@ namespace engine
       strValue = strValue.substr( 0, size - ossStrlen( tmp ) ) ;
       strValue += tmp ;
 
-      // set id
       pSessionInfo->_id = strValue ;
       return strValue ;
    }
 
-   // Add user information during login
-   // If an user login from multiple places, the latter login information
-   // will be taken place and remove the original one
-   // That means any user can only login from a single IP, we do not
-   // allow multi-IP login at the moment.
-   // THis behavior could be changed in the future, and this comment is
-   // subject to change on behalf of the implementation
    void _pmdController::_add2UserMap( const string & user,
                                       restSessionInfo * pSessionInfo )
    {
       map<string, vector<restSessionInfo*> >::iterator it ;
       it = _mapUser2Sessions.find( user ) ;
-      // the user first session
       if ( _mapUser2Sessions.end() == it )
       {
          vector<restSessionInfo*> vecSession ;
          vecSession.push_back( pSessionInfo ) ;
          _mapUser2Sessions.insert( make_pair( user, vecSession ) ) ;
       }
-      // the user already exist
       else
       {
          it->second.push_back( pSessionInfo ) ;
@@ -526,7 +489,6 @@ namespace engine
       pSessionInfo->invalidate() ;
    }
 
-   // Check and mark timeout session as invalid
    void _pmdController::_checkSession( UINT32 interval )
    {
       map<string, restSessionInfo*>::iterator it  ;
@@ -552,7 +514,6 @@ namespace engine
             }
          }
 
-         // If the session is marked invalid, let's delete the memory
          if ( !pInfo->isValid() )
          {
             _delFromUserMap( pInfo->_attr._userName, pInfo ) ;
@@ -589,7 +550,6 @@ namespace engine
       SDB_ASSERT( PMD_FIX_BUFF_HEADER( pBuff ) == _fixBufSize,
                   "Buff is not alloc by fix buff" ) ;
 
-      // if fix buff catch is not full, push to catch
       _ctrlLatch.get() ;
       if ( _vecFixBuf.size() < PMD_FIX_BUFF_CATCH_NUMBER )
       {
@@ -608,7 +568,6 @@ namespace engine
    {
       CHAR *pBuff = NULL ;
 
-      // if fix buff catch is not empty, get from catch
       _ctrlLatch.get() ;
       if ( _vecFixBuf.size() > 0 )
       {
@@ -617,13 +576,11 @@ namespace engine
       }
       _ctrlLatch.release() ;
 
-      // if we still have free memory, let's just return the pointer
       if ( pBuff )
       {
          goto done ;
       }
 
-      // memory will be freed in releaseFixBuf and fini
       pBuff = ( CHAR* )SDB_OSS_MALLOC( PMD_FIX_PTR_SIZE( _fixBufSize ) ) ;
       if ( !pBuff )
       {
@@ -704,7 +661,6 @@ namespace engine
       rc = _protocol->init( pmdGetKRCB() ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to init protocol" ) ;
 
-      // memory will be freed in fini
       protocolPort = ossAtoi( _protocol->getServiceName() ) ;
       _pMongoListener = SDB_OSS_NEW ossSocket( protocolPort ) ;
       if ( !_pMongoListener )
@@ -740,7 +696,6 @@ namespace engine
          goto done ;
       }
 
-      // listener for access protocol
       pProtocolData = new pmdEDUParam() ;
       pProtocolData->pSocket = (void *)_pMongoListener ;
       pProtocolData->protocol = _protocol ;
@@ -748,9 +703,7 @@ namespace engine
                               &eduID ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to start FAP listerner, rc: %d",
                    rc ) ;
-      pEDUMgr->regSystemEDU( EDU_TYPE_FAPLISTENER, eduID ) ;
 
-      // wait until protocol listener starts
       rc = pEDUMgr->waitUntil ( eduID, PMD_EDU_RUNNING ) ;
       PD_RC_CHECK( rc, PDERROR, "Wait FAP Listener active failed, rc: %d",
                    rc ) ;

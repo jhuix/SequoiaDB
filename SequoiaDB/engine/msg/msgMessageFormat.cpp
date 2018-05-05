@@ -36,11 +36,13 @@
 *******************************************************************************/
 #include "core.hpp"
 #include "msgMessageFormat.hpp"
+#include "msgMessage.hpp"
 #include "pd.hpp"
 #include "msgDef.h"
 #include "utilStr.hpp"
 #include "pdTrace.hpp"
 #include "msgTrace.hpp"
+#include <stddef.h>
 
 using namespace engine;
 using namespace bson ;
@@ -132,6 +134,8 @@ const CHAR* msgType2String( MSG_TYPE msgType, BOOLEAN isCommand )
          return "LOB UPDATE" ;
       case MSG_BS_LOB_CLOSE_REQ :
          return "LOB CLOSE" ;
+      case MSG_BS_LOB_LOCK_REQ :
+         return "LOB LOCK" ;
    } ;
    return "UNKNOW" ;
 }
@@ -155,15 +159,14 @@ typedef struct _msgMsgFuncItem
 msgMsgFuncItem* msgGetExpand2StringFunc( const MsgHeader *pMsg )
 {
    static msgMsgFuncItem s_Entry[] = {
-      /// Begin to map expand msg to string functions
       MSG_MAP_2_STRING_FUNC( MSG_COM_SESSION_INIT_REQ,
                              msgExpandComSessionInit2String ),
-      /// End map
+      MSG_MAP_2_STRING_FUNC( MSG_BS_QUERY_REQ,
+                             msgExpandBSQuery2String ),
       { MSG_NULL, NULL }
    } ;
    static UINT32 s_EntrySize = sizeof( s_Entry ) / sizeof( msgMsgFuncItem ) ;
 
-   /// find the function
    for ( UINT32 i = 0 ; i < s_EntrySize ; ++i )
    {
       if ( s_Entry[ i ]._opCode == pMsg->opCode )
@@ -181,7 +184,6 @@ string msg2String( const MsgHeader *pMsg,
    stringstream ss ;
    msgMsgFuncItem *pItem = msgGetExpand2StringFunc( pMsg ) ;
 
-   /// First format header to string
    if ( MSG_HEADER_MASK_LEN & headMask )
    {
       ss << "Length: " << pMsg->messageLength << ", " ;
@@ -190,7 +192,7 @@ string msg2String( const MsgHeader *pMsg,
    {
       ss << "OpCode: (" << IS_REPLY_TYPE( pMsg->opCode ) << ")"
          << GET_REQUEST_TYPE( pMsg->opCode ) ;
-      if ( pItem->_opDesp )
+      if ( pItem && pItem->_opDesp )
       {
          ss << "(" << pItem->_opDesp << ")" ;
       }
@@ -213,13 +215,11 @@ string msg2String( const MsgHeader *pMsg,
       ss << "RequestID: " << pMsg->requestID << ", " ;
    }
 
-   /// sencond format expand msg to string
    if ( pItem && pItem->_pFunc && 0 != expandMask )
    {
       pItem->_pFunc( ss, pMsg, expandMask ) ;
    }
 
-   /// adjust
    string str = ss.str() ;
    utilStrRtrim( str ) ;
    UINT32 len = str.length() ;
@@ -230,7 +230,6 @@ string msg2String( const MsgHeader *pMsg,
    return str ;
 }
 
-/// define the expand msg to string functions
 void msgExpandComSessionInit2String( stringstream &ss,
                                      const MsgHeader *pMsg,
                                      UINT32 expandMask )
@@ -269,7 +268,67 @@ void msgExpandComSessionInit2String( stringstream &ss,
          }
       }
    }
-   
+
 }
 
+void msgExpandBSQuery2String( stringstream &ss,
+                              const MsgHeader *pMsg,
+                              UINT32 expandMask )
+{
+   INT32 rc         = SDB_OK ;
+   INT32 flag       = 0 ;
+   CHAR *collection = NULL ;
+   SINT64 skip      =  0;
+   SINT64 limit     = -1 ;
+   CHAR *query      = NULL ;
+   CHAR *selector   = NULL ;
+   CHAR *orderby    = NULL ;
+   CHAR *hint       = NULL ;
+   rc = msgExtractQuery( (CHAR*)pMsg, &flag, &collection,
+                         &skip, &limit, &query, &selector,
+                         &orderby, &hint ) ;
+   if ( SDB_OK != rc )
+   {
+      ss << "Error: Extract failed: " << rc ;
+   }
+   else
+   {
+      try
+      {
+         BSONObj objQuery( query ) ;
+         BSONObj objSelector( selector ) ;
+         BSONObj objOrderby( orderby ) ;
+         BSONObj objHint( hint ) ;
+
+         if ( expandMask | MSG_EXP_MASK_CLNAME )
+         {
+            ss << "Collection Name: " << collection << "," ;
+         }
+         if ( expandMask | MSG_EXP_MASK_OTHER )
+         {
+            ss << "Limit: " << limit << ", Skip: " << skip << "," ;
+         }
+         if ( expandMask | MSG_EXP_MASK_MATCHER )
+         {
+            ss << "Matcher: " << objQuery.toString() << "," ;
+         }
+         if ( expandMask | MSG_EXP_MASK_SELECTOR )
+         {
+            ss << "Selector: " << objSelector.toString() << "," ;
+         }
+         if ( expandMask | MSG_EXP_MASK_ORDERBY )
+         {
+            ss << "Orderby: " << objOrderby.toString() << "," ;
+         }
+         if ( expandMask | MSG_EXP_MASK_HINT )
+         {
+            ss << "Hint: " << objHint.toString() << "," ;
+         }
+      }
+      catch ( std::exception &e )
+      {
+         ss << "Detail: Occur exception(" << e.what() << ")" ;
+      }
+   }
+}
 

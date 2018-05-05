@@ -134,19 +134,20 @@ namespace engine
       public:
          virtual INT32     search( const DPS_LSN &minLsn,
                                    _dpsMessageBlock *mb,
-                                   UINT8 type = DPS_SERCAH_ALL,
+                                   UINT8 type = DPS_SEARCH_ALL,
                                    INT32 maxNum = 1,
                                    INT32 maxTime = -1,
                                    INT32 maxSize = 5242880 ) ;
 
          virtual INT32     searchHeader( const DPS_LSN &lsn,
                                          _dpsMessageBlock *mb,
-                                         UINT8 type = DPS_SERCAH_ALL ) ;
+                                         UINT8 type = DPS_SEARCH_ALL ) ;
 
          virtual DPS_LSN   getStartLsn ( BOOLEAN logBufOnly = FALSE ) ;
 
          virtual DPS_LSN   getCurrentLsn() ;
          virtual DPS_LSN   expectLsn() ;
+         virtual DPS_LSN   commitLsn() ;
 
          virtual void      getLsnWindow( DPS_LSN &beginLsn,
                                          DPS_LSN &memBeginLsn,
@@ -169,7 +170,6 @@ namespace engine
          UINT32 _decFileID( UINT32 fileID ) ;
          void   _setVersion( DPS_LSN_VER version ) ;
 
-         // caller must hold the _latch
          INT32  _writeData( BSONObj &obj, const DPS_LSN &lsn ) ;
          INT32  _readData( const BSONObj &match,
                            catDCLogItem *pLog,

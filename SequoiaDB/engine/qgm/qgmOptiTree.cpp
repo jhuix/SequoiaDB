@@ -95,6 +95,9 @@ namespace engine
          case QGM_OPTI_TYPE_SPLIT :
             return "Split By" ;
             break ;
+         case QGM_OPTI_TYPE_COMMAND :
+            return "Command" ;
+            break ;
          default :
             break ;
       }
@@ -117,10 +120,6 @@ namespace engine
    // PD_TRACE_DECLARE_FUNCTION( SDB__QGMOPSTREAM_FIND, "_qgmOpStream::find" )
    BOOLEAN _qgmOpStream::find( const _qgmDbAttr &field )
    {
-      /// eg: select T.A from ( select a as A from table ) as T ;
-      /// field.relegation = T, field.attr = A, stream.alias = T
-      /// field.relegation must equal to stream.alias.
-      /// field.attr can be either selector's alias or selector's name.
       PD_TRACE_ENTRY( SDB__QGMOPSTREAM_FIND ) ;
       BOOLEAN found = FALSE ;
 
@@ -189,7 +188,6 @@ namespace engine
       return FALSE ;
    }
 
-//////// _qgmOprUnit
    _qgmOprUnit::_qgmOprUnit( QGM_OPTI_TYPE type )
    : _type ( type )
    {
@@ -394,7 +392,6 @@ namespace engine
       return r ;
    }
 
-//////// _qgmOptiTreeNode
    _qgmOptiTreeNode::_qgmOptiTreeNode( QGM_OPTI_TYPE type,
                                        qgmPtrTable *table,
                                        qgmParamTable *param )
@@ -435,7 +432,6 @@ namespace engine
       _children.clear() ;
       _father = NULL ;
 
-      // release oprUnit
       qgmOprUnitPtrVec::iterator it = _oprUnits.begin() ;
       while ( it != _oprUnits.end() )
       {
@@ -641,7 +637,6 @@ namespace engine
       {
          if ( QGM_OPTI_TYPE_SORT == oprUnit->getType() )
          {
-            // do nothing
          }
          else if ( QGM_OPTI_TYPE_FILTER == oprUnit->getType() )
          {
@@ -714,13 +709,11 @@ namespace engine
    {
       qgmOPFieldPtrVec fieldAlias ;
 
-      // step1: restore field alias
       if ( _getFieldAlias( fieldAlias, FALSE ) > 0 )
       {
          upFieldsByFieldAlias( fields, fieldAlias, FALSE ) ;
       }
 
-      // step2: restore table alais
       if ( validSelfAlias() )
       {
          replaceFieldRele( fields, getAlias() ) ;
@@ -755,7 +748,6 @@ namespace engine
       {
          BOOLEAN getAll = FALSE ;
 
-         // step1: replace table alias
          if ( validSelfAlias() )
          {
             vector< qgmField > subAlias ;
@@ -783,7 +775,6 @@ namespace engine
             }
          }
 
-         // step2: replace field alias
          if ( _getFieldAlias( fieldAlias, getAll ) > 0 )
          {
             oprUnit->replaceFieldAlias( fieldAlias ) ;
@@ -791,13 +782,11 @@ namespace engine
       }
       else
       {
-         // step1: restore field alias
          if ( fromNode->_getFieldAlias( fieldAlias, FALSE ) > 0 )
          {
             oprUnit->restoreFieldAlias( fieldAlias ) ;
          }
 
-         // step2: restore table alais
          if ( fromNode->validSelfAlias() )
          {
             oprUnit->replaceRele( fromNode->getAlias() ) ;
@@ -874,7 +863,6 @@ namespace engine
          }
       }
 
-      // remove from oprUnits
       _oprUnits.erase( it ) ;
 
       if ( release )
@@ -942,7 +930,6 @@ namespace engine
    INT32 _qgmOptiTreeNode::outputSort( qgmOPFieldVec & sortFields )
    {
       PD_TRACE_ENTRY( SDB__QGMOPTITREENODE_OUTPUTSORT ) ;
-      // find in self, if not found, call subNode's output sort
       INT32 rc = SDB_OK ;
       qgmOprUnit *sortUnit = getOprUnitByType( QGM_OPTI_TYPE_SORT ) ;
       if ( sortUnit )
@@ -974,6 +961,34 @@ namespace engine
       }
 
       return ss.str() ;
+   }
+
+   string _qgmOptiTreeNode::toTotalString()
+   {
+      stringstream ss ;
+
+      _toTotalString( ss, "", this ) ;
+
+      return ss.str() ;
+   }
+
+   void _qgmOptiTreeNode::_toTotalString( stringstream &ss, const string &fill,
+                                          qgmOptiTreeNode *node )
+   {
+      if ( NULL == node )
+      {
+         return ;
+      }
+
+      UINT32 i = 0 ;
+      qgmOptiTreeNode *child = NULL ;
+
+      ss << fill << node->toString() << '\n' ;
+      while ( ( child = node->getSubNode( i ) ) != NULL )
+      {
+         _toTotalString( ss, fill + "--" , child ) ;
+         i++ ;
+      }
    }
 
    // PD_TRACE_DECLARE_FUNCTION( SDB__QGMOPTITREENODE_EXTEND, "_qgmOptiTreeNode::extend" )
@@ -1022,7 +1037,6 @@ namespace engine
        return SDB_OK ;
    }
 
-//////////////_qgmOptTree
    void _qgmOptTree::_iterator::_next ()
    {
       qgmOptiTreeNode *nextNode = _pCurNode->getSubNode( 0 ) ;
@@ -1134,7 +1148,6 @@ namespace engine
          if ( NULL != ( subNode = pNode->getSubNode( 0 ) ) )
          {
             subNode->setParent( parent ) ;
-            // don't change children order
             parent->updateSubNode( pNode, subNode ) ;
          }
          else
@@ -1143,7 +1156,6 @@ namespace engine
          }
       }
 
-      // release node
       pNode->notReleaseChildren() ;
       SDB_OSS_DEL pNode ;
 
@@ -1198,8 +1210,6 @@ namespace engine
    // PD_TRACE_DECLARE_FUNCTION( SDB__QGMOPTTREE__PREPARE, "_qgmOptTree::_prepare" )
    void _qgmOptTree::_prepare( qgmOptiTreeNode * treeNode )
    {
-      // one: set parent
-      // two: set node id
       PD_TRACE_ENTRY( SDB__QGMOPTTREE__PREPARE ) ;
       UINT32 index = 0 ;
       qgmOptiTreeNode *subNode = NULL ;
@@ -1227,7 +1237,6 @@ namespace engine
 
    const CHAR* _qgmOptTree::treeName() const
    {
-      // TODO:XUJIANHUI
       return "" ;
    }
 

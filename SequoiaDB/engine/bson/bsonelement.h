@@ -27,6 +27,7 @@
 #include "bsontypes.h"
 #include "bsonassert.h"
 #include "util/optime.h"
+#include "bsonDecimal.h"
 /** \namespace bson
     \brief Include files for C++ BSON module
 */
@@ -43,6 +44,51 @@ namespace bson {
     /* l and r MUST have same type when called: check that first. */
     int compareElementValues(const BSONElement& l, const BSONElement& r);
 
+    inline int getBSONCanonicalType( BSONType t )
+    {
+       switch ( t ) {
+       case MinKey:
+       case MaxKey:
+           return t;
+       case EOO:
+       case Undefined:
+           return 0;
+       case jstNULL:
+           return 5;
+       case NumberDouble:
+       case NumberInt:
+       case NumberLong:
+       case NumberDecimal:
+           return 10;
+       case bson::String:
+       case Symbol:
+           return 15;
+       case Object:
+           return 20;
+       case bson::Array:
+           return 25;
+       case BinData:
+           return 30;
+       case jstOID:
+           return 35;
+       case bson::Bool:
+           return 40;
+       case bson::Date:
+       case Timestamp:
+           return 45;
+       case RegEx:
+           return 50;
+       case DBRef:
+           return 55;
+       case Code:
+           return 60;
+       case CodeWScope:
+           return 65;
+       default:
+           assert(0);
+           return -1;
+       }
+    }
 
     /** BSONElement represents an "element" in a BSONObj.
         So for the object { a : 3, b : "abc" },
@@ -65,13 +111,13 @@ namespace bson {
             UserException if the element is not of the required type. Example:
 
             string foo = obj["foo"].String();
-            // exception if not a string type or DNE
         */
         string String()             const { return chk(bson::String).valuestr(); }
         Date_t Date()               const { return chk(bson::Date).date(); }
         double Number()             const { return chk(isNumber()).number(); }
         double Double()             const { return chk(NumberDouble)._numberDouble(); }
         long long Long()            const { return chk(NumberLong)._numberLong(); }
+        bsonDecimal Decimal()       const { return chk(NumberDecimal).numberDecimal(); }
         int Int()                   const { return chk(NumberInt)._numberInt(); }
         bool Bool()                 const { return chk(bson::Bool).boolean(); }
         vector<BSONElement> Array() const; // see implementation for detailed comments
@@ -99,6 +145,7 @@ namespace bson {
         void Val(int& v)            const { v = Int(); }
         void Val(double& v)         const { v = Double(); }
         void Val(string& v)         const { v = String(); }
+        void Val(bsonDecimal& v)    const { v = Decimal(); }
 
         /** Use ok() to check if a value is assigned:
             if( myObj["foo"].ok() ) ...
@@ -212,6 +259,9 @@ namespace bson {
         /** Retrieve long value for the element safely.
             Zero returned if not a number. */
         long long numberLong() const;
+        /** Retrieve long value for the element safely.
+            Zero returned if not a number.*/
+        bsonDecimal numberDecimal() const;
         /** Retrieve the numeric value of the element.
             If not of a numeric type, returns 0.
             Note: casts to double, data loss may occur with large (>52 bit)
@@ -243,7 +293,6 @@ namespace bson {
             return *reinterpret_cast< const int* >( value() );
         }
 
-        // for objects the size *includes* the size of the size field
         int objsize() const {
             return *reinterpret_cast< const int* >( value() );
         }
@@ -272,7 +321,6 @@ namespace bson {
         }
         /** Get the scope SavedContext of a CodeWScope data element. */
         const char * codeWScopeScopeData() const {
-            // TODO fix
             return codeWScopeCode() + strlen( codeWScopeCode() ) + 1;
         }
 
@@ -287,26 +335,22 @@ namespace bson {
         /** Get raw binary data.  Element must be of type BinData. Doesn't
             handle type 2 specially */
         const char *binData(int& len) const {
-            // BinData: <int len> <byte subtype> <byte[len] data>
             assert( type() == BinData );
             len = valuestrsize();
             return value() + 5;
         }
         /** Get binary data.  Element must be of type BinData. Handles type 2 */
         const char *binDataClean(int& len) const {
-            // BinData: <int len> <byte subtype> <byte[len] data>
             if (binDataType() != ByteArrayDeprecated) {
                 return binData(len);
             }
             else {
-                // Skip extra size
                 len = valuestrsize() - 4;
                 return value() + 5 + 4;
             }
         }
 
         BinDataType binDataType() const {
-            // BinData: <int len> <byte subtype> <byte[len] data>
             assert( type() == BinData );
             unsigned char c = (value() + 4)[0];
             return (BinDataType)c;
@@ -322,6 +366,12 @@ namespace bson {
         const char *regexFlags() const {
             const char *p = regex();
             return p + strlen(p) + 1;
+        }
+
+        /** Retrieve the code string for a Code element */
+        string code() const {
+            assert(type() == Code);
+            return _asCode() ;
         }
 
         /** like operator== but doesn't check the fieldname,
@@ -406,7 +456,6 @@ namespace bson {
             return compareElementValues(*this,other) < 0;
         }
 
-        // @param maxLen don't scan more than maxLen bytes
         explicit BSONElement(const char *d, int maxLen) : data(d) {
             if ( eoo() ) {
                 totalSize = 1;
@@ -464,58 +513,21 @@ namespace bson {
               expr);
             return *this;
         }
+
+        inline string   _numberDecimalStr() const ;
     };
 
 
     inline int BSONElement::canonicalType() const {
-        BSONType t = type() ;
-        switch ( t ) {
-        case MinKey:
-        case MaxKey:
-            return t;
-        case EOO:
-        case Undefined:
-            return 0;
-        case jstNULL:
-            return 5;
-        case NumberDouble:
-        case NumberInt:
-        case NumberLong:
-            return 10;
-        case bson::String:
-        case Symbol:
-            return 15;
-        case Object:
-            return 20;
-        case bson::Array:
-            return 25;
-        case BinData:
-            return 30;
-        case jstOID:
-            return 35;
-        case bson::Bool:
-            return 40;
-        case bson::Date:
-        case Timestamp:
-            return 45;
-        case RegEx:
-            return 50;
-        case DBRef:
-            return 55;
-        case Code:
-            return 60;
-        case CodeWScope:
-            return 65;
-        default:
-            assert(0);
-            return -1;
-        }
+        return getBSONCanonicalType( type() ) ;
     }
 
     inline bool BSONElement::trueValue() const {
         switch( type() ) {
         case NumberLong:
             return *reinterpret_cast< const long long* >( value() ) != 0;
+        case NumberDecimal:
+            return ( numberDecimal().compare(0) ) != 0 ;
         case NumberDouble:
             return *reinterpret_cast< const double* >( value() ) != 0;
         case NumberInt:
@@ -539,6 +551,7 @@ namespace bson {
         case NumberLong:
         case NumberDouble:
         case NumberInt:
+        case NumberDecimal:
             return true;
         default:
             return false;
@@ -568,6 +581,14 @@ namespace bson {
             return *reinterpret_cast< const int* >( value() );
         case NumberLong:
             return (double) *reinterpret_cast< const long long* >( value() );
+        case NumberDecimal:
+            {
+               bsonDecimal decimal ;
+               double tempValue = 0.0 ;
+               decimal.fromBsonValue( value() ) ;
+               decimal.toDouble( &tempValue ) ;
+               return tempValue ;
+            }
         default:
             return 0;
         }
@@ -583,6 +604,14 @@ namespace bson {
             return _numberInt();
         case NumberLong:
             return (int) _numberLong();
+        case NumberDecimal:
+            {
+               bsonDecimal decimal ;
+               int tempValue = 0 ;
+               decimal.fromBsonValue( value() ) ;
+               decimal.toInt( &tempValue ) ;
+               return tempValue ;
+            }
         default:
             return 0;
         }
@@ -598,9 +627,39 @@ namespace bson {
             return _numberInt();
         case NumberLong:
             return _numberLong();
+        case NumberDecimal:
+            {
+               bsonDecimal decimal ;
+               long long tempValue = 0 ;
+               decimal.fromBsonValue( value() ) ;
+               decimal.toLong( &tempValue ) ;
+               return tempValue ;
+            }
         default:
             return 0;
         }
+    }
+
+    inline bsonDecimal BSONElement::numberDecimal() const {
+        bsonDecimal decimal ;
+        switch( type() ) {
+        case NumberDouble:
+            decimal.fromDouble( _numberDouble() ) ;
+            break ;
+        case NumberInt:
+            decimal.fromInt( _numberInt() ) ;
+            break ;
+        case NumberLong:
+            decimal.fromLong( _numberLong() ) ;
+            break ;
+        case NumberDecimal:
+            decimal.fromBsonValue( value() ) ;
+            break ;
+        default:
+            break ;
+        }
+
+        return decimal ;
     }
 
     inline BSONElement::BSONElement() {

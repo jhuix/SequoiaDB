@@ -231,7 +231,6 @@ namespace engine
          UINT32               _buffEnd ;
          UINT32               _buffCount ;
 
-         /// identify info
          UINT64               _identifyID ;
          UINT32               _identifyTID ;
          UINT64               _identifyEDUID ;
@@ -278,10 +277,11 @@ namespace engine
                                       const MsgHeader *header,
                                       const NET_HANDLE &handle ) ;
 
-         pmdAsyncSession     *getSession( UINT64 sessionID, INT32 startType,
-                                          const NET_HANDLE handle,
-                                          BOOLEAN bCreate, INT32 opCode,
-                                          void *data ) ;
+         INT32          getSession( UINT64 sessionID, INT32 startType,
+                                    const NET_HANDLE handle,
+                                    BOOLEAN bCreate, INT32 opCode,
+                                    void *data,
+                                    pmdAsyncSession **ppSession ) ;
 
          INT32          releaseSession( pmdAsyncSession *pSession,
                                         BOOLEAN delay = FALSE ) ;
@@ -301,8 +301,15 @@ namespace engine
             Session distory callback functions
          */
          virtual void   onSessionDisconnect( pmdAsyncSession *pSession ) {}
+         virtual void   onNoneSessionDisconnect( UINT64 sessionID ) {}
          virtual void   onSessionHandleClose( pmdAsyncSession *pSession ) {}
          virtual void   onSessionDestoryed( pmdAsyncSession *pSession ) {}
+
+         virtual INT32  onErrorHanding( INT32 rc,
+                                        const MsgHeader *pReq,
+                                        const NET_HANDLE &handle,
+                                        UINT64 sessionID,
+                                        pmdAsyncSession *pSession ) = 0 ;
 
       protected:
          /*
@@ -314,9 +321,7 @@ namespace engine
 
          virtual BOOLEAN      _canReuse( SDB_SESSION_TYPE sessionType ) = 0 ;
          virtual UINT32       _maxCacheSize() const = 0 ;
-         virtual void         _onPushMsgFailed( INT32 rc, const MsgHeader *pReq,
-                                                const NET_HANDLE &handle,
-                                                pmdAsyncSession *pSession ) = 0 ;
+
          /*
             Create session
          */
@@ -324,6 +329,8 @@ namespace engine
                                                    INT32 startType,
                                                    UINT64 sessionID,
                                                    void *data = NULL ) = 0 ;
+
+         virtual void         _onSessionNew( pmdAsyncSession *pSession ) {}
 
       protected:
          INT32          _attachSessionMeta( pmdAsyncSession *pSession,
@@ -334,6 +341,7 @@ namespace engine
          INT32          _releaseSession_i ( pmdAsyncSession *pSession,
                                             BOOLEAN postQuit,
                                             BOOLEAN delay ) ;
+         INT32          _releaseSession( pmdAsyncSession *pSession ) ;
 
          INT32          _reply( const NET_HANDLE &handle, INT32 rc,
                                 const MsgHeader *pReqMsg ) ;
@@ -349,7 +357,6 @@ namespace engine
          DEQSESSION                 _deqCacheSessions ;
          UINT32                     _cacheSessionNum ;
 
-         // Delay delete sessions
          DEQSESSION                 _deqDeletingSessions ;
          ossSpinXLatch              _deqDeletingMutex ;
 
@@ -361,7 +368,6 @@ namespace engine
          UINT32                     _sessionTimerID ;
          UINT32                     _timerInterval ;
 
-         // for _quit edu by edu mgr, not by session mgr
          UINT32                     _forceChecktimer ;
          std::deque< UINT64 >       _forceSessions ;
          ossSpinXLatch              _forceLatch ;

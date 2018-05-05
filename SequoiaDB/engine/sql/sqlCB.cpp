@@ -44,6 +44,7 @@
 #include "optQgmOptimizer.hpp"
 #include "rtnSQLFunc.hpp"
 #include "rtnSQLFuncFactory.hpp"
+#include "rtnContextQGM.hpp"
 
 namespace engine
 {
@@ -78,7 +79,8 @@ namespace engine
    }
 
    INT32 _sqlCB::exec( const CHAR *sql, _pmdEDUCB *cb,
-                       SINT64 &contextID )
+                       SINT64 &contextID,
+                       BOOLEAN &needRollback )
    {
       SDB_ASSERT( NULL != sql, "impossible" ) ;
       INT32 rc = SDB_OK ;
@@ -104,7 +106,6 @@ namespace engine
          goto error ;
       }
 
-      /// step 1: ast parse
       container->ast() = SQL_PARSE( trimedSql, _grammar ) ;
       if ( !container->ast().match
            || !container->ast().full )
@@ -115,7 +116,6 @@ namespace engine
       }
 
       {
-      /// step 2: build opti tree
       qgmBuilder builder( container->ptrTable(),
                           container->paramTable()) ;
       rc = builder.build( container->ast().trees, opti ) ;
@@ -125,7 +125,6 @@ namespace engine
          goto error ;
       }
 
-      /// step 3: extend
       rc = opti->extend( extend ) ;
       if ( SDB_OK != rc )
       {
@@ -133,7 +132,6 @@ namespace engine
          goto error ;
       }
 
-      /// step 4: optimize
       {
       _qgmOptTree tree( extend ) ;
       _optQgmOptimizer optimizer ;
@@ -147,7 +145,6 @@ namespace engine
       extend = tree.getRoot() ;
       }
 
-      /// step 5:build physical plan.
       rc = builder.build( extend, container->plan() ) ;
       if ( SDB_OK != rc )
       {
@@ -158,15 +155,14 @@ namespace engine
       SDB_ASSERT( QGM_PLAN_TYPE_MAX != container->type(),
                   "impossible" ) ;
 
-      /// step 6: execute.
       rc = container->execute( cb ) ;
+      needRollback = container->needRollback() ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "failed to execute pty tree:%d", rc ) ;
          goto error ;
       }
 
-      /// step 7: if it is a query. create context.
       if ( QGM_PLAN_TYPE_RETURN == container->type() )
       {
          rc = _createContext( container, cb, contextID ) ;
@@ -178,7 +174,6 @@ namespace engine
       }
       }
    done:
-      /// if extended, we noly need release extended root.
       if ( NULL != extend )
       {
          SAFE_OSS_DELETE( extend ) ;
@@ -187,8 +182,8 @@ namespace engine
       {
          SAFE_OSS_DELETE( opti ) ;
       }
-      if ( NULL != container
-           && QGM_PLAN_TYPE_RETURN != container->type() )
+      if ( NULL != container &&
+           QGM_PLAN_TYPE_RETURN != container->type() )
       {
          SAFE_OSS_DELETE( container ) ;
       }
@@ -216,7 +211,6 @@ namespace engine
       rc = rtnCB->contextNew ( RTN_CONTEXT_QGM, (rtnContext**)&context,
                                contextID, cb ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to create new context, rc: %d", rc ) ;
-      // open
       rc = context->open( container ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to open context[%lld], rc: %d",
                    context->contextID(), rc ) ;

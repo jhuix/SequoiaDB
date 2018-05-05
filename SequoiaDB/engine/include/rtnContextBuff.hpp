@@ -44,7 +44,6 @@
 #include "ossMem.hpp"
 #include "ossLatch.hpp"
 #include "ossRWMutex.hpp"
-#include "msg.h"
 #include "ossAtomic.hpp"
 #include "../bson/bsonobj.h"
 
@@ -53,7 +52,6 @@ using namespace bson ;
 namespace engine
 {
 
-   // default buffer size should be at least DMS_PAGE_SIZE64K
    #define RTN_DFT_BUFFERSIZE                DMS_PAGE_SIZE_MAX
    #define RTN_RESULTBUFFER_SIZE_MAX         DMS_SEGMENT_SZ
 
@@ -138,6 +136,7 @@ namespace engine
    class _rtnContextBuf : public rtnObjBuff
    {
       friend class _rtnContextBase ;
+      friend class _rtnContextStoreBuf ;
 
       private:
          void  _reference( INT32 *pCounter, ossRWMutex *pMutex ) ;
@@ -168,24 +167,6 @@ namespace engine
 
    } ;
    typedef _rtnContextBuf rtnContextBuf ;
-
-   /*
-      _rtnFetchBase define
-   */
-   class _rtnFetchBase : public SDBObject
-   {
-      public :
-         _rtnFetchBase() {}
-         virtual ~_rtnFetchBase() {}
-
-         virtual const CHAR*  getName() const = 0 ;
-
-      public:
-         virtual BOOLEAN   isHitEnd() const = 0 ;
-         virtual INT32     fetch( BSONObj &obj ) = 0 ;
-
-   } ;
-   typedef _rtnFetchBase rtnFetchBase ;
 
 }
 

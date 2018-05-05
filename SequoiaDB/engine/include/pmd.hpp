@@ -49,10 +49,9 @@
 #include "msgDef.hpp"
 #include "pmdEnv.hpp"
 #include "sdbInterface.hpp"
-
-#if defined ( SDB_ENGINE )
+#include "pmdMemPool.hpp"
+#include "pmdSyncMgr.hpp"
 #include "monCB.hpp"
-#endif // SDB_ENGINE
 
 namespace engine
 {
@@ -105,16 +104,17 @@ namespace engine
     * Kernel Control Block
     * Database Kernel Variables
     */
-   class _SDB_KRCB : public SDBObject, public _IConfigHandle, public IResource
+   class _SDB_KRCB : public SDBObject, public _IConfigHandle,
+                     public IResource, _IEventHolder
    {
+      typedef std::pair< IEventHander*, UINT32 >   EVENT_HANDLER_INFO ;
+      typedef std::vector< EVENT_HANDLER_INFO >    VEC_EVENTHANDLER ;
    public:
       _SDB_KRCB () ;
-      ~_SDB_KRCB () ;
+      virtual ~_SDB_KRCB () ;
 
       INT32 init () ;
       void  destroy () ;
-
-      BOOLEAN isActive() const { return _isActive ; }
 
       void    setIsRestore( BOOLEAN isRestore ) { _isRestore = isRestore ; }
       BOOLEAN isRestore() const { return _isRestore ; }
@@ -124,12 +124,15 @@ namespace engine
       virtual IControlBlock*     getCBByType( SDB_CB_TYPE type ) ;
       virtual void*              getOrgPointByType( SDB_CB_TYPE type ) ;
       virtual BOOLEAN            isCBValue( SDB_CB_TYPE type ) const ;
+      virtual IExecutorMgr*      getExecutorMgr() ;
+      virtual IContextMgr*       getContextMgr() ;
 
       virtual SDB_DB_STATUS      getDBStatus() const ;
       virtual const CHAR*        getDBStatusDesp() const ;
       virtual BOOLEAN            isShutdown() const ;
       virtual BOOLEAN            isNormal() const ;
       virtual BOOLEAN            isAvailable( INT32 *pCode = NULL ) const ;
+      virtual BOOLEAN            isActive() const { return _isActive ; }
       virtual INT32              getShutdownCode() const ;
 
       virtual UINT32             getDBMode() const ;
@@ -162,9 +165,23 @@ namespace engine
 
       INT32             registerCB( IControlBlock *pCB, void *pOrg ) ;
 
+      /*
+         _IConfigHandle Interface
+      */
       virtual void      onConfigChange ( UINT32 changeID ) ;
       virtual INT32     onConfigInit () ;
       virtual void      onConfigSave () ;
+
+      /*
+         _IEventHolder Interface
+      */
+      virtual INT32  regEventHandler( IEventHander *pHandler,
+                                      UINT32 mask = EVENT_MASK_ON_ALL ) ;
+      virtual void   unregEventHandler( IEventHander *pHandler ) ;
+
+      void           callRegisterEventHandler( const MsgRouteID &nodeID ) ;
+      void           callPrimaryChangeHandler( BOOLEAN primary,
+                                               SDB_EVENT_OCCUR_TYPE type ) ;
 
    private:
       IControlBlock                 *_arrayCBs[ SDB_CB_MAX ] ;
@@ -172,8 +189,10 @@ namespace engine
       BOOLEAN                       _init ;
       BOOLEAN                       _isActive ;
 
+      VEC_EVENTHANDLER              _vecEventHandler ;
+      ossSpinSLatch                 _handlerLatch ;
+
    private :
-      // configured options
       CHAR           _groupName[ OSS_MAX_GROUPNAME_SIZE + 1 ] ;
       CHAR           _hostName[ OSS_MAX_HOSTNAME + 1 ] ;
 
@@ -190,21 +209,29 @@ namespace engine
       BOOLEAN        _isRestore ;
 
       _pmdEDUMgr     _eduMgr ;
+      pmdBuffPool    _buffPool ;
+      pmdSyncMgr     _syncMgr ;
 
       _pmdOptionsMgr _optioncb ;
       ossTick        _curTime ;
 
-      pmdEDUCB       _mainEDU ;
+      pmdEDUCB*      _mainEDU ;
 
-#if defined ( SDB_ENGINE )
       monConfigCB    _monCfgCB ;
       monDBCB        _monDBCB ;
-#endif // SDB_ENGINE
 
    public :
-      pmdEDUMgr *getEDUMgr ()
+      pmdEDUMgr* getEDUMgr ()
       {
          return &_eduMgr ;
+      }
+      pmdBuffPool* getBuffPool()
+      {
+         return &_buffPool ;
+      }
+      pmdSyncMgr *getSyncMgr()
+      {
+         return &_syncMgr ;
       }
       CHAR *getGroupName ( CHAR *pBuffer, UINT32 size ) const
       {
@@ -222,7 +249,6 @@ namespace engine
       {
          return ( _SDB_RTNCB* )getOrgPointByType( SDB_CB_RTN ) ;
       }
-#if defined ( SDB_ENGINE )
       OSS_INLINE monConfigCB * getMonCB()
       {
          return & _monCfgCB ;
@@ -243,7 +269,6 @@ namespace engine
       {
           _monCfgCB.timestampON = flag ;
       }
-#endif // SDB_ENGINE
       OSS_INLINE _clsMgr *getClsCB ()
       {
          return ( _clsMgr* )getOrgPointByType( SDB_CB_CLS ) ;
@@ -315,7 +340,6 @@ namespace engine
       }
       void setDBStatus ( SDB_DB_STATUS status )
       {
-         /// SDB_DB_SHUTDOWN is highest status, cant change
          if ( SDB_DB_SHUTDOWN != _dbStatus )
          {
             _dbStatus = status ;
@@ -358,8 +382,8 @@ namespace engine
          ossStrncpy ( _hostName, hostName, sizeof(_hostName) - 1 );
       }
 
-      ossTick getCurTime() ;
-      void syncCurTime() ;
+      ossTick  getCurTime() ;
+      void     syncCurTime() ;
 
    } ;
    typedef _SDB_KRCB pmdKRCB ;
@@ -376,6 +400,14 @@ namespace engine
    OSS_INLINE pmdOptionsCB* pmdGetOptionCB()
    {
       return pmdGetKRCB()->getOptionCB() ;
+   }
+   OSS_INLINE pmdBuffPool* pmdGetBuffPool()
+   {
+      return pmdGetKRCB()->getBuffPool() ;
+   }
+   OSS_INLINE pmdSyncMgr *pmdGetSyncMgr()
+   {
+      return pmdGetKRCB()->getSyncMgr() ;
    }
 
 }

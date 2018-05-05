@@ -41,7 +41,6 @@
 
 using namespace bson ;
 
-// 4 bytes size, 1 byte type, 1 byte 0, 4 bytes string length
 #define FIRST_ELEMENT_STARTING_POS     10
 #define MAX_SELECTOR_BUFFER_THRESHOLD  67108864 // 64MB
 
@@ -50,6 +49,7 @@ namespace engine
    _mthSelector::_mthSelector()
    :_init( FALSE ),
     _stringOutput( FALSE ),
+    _strictDataMode( FALSE ),
     _stringOutputBufferSize( 0 ),
     _stringOutputBuffer( NULL )
    {
@@ -62,12 +62,13 @@ namespace engine
    }
 
    // PD_TRACE_DECLARE_FUNCTION ( SDB__MTHSELECTOR_LOADPATTERN, "_mthSelector::loadPattern" )
-   INT32 _mthSelector::loadPattern( const bson::BSONObj &pattern )
+   INT32 _mthSelector::loadPattern( const bson::BSONObj &pattern, 
+                                    BOOLEAN strictDataMode )
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY( SDB__MTHSELECTOR_LOADPATTERN ) ;
 
-      rc = _matrix.load( pattern ) ;
+      rc = _matrix.load( pattern, strictDataMode ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "failed to parse pattern:%d", rc ) ;
@@ -75,6 +76,7 @@ namespace engine
       }
 
       _init = TRUE ;
+      _strictDataMode = strictDataMode ;
    done:
       PD_TRACE_EXITRC( SDB__MTHSELECTOR_LOADPATTERN, rc ) ;
       return rc ;
@@ -148,12 +150,14 @@ namespace engine
 
       other.clear() ;
 
-      rc = other.loadPattern( getPattern() ) ;
+      rc = other.loadPattern( getPattern(), _strictDataMode ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "failed to load pattern:%d", rc ) ;
          goto error ;
       }
+
+      other.setStringOutput( getStringOutput() ) ;
 
       clear() ;
    done:
@@ -170,6 +174,7 @@ namespace engine
       _matrix.clear() ;
       _init = FALSE ;
       _stringOutput = FALSE ;
+	  _strictDataMode = FALSE ;
       PD_TRACE_EXIT( SDB__MTHSELECTOR_CLEAR ) ;
       return ;
    }
@@ -183,7 +188,6 @@ namespace engine
       BOOLEAN result = FALSE ;
       INT32 stringLength = 0 ;
 
-      // in the first round, let's allocate memory
       if ( 0 == _stringOutputBufferSize )
       {
          rc = mthDoubleBufferSize ( &_stringOutputBuffer,
@@ -222,17 +226,11 @@ namespace engine
 
       stringLength =
                ossStrlen ( &_stringOutputBuffer[FIRST_ELEMENT_STARTING_POS] ) ;
-      // assign object length, 1 for 0 at the end, 1 for the eoo
       *(INT32*)_stringOutputBuffer = FIRST_ELEMENT_STARTING_POS + 2 +
                                         stringLength ;
       _stringOutputBuffer[ *(INT32*)_stringOutputBuffer -1 ] = EOO ;
-      // assign string length, 1 for 0 at the end
       *(INT32*)(&_stringOutputBuffer[FIRST_ELEMENT_STARTING_POS-4]) =
                stringLength + 1 ;
-      // it should not cause memory leak even if there's previous owned
-      // buffer because _stringOutputBuffer is owned by context, and we don't
-      // touch holder in BSONObj, so smart pointer should still holding the
-      // original buffer it owns
       csv.init ( _stringOutputBuffer ) ;
    done:
       PD_TRACE_EXITRC( SDB__MTHSELECTOR__BUILDCSV, rc ) ;

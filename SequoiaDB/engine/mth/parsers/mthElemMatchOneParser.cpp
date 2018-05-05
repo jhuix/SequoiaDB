@@ -52,7 +52,7 @@ namespace engine
 
    ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHELEMMATCHONEPARSER_PARSE, "_mthElemMatchOneParser::parse" )
    INT32 _mthElemMatchOneParser::parse( const bson::BSONElement &e,
-                                     _mthSAction &action ) const
+                                        _mthSAction &action ) const
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY( SDB__MTHELEMMATCHONEPARSER_PARSE ) ;
@@ -63,7 +63,14 @@ namespace engine
          goto error ;
       }
 
-      rc = action.getMatcher().loadPattern( e.embeddedObject() ) ;
+      if ( NULL == action.getMatchTree() )
+      {
+         rc = action.createMatchTree() ;
+         PD_RC_CHECK( rc, PDERROR, "Failed to create match tree, "
+                      "rc: %d", rc ) ;
+      }
+
+      rc = action.getMatchTree()->loadPattern( e.embeddedObject() ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "failed to load match pattern:%d", rc ) ;

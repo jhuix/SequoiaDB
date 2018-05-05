@@ -39,6 +39,8 @@
 #include <stdio.h>
 #include <stdarg.h>
 
+#include "common_decimal.h"
+
 #if defined(__GNUC__) || defined(__xlC__)
     #define SDB_EXPORT
 #else
@@ -59,31 +61,14 @@
 #define SDB_EXTERN_C_END
 #endif
 
-//#if defined(SDB_HAVE_STDINT) || __STDC_VERSION__ >= 199901L
 #include <stdint.h>
-//#elif defined(SDB_HAVE_UNISTD)
-//#include <unistd.h>
-//#elif defined(SDB_USE__INT64)
-//typedef __int64 int64_t;
-//typedef unsigned __int64 uint64_t;
-//#elif defined(SDB_USE_LONG_LONG_INT)
-//typedef long long int int64_t;
-//typedef unsigned long long int uint64_t;
-//#else
-//#error Must compile with c99 or define SDB_HAVE_STDINT, SDB_HAVE_UNISTD, SDB_USE__INT64, or SDB_USE_LONG_LONG_INT.
-//#endif
 
-//#ifdef SDB_BIG_ENDIAN
-//#define bson_little_endian64(out, in) ( bson_swap_endian64(out, in) )
-//#define bson_little_endian32(out, in) ( bson_swap_endian32(out, in) )
-//#define bson_big_endian64(out, in) ( memcpy(out, in, 8) )
-//#define bson_big_endian32(out, in) ( memcpy(out, in, 4) )
-//#else
 #define bson_little_endian64(out, in) ( memcpy(out, in, 8) )
 #define bson_little_endian32(out, in) ( memcpy(out, in, 4) )
+#define bson_little_endian16(out, in) ( memcpy(out, in, 2) )
 #define bson_big_endian64(out, in) ( bson_swap_endian64(out, in) )
 #define bson_big_endian32(out, in) ( bson_swap_endian32(out, in) )
-//#endif
+#define bson_big_endian16(out, in) ( bson_swap_endian16(out, in) )
 
 SDB_EXTERN_C_START
 
@@ -133,6 +118,8 @@ typedef enum {
     BSON_INT = 16, /**< 32-bit integer. */
     BSON_TIMESTAMP = 17, /**< Timestamp. */
     BSON_LONG = 18, /**< 64-bit integer. */
+
+    BSON_DECIMAL = 100, /** decimal type */
     BSON_MAXKEY = 127 /**< Max key. */
 } bson_type;
 
@@ -261,7 +248,6 @@ SDB_EXPORT const char *bson_data( const bson *b );
  * @param bson the raw data to print.
  * @param depth the depth to recurse the object.x
  */
-//SDB_EXPORT void bson_print_raw( const char *bson , int depth );
 
 /**
  * Print a string representation of a BSON object to buffer.
@@ -397,6 +383,57 @@ SDB_EXPORT int bson_iterator_int( const bson_iterator *i );
  * @return the value of the current BSON object.
  */
 SDB_EXPORT int64_t bson_iterator_long( const bson_iterator *i );
+
+/**
+ * Get the decimal's sign and scale of the BSON object currently pointed to by the iterator.
+ *
+ * @param i the bson_iterator
+ *
+ * @return BSON_OK or BSON_ERROR.
+ */
+SDB_EXPORT int bson_iterator_decimal_scale( const bson_iterator *i, 
+                                            int *sign, int *scale ) ;
+
+/**
+ * Get the decimal's typemod of the BSON object currently pointed to by the iterator.
+ *
+ * @param i the bson_iterator
+ *
+ * @return BSON_OK or BSON_ERROR.
+ */
+SDB_EXPORT int bson_iterator_decimal_typemod( const bson_iterator *i, 
+                                              int *typemod ) ;
+
+/**
+ * Get the decimal's weight of the BSON object currently pointed to by the iterator.
+ *
+ * @param i the bson_iterator
+ *
+ * @return BSON_OK or BSON_ERROR.
+ */
+SDB_EXPORT int bson_iterator_decimal_weight( const bson_iterator *i, 
+                                             int *weight ) ;
+
+/**
+ * Get the decimal's size of the BSON object currently pointed to by the iterator.
+ *
+ * @param i the bson_iterator
+ *
+ * @return BSON_OK or BSON_ERROR.
+ */
+SDB_EXPORT int bson_iterator_decimal_size( const bson_iterator *i, 
+                                           int *size ) ;
+
+/**
+ * Get the decimal value of the BSON object currently pointed to by the iterator.
+ *
+ * @param i the bson_iterator
+ *
+ * @return BSON_OK or BSON_ERROR.
+ */
+SDB_EXPORT int bson_iterator_decimal( const bson_iterator *i, 
+                                      bson_decimal *decimal ) ;
+
 
 /* return the bson timestamp as a whole or in parts */
 /**
@@ -587,6 +624,26 @@ SDB_EXPORT const char *bson_iterator_regex( const bson_iterator *i );
  * @return the options of the current BSON regex object.
  */
 SDB_EXPORT const char *bson_iterator_regex_opts( const bson_iterator *i );
+
+/**
+ * Get the DB name of the BSON DBRef object currently pointed to by the
+ * iterator.
+ *
+ * @param i the bson_iterator.
+ *
+ * @return the DB name of the current BSON DBRef object.
+ */
+SDB_EXPORT const char *bson_iterator_dbref( const bson_iterator *i );
+
+/**
+ * Get the DB OID of the BSON DBRef object currently pointed to by the
+ * iterator.
+ *
+ * @param i the bson_iterator.
+ *
+ * @return the DB OID of the current BSON DBRef object.
+ */
+SDB_EXPORT bson_oid_t *bson_iterator_dbref_oid( const bson_iterator *i );
 
 /* these work with BSON_OBJECT and BSON_ARRAY */
 /**
@@ -802,6 +859,44 @@ SDB_EXPORT int bson_append_int( bson *b, const char *name, const int i );
  * @return BSON_OK or BSON_ERROR.
  */
 SDB_EXPORT int bson_append_long( bson *b, const char *name, const int64_t i );
+
+/**
+ * Append an decimal to a bson.
+ *
+ * @param b the bson to append to.
+ * @param name the key for the decimal.
+ * @param decimal the decimal to append.
+ *
+ * @return BSON_OK or BSON_ERROR.
+ */
+SDB_EXPORT int bson_append_decimal( bson *b, const char *name, 
+                                    const bson_decimal *decimal ) ;
+
+/**
+ * Append an decimal to a bson.
+ *
+ * @param b the bson to append to.
+ * @param name the key for the decimal.
+ * @param value the string format of the decimal to append.
+ * @param precision, the precision of decimal
+ * @param scale, the scale of decimal
+ *
+ * @return BSON_OK or BSON_ERROR.
+ */
+SDB_EXPORT int bson_append_decimal2( bson *b, const char *name, 
+                                     const char *value, int precision, 
+                                     int scale ) ;
+/**
+ * Append an decimal to a bson.
+ *
+ * @param b the bson to append to.
+ * @param name the key for the decimal.
+ * @param value the string format of the decimal to append.
+ *
+ * @return BSON_OK or BSON_ERROR.
+ */
+SDB_EXPORT int bson_append_decimal3( bson *b, const char *name, 
+                                     const char *value ) ;
 
 /**
  * Append an double to a bson.
@@ -1192,6 +1287,22 @@ SDB_EXPORT double bson_int64_to_double( int64_t i64 );
 
 SDB_EXPORT void bson_swap_endian32( void *outp, const void *inp );
 SDB_EXPORT void bson_swap_endian64( void *outp, const void *inp );
+
+SDB_EXPORT bson_bool_t bson_is_inf( double d, int *pSign ) ;
+
+/**
+ * when this value is not zero, the bson_print
+ * method will
+ * show the string which is the same with that 
+ * shows in sdb shell.
+ */
+SDB_EXPORT void bson_set_js_compatibility(int compatible);
+
+/**
+ * get whether bson_print method will show the string
+ * which is the same with that shows in sdb shell or not
+ */
+SDB_EXPORT int bson_get_js_compatibility();
 
 SDB_EXTERN_C_END
 #endif

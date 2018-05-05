@@ -38,7 +38,7 @@
 
 class _OSS_FILE ;
 namespace engine
-{ 
+{
    class _sptLibssh2Session : public _sptSshSession
    {
    public:
@@ -52,9 +52,7 @@ namespace engine
       virtual INT32 exec( const CHAR *cmd, INT32 &exit,
                           std::string &outStr ) ;
 
-//      virtual INT32 read( CHAR *buf, UINT32 len, UINT32 &readSize ) ;
 
-//      virtual INT32 done( INT32 &eixtcode, std::string &exitsignal ) ;
 
       virtual INT32 copy2Remote( SPT_CP_PROTOCOL protocol,
                                  const CHAR *local,
@@ -93,6 +91,8 @@ namespace engine
       INT32 _wirte2File( _OSS_FILE *file, const CHAR *buf, SINT64 len ) ;
 
       void _getLastError( std::string &errMsg ) ;
+
+      INT32 _getLastErrorRC() ;
 
    private:
       LIBSSH2_SESSION *_session ;

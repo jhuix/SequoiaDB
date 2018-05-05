@@ -49,9 +49,7 @@ namespace engine
    class DPS_LSN : public SDBObject
    {
    public :
-      /// 0x00 - 0x07
       DPS_LSN_OFFSET offset ;
-      /// 0x08 - 0x0B
       DPS_LSN_VER  version ;
 
       DPS_LSN()
@@ -77,6 +75,18 @@ namespace engine
       {
          return ( DPS_INVALID_LSN_OFFSET == offset ) ||
                 ( DPS_INVALID_LSN_VERSION == version ) ;
+      }
+
+      void set( DPS_LSN_OFFSET offset, DPS_LSN_VER  version )
+      {
+         this->offset = offset ;
+         this->version = version ;
+      }
+
+      void reset()
+      {
+         offset = DPS_INVALID_LSN_OFFSET ;
+         version = DPS_INVALID_LSN_VERSION ;
       }
 
       INT32 compareVersion( const DPS_LSN_VER &version ) const
@@ -155,9 +165,11 @@ namespace engine
          return rc ;
       }
 
-      /// 0 means this = lsn
-      /// < 0 means this < lsn
-      /// > 0 means this > lsn
+      INT32 compareOffset( const DPS_LSN &lsn ) const
+      {
+         return compareOffset( lsn.offset ) ;
+      }
+
       INT32 compare( const DPS_LSN &lsn ) const
       {
          INT32 rc = 0 ;

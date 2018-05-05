@@ -40,11 +40,26 @@
 #include "pmd.hpp"
 #include "pdTrace.hpp"
 #include "pmdTrace.hpp"
+#include "ossUtil.hpp"
 
 using namespace bson ;
 
 namespace engine
 {
+   static OSS_THREAD_LOCAL PMD_ON_EDU_EXIT_FUNC __eduHookFunc = NULL ;
+
+   PMD_ON_EDU_EXIT_FUNC pmdSetEDUHook( PMD_ON_EDU_EXIT_FUNC hookFunc )
+   {
+      PMD_ON_EDU_EXIT_FUNC oldFunc = __eduHookFunc ;
+      __eduHookFunc = hookFunc ;
+      return oldFunc ;
+   }
+
+   PMD_ON_EDU_EXIT_FUNC pmdGetEDUHook()
+   {
+      return __eduHookFunc ;
+   }
+
    pmdSysInfo* pmdGetSysInfo()
    {
       static pmdSysInfo s_sysInfo ;
@@ -115,6 +130,41 @@ namespace engine
       return s_sigNum ;
    }
 
+   ossProcLimits* pmdGetLimit()
+   {
+      return &( pmdGetSysInfo()->_limitInfo ) ;
+   }
+
+   void pmdIncErrNum( INT32 rc )
+   {
+      switch ( rc )
+      {
+         case SDB_OOM :
+            pmdGetSysInfo()->_numErr._oom++ ;
+            break ;
+         case SDB_NOSPC :
+            pmdGetSysInfo()->_numErr._noSpc++ ;
+            break ;
+         case SDB_TOO_MANY_OPEN_FD :
+            pmdGetSysInfo()->_numErr._tooManyOpenFD++ ;
+            break ;
+         default :
+            break ;
+      }
+   }
+
+   void pmdResetErrNum()
+   {
+      pmdGetSysInfo()->_numErr._oom = 0 ;
+      pmdGetSysInfo()->_numErr._noSpc = 0 ;
+      pmdGetSysInfo()->_numErr._tooManyOpenFD = 0 ;
+   }
+
+   pmdOccurredErr pmdGetOccurredErr()
+   {
+      return pmdGetSysInfo()->_numErr ;
+   }
+
 #if defined (_LINUX)
 
    // PD_TRACE_DECLARE_FUNCTION ( SDB_PMDSIGHND, "pmdSignalHandler" )
@@ -124,15 +174,19 @@ namespace engine
 
       static BOOLEAN s_closeStdFds = FALSE ;
 
-      // set signum
       PMD_SIGNUM = sigNum ;
+
+      if ( ossGetSignalShieldFlag() )
+      {
+         ossGetPendingSignal() = sigNum ;
+         goto done ;
+      }
 
       if ( sigNum > 0 && sigNum <= OSS_MAX_SIGAL )
       {
          if ( SIGPIPE == sigNum && !s_closeStdFds &&
               1 == ossGetCurrentProcessID() )
          {
-            /// close std fds
             ossCloseStdFds() ;
             s_closeStdFds = TRUE ;
          }
@@ -149,6 +203,8 @@ namespace engine
             }
          }
       }
+
+   done:
       PD_TRACE_EXIT ( SDB_PMDSIGHND ) ;
    }
 
@@ -158,7 +214,12 @@ namespace engine
 #if defined( SDB_ENGINE )
       PD_TRACE_ENTRY ( SDB_PMDSIGTESTHND ) ;
       static OSS_THREAD_LOCAL BOOLEAN amIIn = FALSE ;
-      if ( amIIn )
+      if ( ossGetSignalShieldFlag() )
+      {
+         ossGetPendingSignal() = signum ;
+         goto done ;
+      }
+      else if ( amIIn )
       {
          goto done ;
       }
@@ -170,19 +231,8 @@ namespace engine
 
       if ( signum == OSS_TEST_SIGNAL )
       {
-         std::set<pthread_t>::iterator it ;
-         std::set<pthread_t> tidList ;
-         pmdGetKRCB()->getEDUMgr()->getEDUThreadID ( tidList ) ;
-         for ( it = tidList.begin(); it != tidList.end(); ++it )
-         {
-            // threadID was initialized to 0 in constructor, and set to real
-            // thread id in pmdEDUEntryPoint
-            if ( 0 == (*it) )
-            {
-               continue ;
-            }
-            ossPThreadKill ( (*it), OSS_INTERNAL_TEST_SIGNAL ) ;
-         }
+         pmdEDUMgr *pMgr = pmdGetKRCB()->getEDUMgr() ;
+         pMgr->killByThreadID( OSS_INTERNAL_TEST_SIGNAL ) ;
       }
       amIIn = FALSE ;
 
@@ -199,7 +249,12 @@ namespace engine
       PD_TRACE_ENTRY ( SDB_PMDEDUUSERTRAPHNDL );
       oss_edu_data * pEduData = NULL ;
       const CHAR *dumpPath = ossGetTrapExceptionPath () ;
-      if ( !dumpPath )
+      if ( ossGetSignalShieldFlag() )
+      {
+         ossGetPendingSignal() = signum ;
+         goto done ;
+      }
+      else if ( !dumpPath )
       {
          goto done ;
       }
@@ -221,25 +276,10 @@ namespace engine
       {
          PD_LOG ( PDEVENT, "Signal %d is received, "
                   "prepare to dump stack for all threads", signum ) ;
-         std::set<pthread_t>::iterator it ;
-         std::set<pthread_t> tidList ;
-         pmdGetKRCB()->getEDUMgr()->getEDUThreadID ( tidList ) ;
-         for ( it = tidList.begin(); it != tidList.end(); ++it )
-         {
-            // threadID was initialized to 0 in constructor, and set to real
-            // thread id in pmdEDUEntryPoint
-            if ( 0 == (*it) )
-            {
-               continue ;
-            }
-            rc = ossPThreadKill ( (*it), OSS_STACK_DUMP_SIGNAL_INTERNAL ) ;
-            if ( rc )
-            {
-               PD_LOG ( PDWARNING, "Failed to send signal %d to thread %llu, "
-                        "errno = %d", OSS_STACK_DUMP_SIGNAL_INTERNAL,
-                        (*it), ossGetLastError() ) ;
-            }
-         }
+
+         pmdEDUMgr *pMgr = pmdGetKRCB()->getEDUMgr() ;
+         pMgr->killByThreadID( OSS_STACK_DUMP_SIGNAL_INTERNAL ) ;
+
          ossMemTrace ( dumpPath ) ;
       }
       else if ( signum == OSS_STACK_DUMP_SIGNAL_INTERNAL )
@@ -272,14 +312,12 @@ namespace engine
       ossMemset ( &newact, 0, sizeof(newact)) ;
       sigemptyset ( &newact.sa_mask ) ;
 
-      // set trap file path
       if ( filepath )
       {
          ossSetTrapExceptionPath ( filepath ) ;
       }
       pmdGetSysInfo()->_pQuitFunc = pFunc ;
 
-      // SIGSEGV( 11 )
       newact.sa_sigaction = ( OSS_SIGFUNCPTR ) ossEDUCodeTrapHandler ;
       newact.sa_flags |= SA_SIGINFO ;
       newact.sa_flags |= SA_ONSTACK ;
@@ -296,7 +334,6 @@ namespace engine
          goto error ;
       }
 
-      // stack dump signals: SIGURG( 23 )
       newact.sa_sigaction = ( OSS_SIGFUNCPTR ) pmdEDUUserTrapHandler ;
       newact.sa_flags |= SA_SIGINFO ;
       newact.sa_flags |= SA_ONSTACK ;
@@ -306,7 +343,6 @@ namespace engine
          rc = SDB_SYS ;
          goto error ;
       }
-      // capture the internal user stack dump signal
       if ( sigaction ( OSS_STACK_DUMP_SIGNAL_INTERNAL, &newact, NULL ) )
       {
          PD_LOG ( PDERROR, "Failed to setup signal handler for dump signal" ) ;
@@ -314,7 +350,6 @@ namespace engine
          goto error ;
       }
 
-      // signal test
       newact.sa_sigaction = ( OSS_SIGFUNCPTR ) pmdSignalTestHandler ;
       newact.sa_flags |= SA_SIGINFO ;
       newact.sa_flags |= SA_ONSTACK ;
@@ -324,7 +359,6 @@ namespace engine
          rc = SDB_SYS ;
          goto error ;
       }
-      // capture the internal user stack dump signal
       if ( sigaction ( OSS_INTERNAL_TEST_SIGNAL, &newact, NULL ) )
       {
          PD_LOG ( PDERROR, "Failed to setup signal handler for internal "
@@ -333,12 +367,14 @@ namespace engine
          goto error ;
       }
 
-      // other signal
+      signal( SIGPIPE, SIG_IGN ) ;
+
       sigSet.fillSet () ;
       sigSet.sigDel ( SIGSEGV ) ;
       sigSet.sigDel ( SIGBUS ) ;
       sigSet.sigDel ( SIGALRM ) ;
       sigSet.sigDel ( SIGPROF ) ;
+      sigSet.sigDel ( SIGPIPE ) ;
       sigSet.sigDel ( OSS_STACK_DUMP_SIGNAL ) ;
       sigSet.sigDel ( OSS_STACK_DUMP_SIGNAL_INTERNAL ) ;
       sigSet.sigDel ( OSS_TEST_SIGNAL ) ;
@@ -358,8 +394,6 @@ namespace engine
       if ( SDB_OK != rc )
       {
          PD_LOG ( PDWARNING, "Failed to register signals, rc = %d", rc ) ;
-         // we do not abort startup process if any signal handler can't be
-         // installed
          rc = SDB_OK ;
       }
 
@@ -378,7 +412,6 @@ namespace engine
       PD_TRACE_ENTRY ( SDB_PMDCTRLHND );
       switch( fdwCtrlType )
       {
-      // Handle the CTRL-C signal.
       case CTRL_C_EVENT:
          printf( "Ctrl-C event\n\n" ) ;
          pmdGetSysInfo()->_quitFlag = TRUE ;
@@ -390,14 +423,12 @@ namespace engine
          ret = TRUE ;
          goto done ;
 
-      // CTRL-CLOSE: confirm that the user wants to exit.
       case CTRL_CLOSE_EVENT:
          Beep( 600, 200 );
          printf( "Ctrl-Close event\n\n" ) ;
          ret = TRUE ;
          goto done ;
 
-      // Pass other signals to the next handler.
       case CTRL_BREAK_EVENT:
          Beep( 900, 200 );
          printf( "Ctrl-Break event\n\n" ) ;
@@ -429,14 +460,12 @@ namespace engine
    INT32 pmdEnableSignalEvent( const CHAR * filepath, PMD_ON_QUIT_FUNC pFunc,
                                INT32 *pDelSig )
    {
-      // set trap file path
       if ( filepath )
       {
          ossSetTrapExceptionPath ( filepath ) ;
       }
       pmdGetSysInfo()->_pQuitFunc = pFunc ;
 
-      // install ctrl event handler
       SetConsoleCtrlHandler( (PHANDLER_ROUTINE)pmdCtrlHandler, TRUE ) ;
 
       return SDB_OK ;
@@ -450,9 +479,14 @@ namespace engine
       return ;
    }
 
-   UINT64 pmdGetDBTick()   
+   UINT64 pmdGetDBTick()
    {
       return pmdGetSysInfo()->_tick ;
+   }
+
+   UINT64 pmdAcquireGlobalID()
+   {
+      return pmdGetSysInfo()->_globalID.inc() ;
    }
 
    UINT64 pmdGetTickSpanTime( UINT64 lastTick )
@@ -474,7 +508,7 @@ namespace engine
    {
       pmdGetSysInfo()->_validationTick = pmdGetDBTick() ;
       return ;
-   } 
+   }
 
    UINT64 pmdGetValidationTick()
    {
@@ -484,9 +518,6 @@ namespace engine
    void pmdGetTicks( UINT64 &tick,
                      UINT64 &validationTick )
    {
-      /// ticks may be modified by other thread.
-      /// get validationTick first that we can
-      /// ensure validationTick <= tick.
       validationTick = pmdGetSysInfo()->_validationTick ;
       tick = pmdGetSysInfo()->_tick ;
       return ;
@@ -499,7 +530,6 @@ namespace engine
       const static UINT64 s_maxTick = (30*OSS_ONE_SEC)/PMD_SYNC_CLOCK_INTERVAL ;
       pmdGetTicks( tick, validationTick ) ;
 
-      /// 30s is not update validation, we think db is abnormal
       if ( tick > validationTick && tick - validationTick > s_maxTick )
       {
          PD_LOG( PDERROR, "db is abnormal, tick[%lld], validation tick[%lld]",

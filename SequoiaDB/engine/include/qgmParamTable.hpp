@@ -39,8 +39,10 @@
 #define QGMPARAMTABLE_HPP_
 
 #include "qgmDef.hpp"
-#include <map>
+#include "utilMap.hpp"
 #include <vector>
+
+using namespace bson ;
 
 namespace engine
 {
@@ -50,8 +52,8 @@ namespace engine
       BSONElement ele ;
    } ;
 
-   typedef std::list<_qgmBsonPair> QGM_CONST_TABLE ;
-   typedef std::map<qgmDbAttr, BSONElement> QGM_VAR_TABLE ;
+   typedef std::list<_qgmBsonPair>                 QGM_CONST_TABLE ;
+   typedef std::map<qgmDbAttr, BSONElement >       QGM_VAR_TABLE ;
 
    class _qgmParamTable : public SDBObject
    {
@@ -70,8 +72,6 @@ namespace engine
                     const BSONElement *&out,
                     BOOLEAN *pExisted = NULL ) ;
 
-      /// ensure that obj will not be released until
-      /// u do not use this var or set a new value.
       INT32 setVar( const varItem &item,
                     const BSONObj &obj ) ;
 

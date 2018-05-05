@@ -81,6 +81,14 @@ enum HTTP_FILE_TYPE
    HTTP_FILE_BMP,
    HTTP_FILE_JPG,
    HTTP_FILE_GIF,
+   HTTP_FILE_SVG,
+   HTTP_FILE_WOFF,
+   HTTP_FILE_EOT,
+   HTTP_FILE_OTF,
+   HTTP_FILE_TTF,
+   HTTP_FILE_JSP,
+   HTTP_FILE_PHP,
+   HTTP_FILE_ASP,
    HTTP_FILE_DEFAULT,        /* default file */
    HTTP_FILE_UNKNOW
 } ;
@@ -142,60 +150,38 @@ struct httpConnection
 {
 /* request */
 
-   //key size
    INT32 _tempKeyLen ;
-   //value size
    INT32 _tempValueLen ;
-   // \r\n number
    INT32 _CRLFNum ;
-   //http header buffer size
    INT32 _headerSize ;
-   //recv temp a part of the body size
+   INT32 _bodySize ;
    INT32 _partSize ;
-   //temp query size
    INT32 _querySize ;
 
 /* response */
 
-   //response first record size
    INT32 _firstRecordSize ;
-   //response body size
    INT32 _responseSize ;
-   //chunk model
    BOOLEAN _isChunk ;
-   //is send http header(chunk model)
    BOOLEAN _isSendHttpHeader ;
 
 /* request */
 
-   //flag is parser key or value, true: key, false: value
    BOOLEAN _isKey ;
-   //client send common type
    HTTP_PARSE_COMMON _common ;
-   //get file's type
    HTTP_FILE_TYPE _fileType ;
-   //recv header buffer
+   CHAR *_pSourceHeaderBuf ;
    CHAR *_pHeaderBuf ;
-   //recv temp a part of the body
    CHAR *_pPartBody ;
-   //recv body buffer
    CHAR *_pBodyBuf ;
-   //send buffer
    CHAR *_pSendBuffer ;
-   //temp key buffer
    CHAR *_pTempKey ;
-   //temp value buffer ;
    CHAR *_pTempValue ;
-   //temp query
    CHAR *_pQuery ;
-   //path
    const CHAR *_pPath ;
 
-   //http parser
    http_parser _httpParser ;
-   //header list
    COLNAME_MAP _requestHeaders ;
-   //query list
    COLNAME_MAP _requestQuery ;
 
 /* response */
@@ -209,6 +195,7 @@ struct httpConnection
                       _tempValueLen(0),
                       _CRLFNum(0),
                       _headerSize(0),
+                      _bodySize(0),
                       _partSize(0),
                       _querySize(0),
                       _firstRecordSize(0),
@@ -218,6 +205,7 @@ struct httpConnection
                       _isKey(TRUE),
                       _common(COM_CMD),
                       _fileType(HTTP_FILE_DEFAULT),
+                      _pSourceHeaderBuf(NULL),
                       _pHeaderBuf(NULL),
                       _pPartBody(NULL),
                       _pBodyBuf(NULL),

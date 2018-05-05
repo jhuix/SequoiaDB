@@ -38,6 +38,7 @@
 #ifndef PMDEDU_HPP__
 #define PMDEDU_HPP__
 
+#include "sdbInterface.hpp"
 #include "ossLatch.hpp"
 #include "ossQueue.hpp"
 #include "ossMem.hpp"
@@ -47,14 +48,14 @@
 #include "ossRWMutex.hpp"
 #include "sdbInterface.hpp"
 #include "pdTrace.hpp"
+#include "dpsDef.hpp"
+#include "monCB.hpp"
+#include "monEDU.hpp"
 
 #if defined ( SDB_ENGINE )
-#include "monEDU.hpp"
-#include "monCB.hpp"
 #include "dpsLogDef.hpp"
 #include "dpsTransCB.hpp"
 #include "dpsTransLockDef.hpp"
-#include "dpsDef.hpp"
 #endif // SDB_ENGINE
 
 #include <set>
@@ -73,11 +74,7 @@ namespace engine
    /*
       TOOL FUNCTIONS
    */
-   INT32       registerEDUName ( EDU_TYPES type, const CHAR * name,
-                                 BOOLEAN system ) ;
    const CHAR *getEDUStatusDesp ( EDU_STATUS status ) ;
-   const CHAR *getEDUName ( EDU_TYPES type ) ;
-   BOOLEAN     isSystemEDU ( EDU_TYPES type ) ;
 
    /*
       EDU CONTROL FLAG DEFINE
@@ -95,123 +92,171 @@ namespace engine
    } ;
 
    class _pmdEDUMgr ;
-   class CoordSession ;
 
    /*
       _pmdEDUCB define
    */
-   class _pmdEDUCB : public SDBObject
+   class _pmdEDUCB : public _IExecutor
    {
-   public:
-      typedef std::multimap<INT32,CHAR*>     CATCH_MAP ;
-      typedef CATCH_MAP::iterator            CATCH_MAP_IT ;
-
-      typedef std::map<CHAR*,INT32>          ALLOC_MAP ;
-      typedef ALLOC_MAP::iterator            ALLOC_MAP_IT ;
-
+      friend class _SDB_KRCB ;
       friend class _pmdEDUMgr ;
 
    public:
-      _pmdEDUCB( _pmdEDUMgr *mgr, EDU_TYPES type ) ;
-      ~_pmdEDUCB () ;
+      typedef std::multimap<UINT32,CHAR*>    CATCH_MAP ;
+      typedef CATCH_MAP::iterator            CATCH_MAP_IT ;
 
-      void clear () ;
+      typedef std::map<CHAR*,UINT32>         ALLOC_MAP ;
+      typedef ALLOC_MAP::iterator            ALLOC_MAP_IT ;
 
-      string toString() const ;
+      typedef std::set<INT64>                SET_CONTEXT ;
 
-      EDUID getID() const { return _eduID ; }
-      UINT32 getTID() const { return _tid ; }
-      EDU_STATUS getStatus () const { return _status ; }
-      EDU_TYPES getType () const { return _eduType ; }
+   public:
+         /*
+            Base Function
+         */
+         virtual EDUID     getID() const { return _eduID ; }
+         virtual UINT32    getTID() const { return _tid ; }
 
-      _pmdEDUMgr *getEDUMgr() { return _eduMgr ; }
+         /*
+            Session Related
+         */
+         virtual ISession* getSession() { return _pSession ; }
+         virtual IRemoteSite* getRemoteSite() { return _pRemoteSite ; }
 
-      void setTID ( UINT32 tid ) { _tid = tid ; }
-      void setType ( EDU_TYPES type ) ;
+         /*
+            Status and Control
+         */
+         virtual BOOLEAN   isInterrupted ( BOOLEAN onlyFlag = FALSE ) ;
+         virtual BOOLEAN   isDisconnected () ;
+         virtual BOOLEAN   isForced () ;
 
-      void writingDB( BOOLEAN writing )
-      {
-         _writingDB = writing ;
-         _writingTime = writing ? (UINT64)time( NULL ) : 0 ;
-      }
-      BOOLEAN isWritingDB() const { return _writingDB ; }
-      UINT64  getWritingTime() const { return _writingTime ; }
+         virtual BOOLEAN   isWritingDB() const { return _writingDB ; }
+         virtual UINT64    getWritingID() const { return _writingID ; }
+         virtual void      writingDB( BOOLEAN writing ) ;
+
+         virtual UINT32    getProcessedNum() const { return _processEventCount ; }
+         virtual void      incEventCount( UINT32 step = 1 ) ;
+
+         virtual UINT32    getQueSize() ;
+
+         /*
+            Resource Info
+         */
+         virtual sdbLockItem* getLockItem( SDB_LOCK_TYPE lockType ) ;
+         void                 assertLocks() ;
+         void                 resetLocks() ;
+
+         /*
+            Buffer Manager
+         */
+         virtual INT32     allocBuff( UINT32 len,
+                                      CHAR **ppBuff,
+                                      UINT32 *pRealSize = NULL ) ;
+
+         virtual INT32     reallocBuff( UINT32 len,
+                                        CHAR **ppBuff,
+                                        UINT32 *pRealSize = NULL ) ;
+
+         virtual void      releaseBuff( CHAR *pBuff ) ;
+
+         virtual void*     getAlignedBuff( UINT32 size,
+                                           UINT32 *pRealSize = NULL,
+                                           UINT32 alignment =
+                                           OSS_FILE_DIRECT_IO_ALIGNMENT ) ;
+
+         virtual void      releaseAlignedBuff() ;
+
+         /*
+            Operation Related
+         */
+         virtual UINT64    getBeginLsn () const { return _beginLsn ; }
+         virtual UINT64    getEndLsn() const { return _endLsn ; }
+         virtual UINT32    getLsnCount () const { return _lsnNumber ; }
+         virtual BOOLEAN   isDoRollback () const { return _doRollback ; }
+         virtual UINT64    getTransID () const { return _curTransID ; }
+         virtual UINT64    getCurTransLsn () const { return _curTransLSN ; }
+
+         virtual void      resetLsn() ;
+         virtual void      insertLsn( UINT64 lsn,
+                                      BOOLEAN isRollback = FALSE ) ;
+         virtual void      setTransID( UINT64 transID ) ;
+         virtual void      setCurTransLsn( UINT64 lsn ) ;
+
+         /*
+            Context Related
+         */
+         virtual void      contextInsert( INT64 contextID ) ;
+         virtual void      contextDelete( INT64 contextID ) ;
+         virtual INT64     contextPeek() ;
+         virtual BOOLEAN   contextFind( INT64 contextID ) ;
+         virtual UINT32    contextNum() ;
+
+   public:
+      _pmdEDUCB( _pmdEDUMgr *mgr, INT32 type ) ;
+      ~_pmdEDUCB() ;
+
+      void        clear() ;
+      string      toString() const ;
+
+      EDU_STATUS  getStatus () const { return _status ; }
+      INT32       getType () const { return _eduType ; }
+
+      _pmdEDUMgr* getEDUMgr() { return _eduMgr ; }
 
    #if defined ( _LINUX )
-      void        setThreadID ( pthread_t id ) { _threadID = id ; }
       pthread_t   getThreadID () const { return _threadID ; }
-      void        setThreadHdl( OSSTID hdl ) { _threadHdl = hdl ; }
       OSSTID      getThreadHandle() const { return _threadHdl ; }
    #elif defined ( _WINDOWS )
-      void        setThreadHdl( HANDLE hdl ) { _threadHdl = hdl ; }
       HANDLE      getThreadHandle() const { return _threadHdl ; }
    #endif
 
    public :
       void        attachSession( ISession *pSession ) ;
       void        detachSession() ;
-      ISession*   getSession() { return _pSession ; }
 
-      INT32       allocBuff( INT32 len, CHAR **ppBuff, INT32 &buffLen ) ;
-      void        releaseBuff( CHAR *pBuff ) ;
-      INT32       reallocBuff( INT32 len, CHAR **ppBuff, INT32 &buffLen ) ;
+      void        attachRemoteSite( IRemoteSite *pSite ) ;
+      void        detachRemoteSite() ;
+
       void        restoreBuffs( CATCH_MAP &catchMap ) ;
       void        saveBuffs( CATCH_MAP &catchMap ) ;
 
-      CHAR*       getCompressBuff( INT32 len ) ;
-      INT32       getCompressBuffLen () const { return _compressBuffLen ; }
-      CHAR*       getUncompressBuff( INT32 len ) ;
+      CHAR*       getCompressBuff( UINT32 len ) ;
+      INT32       getCompressBuffLen() const { return _compressBuffLen ; }
+      CHAR*       getUncompressBuff( UINT32 len ) ;
       INT32       getUncompressBuffLen() const { return _uncompressBuffLen ; }
 
-      void        incEventCount( UINT32 step = 1 )
-      {
-         _processEventCount += step ;
-      }
-
-      UINT32      getQueSize() ;
-      UINT32      getProcessedNum() const { return _processEventCount ; }
-
-      void        interrupt () ;
-      void        disconnect () ;
-      void        force () ;
-      BOOLEAN     isInterrupted ( BOOLEAN onlyFlag = FALSE ) ;
-      BOOLEAN     isDisconnected () ;
-      BOOLEAN     isForced () ;
+      void        interrupt ( BOOLEAN onlySelf = FALSE ) ;
       void        resetInterrupt () ;
       void        resetDisconnect () ;
+      BOOLEAN     isOnlySelfWhenInterrupt() const ;
 
-      INT32 printInfo ( EDU_INFO_TYPE type, const CHAR *format, ... ) ;
-      const CHAR *getInfo ( EDU_INFO_TYPE type ) ;
-      void  resetInfo ( EDU_INFO_TYPE type ) ;
+      INT32       printInfo ( EDU_INFO_TYPE type, const CHAR *format, ... ) ;
+      const CHAR* getInfo ( EDU_INFO_TYPE type ) ;
+      void        resetInfo ( EDU_INFO_TYPE type ) ;
 
-      void setUserInfo( const string &userName, const string &password ) ;
-      void setName ( const CHAR *name ) ;
-      void setClientSock ( ossSocket *pSock ) { _pClientSock = pSock ; }
-      ossSocket * getClientSock () { return _pClientSock ; }
-      BOOLEAN isFromLocal() const { return _pClientSock ? TRUE : FALSE ; }
-      const CHAR *getName ()
-      {
-         ossScopedLock _lock ( &_mutex, SHARED ) ;
-         return _Name ;
-      }
-      const CHAR *getUserName() const { return _userName.c_str() ; }
-      const CHAR *getPassword() const { return _passWord.c_str() ; }
+      void        setUserInfo( const string &userName,
+                               const string &password ) ;
+      void        setName ( const CHAR *name ) ;
+      void        setClientSock ( ossSocket *pSock ) { _pClientSock = pSock ; }
+      ossSocket*  getClientSock () { return _pClientSock ; }
+
+      BOOLEAN     isFromLocal() const { return _pClientSock ? TRUE : FALSE ; }
+      const CHAR* getName () ;
+      const CHAR* getUserName() const { return _userName.c_str() ; }
+      const CHAR* getPassword() const { return _passWord.c_str() ; }
 
       void postEvent ( pmdEDUEvent const &data )
       {
-         // no need latch since _queue is already latched
          _queue.push ( data ) ;
       }
 
       BOOLEAN waitEvent ( pmdEDUEvent &data, INT64 millsec,
                           BOOLEAN resetStat = FALSE )
       {
-         // no need latch since _queue is already latched
-         // if millsec not 0, that means we want timeout
-         // otherwise it's infinite wait
 
          BOOLEAN waitMsg   = FALSE ;
-         _writingDB        = FALSE ;
+         writingDB( FALSE ) ;
+
          if ( resetStat && PMD_EDU_IDLE != _status )
          {
             _status = PMD_EDU_WAITING ;
@@ -232,7 +277,8 @@ namespace engine
             ++_processEventCount ;
             if ( data._eventType == PMD_EDU_EVENT_TERM )
             {
-               _ctrlFlag |= ( EDU_CTRL_DISCONNECTED|EDU_CTRL_INTERRUPTED );
+               _ctrlFlag |= ( EDU_CTRL_DISCONNECTED|EDU_CTRL_INTERRUPTED ) ;
+               _isInterruptSelf = FALSE ;
             }
             else if ( resetStat )
             {
@@ -286,158 +332,97 @@ namespace engine
          return ret ;
       }
 
-   #if defined ( SDB_ENGINE )
+      void contextCopy( SET_CONTEXT &contextList ) ;
 
-      void  initMonAppCB()
-      {
-         _monApplCB.reset() ;
-         if ( _monCfgCB.timestampON )
-         {
-            _monApplCB.recordConnectTimestamp() ;
-         }
-      }
-      void resetMon () { _monApplCB.reset () ; }
-      monConfigCB * getMonConfigCB() { return & _monCfgCB ; }
-      monAppCB * getMonAppCB() { return & _monApplCB ; }
+      void           resetMon() { _monApplCB.reset () ; }
+      monConfigCB*   getMonConfigCB() { return & _monCfgCB ; }
+      monAppCB*      getMonAppCB() { return & _monApplCB ; }
+      void           dumpInfo( monEDUSimple &simple ) ;
+      void           dumpInfo( monEDUFull &full ) ;
+
+   #if defined ( SDB_ENGINE )
 
       ossEvent & getEvent () { return _event ; }
 
-      void setCoordSession( CoordSession *pSession )
-      {
-         _pCoordSession = pSession;
-      }
-      CoordSession *getCoordSession() { return _pCoordSession ; }
-
-      void contextInsert ( SINT64 contextID )
-      {
-         ossScopedLock _lock ( &_mutex, EXCLUSIVE ) ;
-         _contextList.insert ( contextID ) ;
-      }
-      void contextDelete ( SINT64 contextID )
-      {
-         ossScopedLock _lock ( &_mutex, EXCLUSIVE ) ;
-         _contextList.erase ( contextID ) ;
-      }
-      SINT64 contextPeek () ;
-      BOOLEAN contextFind ( SINT64 contextID )
-      {
-         ossScopedLock _lock ( &_mutex, SHARED ) ;
-         return _contextList.end() != _contextList.find( contextID ) ;
-      }
-      UINT32 contextNum ()
-      {
-         ossScopedLock _lock ( &_mutex, SHARED ) ;
-         return _contextList.size() ;
-      }
-      void contextCopy ( std::set<SINT64> &contextList )
-      {
-         ossScopedLock _lock ( &_mutex, SHARED ) ;
-         contextList = _contextList ;
-      }
-
-      UINT64 getBeginLsn () const { return _beginLsn ; }
-      UINT64 getEndLsn () const { return _endLsn ; }
-      UINT32 getLsnCount () const { return _lsnNumber ; }
-      void   resetLsn ()
-      {
-         _beginLsn = ~0 ;
-         _endLsn = ~0 ;
-         _lsnNumber = 0 ;
-      }
-      void   insertLsn ( UINT64 lsn )
-      {
-         if ( _beginLsn == (UINT64)~0 )
-         {
-            _beginLsn = lsn ;
-         }
-         _endLsn = lsn ;
-         _lsnNumber++ ;
-      }
       UINT64 getCurRequestID() const { return _curRequestID ; }
       UINT64 incCurRequestID() { return ++_curRequestID ; }
 
-      // transaction related
-      void  setTransID( DPS_TRANS_ID transID ) { _curTransID = transID ; }
-      DPS_TRANS_ID getTransID() const { return _curTransID ; }
-      void  setRelatedTransLSN( DPS_LSN_OFFSET relatedLSN )
-      { _relatedTransLSN = relatedLSN ; }
-      void  setCurTransLsn( DPS_LSN_OFFSET curLsn ) { _curTransLSN = curLsn ; }
+      void     setRelatedTransLSN( DPS_LSN_OFFSET relatedLSN )
+      {
+         _relatedTransLSN = relatedLSN ;
+      }
       DPS_LSN_OFFSET getRelatedTransLSN() const { return _relatedTransLSN ; }
-      DPS_LSN_OFFSET getCurTransLsn() const { return _curTransLSN ; }
       dpsTransCBLockInfo *getTransLock( const dpsTransLockId &lockId );
-      void  addLockInfo( const dpsTransLockId &lockId,
-                         DPS_TRANSLOCK_TYPE lockType ) ;
-      void  delLockInfo( const dpsTransLockId &lockId ) ;
+      void     addLockInfo( const dpsTransLockId &lockId,
+                            DPS_TRANSLOCK_TYPE lockType ) ;
+      void     delLockInfo( const dpsTransLockId &lockId ) ;
       DpsTransCBLockList *getLockList() ;
-      void  clearLockList() ;
-      INT32 createTransaction() ;
-      void  delTransaction() ;
-      void  addTransNode( MsgRouteID &routeID ) ;
-      void  delTransNode( MsgRouteID &routeID ) ;
-      void  getTransNodeRouteID( UINT32 groupID, MsgRouteID &routeID ) ;
+      void     clearLockList() ;
+      INT32    createTransaction() ;
+      void     delTransaction() ;
+      void     addTransNode( const MsgRouteID &routeID ) ;
+      void     delTransNode( const MsgRouteID &routeID ) ;
+      void     getTransNodeRouteID( UINT32 groupID, MsgRouteID &routeID ) ;
       DpsTransNodeMap *getTransNodeLst() ;
-      BOOLEAN isTransaction() ;
-      BOOLEAN isTransNode( MsgRouteID &routeID ) ;
-      void  startRollback() { _isDoRollback = TRUE ; }
-      void  stopRollback() { _isDoRollback = FALSE ; }
-      BOOLEAN isInRollback() const { return _isDoRollback ; }
-      void  setTransRC( INT32 rc ) { _transRC = rc ; }
-      INT32 getTransRC() const { return _transRC ; }
-      void  clearTransInfo() ;
-      void setWaitLock( const dpsTransLockId &lockId ) ;
-      void clearWaitLock() ;
+      BOOLEAN  isTransaction() ;
+      BOOLEAN  isTransNode( MsgRouteID &routeID ) ;
+      void     startRollback() { _isDoRollback = TRUE ; }
+      void     stopRollback() { _isDoRollback = FALSE ; }
+      BOOLEAN  isInRollback() const { return _isDoRollback ; }
+      void     setTransRC( INT32 rc ) { _transRC = rc ; }
+      INT32    getTransRC() const { return _transRC ; }
+      void     clearTransInfo() ;
+      void     setWaitLock( const dpsTransLockId &lockId ) ;
+      void     clearWaitLock() ;
 
-      void dumpInfo ( monEDUSimple &simple ) ;
-      void dumpInfo ( monEDUFull &full ) ;
-
-      void *getAlignedMemory( UINT32 alignment, UINT32 size ) ;
-      void releaseAlignedMemory() ;
-
-      UINT32 getDmsLockLevel() const { return _dmsLockLevel ; }
-      void   setDmsLockLevel( UINT32 lockLevel ) { _dmsLockLevel = lockLevel ; }
-
-      void dumpTransInfo( monTransInfo &transInfo ) ;
+      void     dumpTransInfo( monTransInfo &transInfo ) ;
 
    #endif // SDB_ENGINE
 
    protected:
-      void setStatus ( EDU_STATUS status ) { _status = status ; }
-      void setID ( EDUID id ) { _eduID = id ; }
+      void     setStatus ( EDU_STATUS status ) { _status = status ; }
+      void     setID ( EDUID id ) { _eduID = id ; }
 
       CHAR*    _getBuffInfo ( EDU_INFO_TYPE type, UINT32 &size ) ;
-      BOOLEAN  _allocFromCatch( INT32 len, CHAR **ppBuff, INT32 &buffLen ) ;
+      BOOLEAN  _allocFromCatch( UINT32 len, CHAR **ppBuff, UINT32 *buffLen ) ;
+
+      void     disconnect () ;
+      void     force () ;
+
+   private:
+      void        setType( INT32 type ) ;
+      void        setTID ( UINT32 tid ) { _tid = tid ; }
+
+   #if defined ( _LINUX )
+      void        setThreadID ( pthread_t id ) { _threadID = id ; }
+      void        setThreadHdl( OSSTID hdl ) { _threadHdl = hdl ; }
+   #elif defined ( _WINDOWS )
+      void        setThreadHdl( HANDLE hdl ) { _threadHdl = hdl ; }
+   #endif
+
+      void        initMonAppCB() ;
 
    private :
-      ossRWMutex     _callInMutex ;
-      EDUID          _eduID ;
-      UINT32         _tid ;
-      UINT64         _processEventCount ;
       _pmdEDUMgr     *_eduMgr ;
-      ISession       *_pSession ;
       ossSpinSLatch  _mutex ;
-      EDU_STATUS     _status ;
       ossQueue<pmdEDUEvent> _queue ;
-      EDU_TYPES      _eduType ;
 
-      INT32          _ctrlFlag ;
-      BOOLEAN        _writingDB ;
-      UINT64         _writingTime ;
+      EDU_STATUS     _status ;
+      INT32          _eduType ;
 
       string         _userName ;
       string         _passWord ;
 
-      // buffer related
       CHAR           *_pCompressBuff ;
-      INT32          _compressBuffLen ;
+      UINT32         _compressBuffLen ;
       CHAR           *_pUncompressBuff ;
-      INT32          _uncompressBuffLen ;
+      UINT32         _uncompressBuffLen ;
 
       CATCH_MAP      _catchMap ;
       ALLOC_MAP      _allocMap ;
       INT64          _totalCatchSize ;
       INT64          _totalMemSize ;
 
-      // thread specific error message buffer, aka SQLCA
       CHAR              *_pErrorBuff ;
    #if defined ( _WINDOWS )
       HANDLE            _threadHdl ;
@@ -446,84 +431,60 @@ namespace engine
       pthread_t         _threadID ;
    #endif // _WINDOWS
 
-      CHAR              _Name [ PMD_EDU_NAME_LENGTH + 1 ] ;
+      CHAR              _name[ PMD_EDU_NAME_LENGTH + 1 ] ;
       ossSocket        *_pClientSock ;
 
       BOOLEAN                 _isDoRollback ;
 
-   #if defined ( SDB_ENGINE )
-
       monAppCB                _monApplCB ;
       monConfigCB             _monCfgCB ;
 
+   #if defined ( SDB_ENGINE )
       ossEvent                _event ;   // for cls replSet notify
-
-      std::set<SINT64>        _contextList ;
-
-      UINT32                  _dmsLockLevel ; // for dms lock
-
-      // coord related variables
-      CoordSession            *_pCoordSession;
-
-      UINT64                  _beginLsn ;
-      UINT64                  _endLsn ;
-      UINT32                  _lsnNumber ;
-
       UINT64                  _curRequestID ;
 
-      // transaction related variables
       DPS_LSN_OFFSET          _relatedTransLSN ;
-      DPS_LSN_OFFSET          _curTransLSN ;
-      DPS_TRANS_ID            _curTransID ;
       ossSpinXLatch           _transLockLstMutex ;
       DpsTransCBLockList      _transLockLst ;
       DpsTransNodeMap         *_pTransNodeMap ;
       INT32                   _transRC ;
       dpsTransLockId          _waitLock ;
+   #endif // SDB_ENGINE
 
-      /// aligned memory.
+      /*
+         Interace members
+      */
+      EDUID                   _eduID ;
+      UINT32                  _tid ;
+      ISession                *_pSession ;
+      IRemoteSite             *_pRemoteSite ;
+
+      UINT64                  _beginLsn ;
+      UINT64                  _endLsn ;
+      UINT32                  _lsnNumber ;
+      BOOLEAN                 _doRollback ;
+      UINT64                  _processEventCount ;
+
+      DPS_TRANS_ID            _curTransID ;
+      DPS_LSN_OFFSET          _curTransLSN ;
+
+      sdbLockItem             _lockInfo[ SDB_LOCK_MAX ] ;
+
+      INT32                   _ctrlFlag ;
+      BOOLEAN                 _isInterruptSelf ;
+      BOOLEAN                 _writingDB ;
+      UINT64                  _writingID ;
       void                    *_alignedMem ;
       UINT32                   _alignedMemSize ;
-   #endif // SDB_ENGINE
+
+      SET_CONTEXT             _contextList ;
 
    };
    typedef class _pmdEDUCB pmdEDUCB ;
 
-   _pmdEDUCB *pmdGetThreadEDUCB () ;
-
-   // this function must be called by the thread that want to create EDUCB
-   _pmdEDUCB *pmdCreateThreadEDUCB ( _pmdEDUMgr *mgr, EDU_TYPES type ) ;
-
-   // this function must be called by the thread that want to delete EDUCB
-   void pmdDeleteThreadEDUCB () ;
-
-   _pmdEDUCB *pmdDeclareEDUCB ( _pmdEDUCB *p ) ;
-
-   void pmdUndeclareEDUCB () ;
-
-   /*
-      ENTRY POINT
-   */
-   typedef INT32 (*pmdEntryPoint)( pmdEDUCB *, void * ) ;
-
-   pmdEntryPoint getEntryFuncByType ( EDU_TYPES type ) ;
-
-   INT32 pmdEDUEntryPoint ( EDU_TYPES type, pmdEDUCB *cb, void *arg ) ;
-   INT32 pmdEDUEntryPointWrapper ( EDU_TYPES type, pmdEDUCB *cb, void *arg ) ;
-
-   // array assignment later, can't inherit from SDBObject
-   struct _eduEntryInfo
-   {
-      EDU_TYPES         type ;
-      INT32             regResult ;
-      pmdEntryPoint     entryFunc ;
-   } ;
-
-#define ON_EDUTYPE_TO_ENTRY1(type, system, entry, desp) \
-   { type, registerEDUName(type, desp, system), entry }
-
-#define ON_EDUTYPE_TO_ENTRY2(type, system, entry) \
-   ON_EDUTYPE_TO_ENTRY1(type, system, entry, #type)
+   _pmdEDUCB* pmdGetThreadEDUCB() ;
+   _pmdEDUCB* pmdDeclareEDUCB( _pmdEDUCB *p ) ;
+   void       pmdUndeclareEDUCB() ;
 
    /*
       TOOL FUNCTIONS

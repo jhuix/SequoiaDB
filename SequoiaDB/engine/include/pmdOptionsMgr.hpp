@@ -58,7 +58,9 @@ using namespace bson ;
 
 namespace engine
 {
-   #define PMD_MAX_ENUM_STR_LEN        (32)
+   #define PMD_MAX_ENUM_STR_LEN        ( 32 )
+   #define PMD_MAX_LONG_STR_LEN        ( 256 )
+   #define PMD_MAX_SHORT_STR_LEN       ( 32 )
 
    enum PMD_CFG_STEP
    {
@@ -80,27 +82,38 @@ namespace engine
    {
       string         _value ;
       BOOLEAN        _hasMapped ;
+      BOOLEAN        _hasField ;
 
       _pmdParamValue()
       {
          _hasMapped = FALSE ;
+         _hasField = FALSE ;
       }
-      _pmdParamValue( INT32 value, BOOLEAN hasMappe = TRUE )
+      _pmdParamValue( INT32 value, BOOLEAN hasMappe, BOOLEAN hasField )
       {
          CHAR tmp[ 15 ] = { 0 } ;
          ossItoa( value, tmp, sizeof( tmp ) - 1 ) ;
          _value = tmp ;
          _hasMapped = hasMappe ;
+         _hasField = hasField ;
       }
-      _pmdParamValue( const string &value, BOOLEAN hasMappe = TRUE )
+      _pmdParamValue( const string &value, BOOLEAN hasMappe, BOOLEAN hasField )
       {
          _value = value ;
          _hasMapped = hasMappe ;
+         _hasField = hasField ;
       }
    } ;
    typedef _pmdParamValue pmdParamValue ;
 
    typedef map< string, pmdParamValue >      MAP_K2V ;
+
+   /*
+      Mask define
+   */
+   #define PMD_CFG_MASK_SKIP_UNFIELD         0x00000001
+   #define PMD_CFG_MASK_SKIP_NORMALDFT       0x00000002
+   #define PMD_CFG_MASK_SKIP_HIDEDFT         0x00000004
 
    /*
       _pmdCfgExchange define
@@ -110,13 +123,17 @@ namespace engine
       friend class _pmdCfgRecord ;
 
       public:
-         _pmdCfgExchange ( const BSONObj &dataObj,
+         _pmdCfgExchange ( MAP_K2V *pMapField,
+                           const BSONObj &dataObj,
                            BOOLEAN load = TRUE,
-                           PMD_CFG_STEP step = PMD_CFG_STEP_INIT ) ;
-         _pmdCfgExchange ( po::variables_map *pVMCmd,
+                           PMD_CFG_STEP step = PMD_CFG_STEP_INIT,
+                           UINT32 mask = 0 ) ;
+         _pmdCfgExchange ( MAP_K2V *pMapField,
+                           po::variables_map *pVMCmd,
                            po::variables_map *pVMFile = NULL,
                            BOOLEAN load = TRUE,
-                           PMD_CFG_STEP step = PMD_CFG_STEP_INIT ) ;
+                           PMD_CFG_STEP step = PMD_CFG_STEP_INIT,
+                           UINT32 mask = 0 ) ;
          ~_pmdCfgExchange () ;
 
          PMD_CFG_STEP   getCfgStep() const { return _cfgStep ; }
@@ -126,6 +143,7 @@ namespace engine
          void           setLoad() { _isLoad = TRUE ; }
          void           setSave() { _isLoad = FALSE ; }
          void           setCfgStep( PMD_CFG_STEP step ) { _cfgStep = step ; }
+         void           setWhole( BOOLEAN isWhole ) { _isWhole = isWhole ; }
 
       public:
          INT32 readInt( const CHAR *pFieldName, INT32 &value,
@@ -140,19 +158,32 @@ namespace engine
          INT32 writeString( const CHAR *pFieldName, const CHAR *pValue ) ;
 
          BOOLEAN hasField( const CHAR *pFieldName ) ;
+         BOOLEAN isSkipUnField() const
+         {
+            return ( _mask & PMD_CFG_MASK_SKIP_UNFIELD ) ? TRUE : FALSE ;
+         }
+         BOOLEAN isSkipHideDefault() const
+         {
+            return ( _mask & PMD_CFG_MASK_SKIP_HIDEDFT ) ? TRUE : FALSE ;
+         }
+         BOOLEAN isSkipNormalDefault() const
+         {
+            return ( _mask & PMD_CFG_MASK_SKIP_NORMALDFT ) ? TRUE : FALSE ;
+         }
+         BOOLEAN isWhole() const { return _isWhole ; }
 
       private:
          const CHAR *getData( UINT32 &dataLen, MAP_K2V &mapKeyValue ) ;
-         MAP_K2V     getKVMap() ;
+         MAP_K2V*    getKVMap() ;
 
          void        _makeKeyValueMap( po::variables_map *pVM ) ;
 
       private:
+         MAP_K2V*                _pMapKeyField ;
          PMD_CFG_STEP            _cfgStep ;
          BOOLEAN                 _isLoad ;
 
          PMD_CFG_DATA_TYPE       _dataType ;
-         //
          BSONObj                 _dataObj ;
          BSONObjBuilder          _dataBuilder ;
          po::variables_map       *_pVMFile ;
@@ -160,7 +191,8 @@ namespace engine
          stringstream            _strStream ;
          string                  _dataStr ;
 
-         MAP_K2V                 _mapKeyField ;
+         UINT32                  _mask ;
+         BOOLEAN                 _isWhole ;
 
    } ;
    typedef _pmdCfgExchange pmdCfgExchange ;
@@ -218,10 +250,13 @@ namespace engine
          INT32 init( po::variables_map *pVMFile, po::variables_map *pVMCMD ) ;
          INT32 restore( const BSONObj &objData,
                         po::variables_map *pVMCMD ) ;
-         INT32 change( const BSONObj &objData ) ;
+         INT32 change( const BSONObj &objData,
+                       BOOLEAN isWhole = FALSE ) ;
 
-         INT32 toBSON ( BSONObj &objData ) ;
-         INT32 toString( string &str ) ;
+         INT32 toBSON ( BSONObj &objData,
+                        UINT32 mask = PMD_CFG_MASK_SKIP_HIDEDFT ) ;
+         INT32 toString( string &str,
+                         UINT32 mask = PMD_CFG_MASK_SKIP_HIDEDFT ) ;
 
          UINT32 getChangeID () const { return _changeID ; }
 
@@ -241,12 +276,16 @@ namespace engine
                                  CHAR chInnerSep = ':' ) const ;
 
       protected:
-         INT32  _addToFieldMap( const string &key, INT32 value ) ;
-         INT32  _addToFieldMap( const string &key, const string &value ) ;
+         INT32  _addToFieldMap( const string &key, INT32 value,
+                                BOOLEAN hasMapped = TRUE,
+                                BOOLEAN hasField = TRUE ) ;
+         INT32  _addToFieldMap( const string &key, const string &value,
+                                BOOLEAN hasMapped = TRUE,
+                                BOOLEAN hasField = TRUE ) ;
 
       protected:
          virtual INT32 doDataExchange( pmdCfgExchange *pEX ) = 0 ;
-         virtual INT32 postLoaded() ;
+         virtual INT32 postLoaded( PMD_CFG_STEP step ) ;
          virtual INT32 preSaving() ;
 
       protected:
@@ -301,9 +340,15 @@ namespace engine
          IConfigHandle                       *_pConfigHander ;
 
          MAP_K2V                             _mapKeyValue ;
+      protected:
+         ossSpinXLatch                       _mutex ;
 
    } ;
    typedef _pmdCfgRecord pmdCfgRecord ;
+
+   #define PMD_OPT_VALUE_NONE                ( 0 )
+   #define PMD_OPT_VALUE_FULLSYNC            ( 1 )
+   #define PMD_OPT_VALUE_SHUTDOWN            ( 2 )
 
    /*
       _pmdOptionsMgr define
@@ -316,7 +361,7 @@ namespace engine
 
       protected:
          virtual INT32 doDataExchange( pmdCfgExchange *pEX ) ;
-         virtual INT32 postLoaded() ;
+         virtual INT32 postLoaded( PMD_CFG_STEP step ) ;
          virtual INT32 preSaving() ;
 
       public:
@@ -331,7 +376,7 @@ namespace engine
 
          INT32 makeAllDir() ;
 
-         INT32 reflush2File() ;
+         INT32 reflush2File( UINT32 mask = PMD_CFG_MASK_SKIP_UNFIELD ) ;
 
       public:
          OSS_INLINE const CHAR *getConfPath() const
@@ -369,6 +414,10 @@ namespace engine
          OSS_INLINE const CHAR *getLobPath() const
          {
             return _krcbLobPath ;
+         }
+         OSS_INLINE const CHAR *getLobMetaPath() const
+         {
+            return _krcbLobMetaPath ;
          }
          OSS_INLINE const CHAR *getDiagLogPath() const
          {
@@ -438,16 +487,6 @@ namespace engine
             return _hjBufSz ;
          }
 
-         OSS_INLINE UINT32 getPageCleanNum () const
-         {
-            return _pagecleanNum ;
-         }
-
-         OSS_INLINE UINT32 getPageCleanInterval () const
-         {
-            return _pagecleanInterval ;
-         }
-
          void clearCatAddr() ;
          void setCatAddr( const CHAR *host, const CHAR *service ) ;
 
@@ -469,7 +508,6 @@ namespace engine
          OSS_INLINE UINT32 memDebugSize () const { return _memDebugSize ; }
          OSS_INLINE UINT32 indexScanStep () const { return _indexScanStep ; }
          OSS_INLINE UINT32 getReplLogBuffSize () const { return _logBuffSize ; }
-         OSS_INLINE UINT32 preferedReplica () const { return _preferReplica ; }
          OSS_INLINE const CHAR* dbroleStr() const { return _krcbRole ; }
          OSS_INLINE INT32 diagFileNum() const { return _dialogFileNum ; }
          OSS_INLINE INT32 auditFileNum() const { return _auditFileNum ; }
@@ -487,17 +525,37 @@ namespace engine
          OSS_INLINE UINT32 getOprTimeout() const { return _oprtimeout ; }
          OSS_INLINE UINT32 getOverFlowRatio() const { return _overflowRatio ; }
          OSS_INLINE UINT32 getExtendThreshold() const { return _extendThreshold ; }
-         OSS_INLINE INT32 getSignalInterval() const { return _signalInterval ; }
+         OSS_INLINE INT32  getSignalInterval() const { return _signalInterval ; }
+         OSS_INLINE UINT32 getMaxCacheSize() const { return _maxCacheSize ; }
+         OSS_INLINE UINT32 getMaxCacheJob() const { return _maxCacheJob ; }
+         OSS_INLINE UINT32 getMaxSyncJob() const { return _maxSyncJob ; }
+         OSS_INLINE UINT32 getSyncInterval() const { return _syncInterval ; }
+         OSS_INLINE UINT32 getSyncRecordNum() const { return _syncRecordNum ; }
+         OSS_INLINE UINT32 getSyncDirtyRatio() const { return 0 ; /* Reserved */ }
+         OSS_INLINE BOOLEAN isSyncDeep() const { return _syncDeep ; }
+
+         OSS_INLINE BOOLEAN archiveOn() const { return _archiveOn ; }
+         OSS_INLINE BOOLEAN archiveCompressOn() const { return _archiveCompressOn ; }
+         OSS_INLINE const CHAR* getArchivePath() const { return _archivePath ; }
+         OSS_INLINE UINT32 getArchiveTimeout() const { return _archiveTimeout ; }
+         OSS_INLINE UINT32 getArchiveExpired() const { return _archiveExpired ; }
+         OSS_INLINE UINT32 getArchiveQuota() const { return _archiveQuota ; }
+
+         OSS_INLINE UINT32 getDmsChkInterval() const { return _dmsChkInterval ; }
+         OSS_INLINE UINT32 getCacheMergeSize() const { return _cacheMergeSize << 20 ; }
+         OSS_INLINE UINT32 getPageAllocTimeout() const { return _pageAllocTimeout ; }
+         OSS_INLINE BOOLEAN isEnabledPerfStat() const { return _perfStat ; }
+         OSS_INLINE INT32 getOptCostThreshold() const { return _optCostThreshold ; }
+         OSS_INLINE BOOLEAN isEnabledMixCmp() const { return _enableMixCmp ; }
+         OSS_INLINE UINT32  getDataErrorOp() const { return _dataErrorOp ; }
+         OSS_INLINE UINT32 getPlanCacheLevel() const { return _planCacheLevel ; }
+         OSS_INLINE const CHAR * getPrefInstStr () const { return _prefInstStr ; }
+         OSS_INLINE const CHAR * getPrefInstModeStr () const { return _prefInstModeStr ; }
+         OSS_INLINE UINT32 getInstanceID () const { return _instanceID ; }
+         OSS_INLINE UINT32 getMaxConn () const { return _maxconn ; }
 
          std::string getOmAddr() const ;
 
-#ifdef SDB_ENTERPRISE
-
-#ifdef SDB_SSL
-         OSS_INLINE BOOLEAN useSSL() const { return _useSSL ; }
-#endif
-
-#endif /* SDB_ENTERPRISE */
       protected: // rdx members
          CHAR        _krcbDbPath[ OSS_MAX_PATHSIZE + 1 ] ;
          CHAR        _krcbIndexPath[ OSS_MAX_PATHSIZE + 1 ] ;
@@ -507,6 +565,7 @@ namespace engine
          CHAR        _krcbBkupPath[ OSS_MAX_PATHSIZE + 1 ] ;
          CHAR        _krcbWWWPath[ OSS_MAX_PATHSIZE + 1 ] ;
          CHAR        _krcbLobPath[ OSS_MAX_PATHSIZE + 1 ] ;
+         CHAR        _krcbLobMetaPath[ OSS_MAX_PATHSIZE + 1 ] ;
          UINT32      _krcbMaxPool ;
          CHAR        _krcbSvcName[ OSS_MAX_SERVICENAME + 1 ] ;
          CHAR        _replServiceName[ OSS_MAX_SERVICENAME + 1 ] ;
@@ -517,7 +576,8 @@ namespace engine
          UINT16      _krcbDiagLvl ;
          CHAR        _krcbRole[ PMD_MAX_ENUM_STR_LEN + 1 ] ;
          CHAR        _syncStrategyStr[ PMD_MAX_ENUM_STR_LEN + 1 ] ;
-         CHAR        _prefReplStr[ PMD_MAX_ENUM_STR_LEN + 1 ] ;
+         CHAR        _prefInstStr[ PMD_MAX_LONG_STR_LEN + 1 ] ;
+         CHAR        _prefInstModeStr[ PMD_MAX_SHORT_STR_LEN + 1 ] ;
          CHAR        _auditMaskStr[ OSS_MAX_PATHSIZE + 1 ] ;
          UINT32      _logFileSz ;
          UINT32      _logFileNum ;
@@ -527,6 +587,7 @@ namespace engine
          UINT32      _maxReplSync ;
          UINT32      _replBucketSize ;
          INT32       _syncStrategy ;
+         UINT32      _dataErrorOp ;
          BOOLEAN     _memDebugEnabled ;
          UINT32      _memDebugSize ;
          UINT32      _indexScanStep ;
@@ -542,9 +603,6 @@ namespace engine
          CHAR        _dmsTmpBlkPath[ OSS_MAX_PATHSIZE + 1 ] ;
          UINT32      _sortBufSz ;
          UINT32      _hjBufSz ;
-         UINT32      _preferReplica ;
-         UINT32      _pagecleanNum ;
-         UINT32      _pagecleanInterval ;
          INT32       _dialogFileNum ;
          INT32       _auditFileNum ;
          UINT32      _auditMask ;
@@ -557,15 +615,29 @@ namespace engine
          UINT32      _overflowRatio ;     // %
          UINT32      _extendThreshold ;   // MB
          INT32       _signalInterval ;
+         UINT32      _maxCacheSize ;      // MB
+         UINT32      _maxCacheJob ;
+         UINT32      _maxSyncJob ;
+         UINT32      _syncInterval ;
+         UINT32      _syncRecordNum ;
+         BOOLEAN     _syncDeep ;
          CHAR        _omAddrLine[ OSS_MAX_PATHSIZE + 1 ] ;
+         BOOLEAN     _archiveOn ;
+         BOOLEAN     _archiveCompressOn ;
+         CHAR        _archivePath[ OSS_MAX_PATHSIZE + 1 ] ;
+         UINT32      _archiveTimeout ;
+         UINT32      _archiveExpired ;
+         UINT32      _archiveQuota ;
+         UINT32      _dmsChkInterval ;
+         UINT32      _cacheMergeSize ;
+         UINT32      _pageAllocTimeout ;  // ms
+         BOOLEAN     _perfStat ;
+         INT32       _optCostThreshold ;
+         BOOLEAN     _enableMixCmp ;
+         UINT32      _planCacheLevel ;
+         UINT32      _instanceID ;
+         UINT32      _maxconn;
 
-#ifdef SDB_ENTERPRISE
-
-#ifdef SDB_SSL
-         BOOLEAN     _useSSL;
-#endif
-
-#endif /* SDB_ENTERPRISE */
       private: // other configs
          CHAR        _krcbConfPath[ OSS_MAX_PATHSIZE + 1 ] ;
          CHAR        _krcbConfFile[ OSS_MAX_PATHSIZE + 1 ] ;

@@ -93,7 +93,7 @@ _DataOperateLob.queryAll = function( $scope, $compile, SdbFunction, SdbRest ){
       $scope.execResult = sprintf( $scope.autoLanguage( '? ? 执行查询失败，错误码: ?，?. ?' ), timeFormat( new Date(), 'hh:mm:ss' ), $scope.fullName, errorInfo['errno'], errorInfo['description'], errorInfo['detail'] ) ;
       $scope.execRc = false ;
    }, function(){
-      _IndexPublic.createErrorModel( $scope, $scope.autoLanguage( '网络连接错误，请尝试按F5刷新浏览器。' ) ) ;
+      //_IndexPublic.createErrorModel( $scope, $scope.autoLanguage( '网络连接错误，请尝试按F5刷新浏览器。' ) ) ;
    } ) ;
 }
 
@@ -150,13 +150,8 @@ _DataOperateLob.gotoPate = function( $scope, $compile, SdbFunction, event ){
 //删除Lob记录
 _DataOperateLob.LobDelete = function( $scope, SdbRest, index ){
    var oid = $scope.lobContent[index]['Oid']['$oid'] ;
-   $scope.Components.Confirm.isShow = true ;
-   $scope.Components.Confirm.type = 1 ;
-   $scope.Components.Confirm.okText = $scope.autoLanguage( '是的，删除' ) ;
-   $scope.Components.Confirm.closeText = $scope.autoLanguage( '取消' ) ;
-   $scope.Components.Confirm.title = $scope.autoLanguage( '要删除这条记录吗？' ) ;
-   $scope.Components.Confirm.context = 'Oid : ' + oid ;
-   $scope.Components.Confirm.ok = function(){
+
+   _IndexPublic.createRetryModel( $scope, null, function(){
       var data = { 'cmd': 'delete lob', 'name': $scope.fullName, 'oid': oid } ;
       SdbRest.DataOperation( data, function( json ){
          $scope.execResult = sprintf( $scope.autoLanguage( '? ? 删除成功' ), timeFormat( new Date(), 'hh:mm:ss' ), $scope.fullName ) ;
@@ -167,14 +162,14 @@ _DataOperateLob.LobDelete = function( $scope, SdbRest, index ){
          $scope.execResult = sprintf( $scope.autoLanguage( '? ? 删除失败，错误码: ?，?. ?' ), timeFormat( new Date(), 'hh:mm:ss' ), $scope.fullName, errorInfo['errno'], errorInfo['description'], errorInfo['detail'] ) ;
          $scope.execRc = false ;
       }, function(){
-         _IndexPublic.createErrorModel( $scope, $scope.autoLanguage( '网络连接错误，请尝试按F5刷新浏览器。' ) ) ;
+         //_IndexPublic.createErrorModel( $scope, $scope.autoLanguage( '网络连接错误，请尝试按F5刷新浏览器。' ) ) ;
       }, function(){
          //关闭弹窗
          $scope.Components.Modal.isShow = false ;
          $scope.$apply() ;
       } ) ;
-      $scope.Components.Confirm.isShow = false ;
-   }
+      return true ;
+   }, $scope.autoLanguage( '要删除这条记录吗？' ), 'Oid : ' + oid, $scope.autoLanguage( '是的，删除' ) ) ;
 }
 
 //查询lob

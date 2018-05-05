@@ -48,7 +48,6 @@ namespace engine
 {
    _dpsMergeBlock::_dpsMergeBlock():_isRow(FALSE)
    {
-  //    clear() ;
    }
 
    _dpsMergeBlock::~_dpsMergeBlock()
@@ -74,6 +73,7 @@ namespace engine
       _clLID   = ~0 ;
       _extLID  = DMS_INVALID_EXTENT ;
       _needNty = FALSE ;
+      _transEnabled = FALSE ;
    }
 
    _dpsMergeInfo::_dpsMergeInfo( dpsMergeBlock &block )
@@ -84,6 +84,7 @@ namespace engine
       _clLID   = ~0 ;
       _extLID  = DMS_INVALID_EXTENT ;
       _needNty = FALSE ;
+      _transEnabled = FALSE ;
    }
 
    _dpsMergeInfo::~_dpsMergeInfo ()

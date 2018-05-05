@@ -169,7 +169,8 @@ namespace engine
          INT32       waitQueEmpty( INT64 millisec = -1 ) ;
          INT32       waitEmpty( INT64 millisec = -1 ) ;
          INT32       waitSubmit( INT64 millisec = -1 ) ;
-         INT32       waitEmptyAndRollback() ;
+         INT32       waitEmptyAndRollback( UINT32 *pNum = NULL ) ;
+         INT32       waitEmptyWithCheck() ;
 
          UINT32      size () ;
          BOOLEAN     isEmpty () ;
@@ -185,10 +186,10 @@ namespace engine
 
          void        incCurAgent() { _curAgentNum.inc() ; }
          void        decCurAgent() { _curAgentNum.dec() ; }
-         UINT32      curAgentNum() { return _curAgentNum.peek() ; }
+         UINT32      curAgentNum() { return _curAgentNum.fetch() ; }
          void        incIdleAgent() { _idleAgentNum.inc() ; }
          void        decIdelAgent() { _idleAgentNum.dec() ; }
-         UINT32      idleAgentNum() { return _idleAgentNum.peek() ; }
+         UINT32      idleAgentNum() { return _idleAgentNum.fetch() ; }
 
          DPS_LSN     completeLSN ()
          {
@@ -206,7 +207,7 @@ namespace engine
 
          void        _incCount( const CHAR *pData ) ;
 
-         INT32       _doRollback() ;
+         INT32       _doRollback( UINT32 &num ) ;
 
       private:
          _dpsLogWrapper                   *_pDPSCB ;
@@ -224,6 +225,7 @@ namespace engine
          ossAtomic32                      _totalCount ;
          ossAtomic32                      _idleUnitCount ;
          ossAtomic32                      _allCount ;
+         ossRWMutex                       _counterLock ;
 
          ossEvent                         _emptyEvent ;
          ossEvent                         _allEmptyEvent ;
@@ -233,11 +235,12 @@ namespace engine
          ossAtomic32                      _curAgentNum ;
          ossAtomic32                      _idleAgentNum ;
 
-         // complete map
          map< DPS_LSN_OFFSET, clsCompleteInfo >    _completeMap ;
          DPS_LSN                                   _expectLSN ;
          DPS_LSN_OFFSET                            _maxSubmitOffset ;
          ossSpinXLatch                             _bucketLatch ;
+
+         INT32                            _submitRC ;
 
    } ;
    typedef _clsBucket clsBucket ;

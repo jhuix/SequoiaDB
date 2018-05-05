@@ -70,14 +70,287 @@ namespace engine
       pBuffer[ buffSize - 1 ] = 0 ;
    }
 
+   /*
+      _dmsDirtyList implement
+   */
+   _dmsDirtyList::_dmsDirtyList()
+   :_dirtyBegin( 0x7FFFFFFF ), _dirtyEnd( 0 )
+   {
+      _pData = NULL ;
+      _capacity = 0 ;
+      _size  = 0 ;
+      _fullDirty = FALSE ;
+   }
+
+   _dmsDirtyList::~_dmsDirtyList()
+   {
+      destory() ;
+   }
+
+   INT32 _dmsDirtyList::init( UINT32 capacity )
+   {
+      INT32 rc = SDB_OK ;
+      UINT32 arrayNum = 0 ;
+
+      SDB_ASSERT( capacity > 0 , "Capacity must > 0" ) ;
+
+      if ( capacity <= _capacity )
+      {
+         cleanAll() ;
+         goto done ;
+      }
+      destory() ;
+
+      arrayNum = ( capacity + 7 ) >> 3 ;
+      _pData = ( CHAR* )SDB_OSS_MALLOC( arrayNum ) ;
+      if ( !_pData )
+      {
+         PD_LOG( PDERROR, "Alloc dirty list failed" ) ;
+         rc = SDB_OOM ;
+         goto error ;
+      }
+      ossMemset( _pData, 0, arrayNum ) ;
+      _capacity = arrayNum << 3 ;
+
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   void _dmsDirtyList::destory()
+   {
+      if ( _pData )
+      {
+         SDB_OSS_FREE( _pData ) ;
+         _pData = NULL ;
+      }
+      _capacity = 0 ;
+      _size = 0 ;
+      _fullDirty = FALSE ;
+
+      _dirtyBegin.init( 0x7FFFFFFF ) ;
+      _dirtyEnd.init( 0 ) ;
+   }
+
+   void _dmsDirtyList::setSize( UINT32 size )
+   {
+      SDB_ASSERT( size <= _capacity, "Size must <= Capacity" ) ;
+      _size = size <= _capacity ? size : _capacity ;
+   }
+
+   void _dmsDirtyList::cleanAll()
+   {
+      _dirtyBegin.init( 0x7FFFFFFF ) ;
+      _dirtyEnd.init( 0 ) ;
+      _fullDirty = FALSE ;
+
+      UINT32 arrayNum = ( _size + 7 ) >> 3 ;
+      for ( UINT32 i = 0 ; i < arrayNum ; ++i )
+      {
+         if ( _pData[ i ] != 0 )
+         {
+            _pData[ i ] = 0 ;
+         }
+      }
+   }
+
+   INT32 _dmsDirtyList::nextDirtyPos( UINT32 &fromPos ) const
+   {
+      INT32 pos = -1 ;
+
+      while ( fromPos < _size )
+      {
+         if ( !_fullDirty && 0 == ( fromPos & 7 ) &&
+              0 == _pData[ fromPos >> 3 ] )
+         {
+            fromPos += 8 ;
+         }
+         else if ( !isDirty( fromPos ) )
+         {
+            ++fromPos ;
+         }
+         else
+         {
+            pos = fromPos++ ;
+            break ;
+         }
+      }
+      return pos ;
+   }
+
+   UINT32 _dmsDirtyList::dirtyNumber() const
+   {
+      UINT32 dirtyNum = 0 ;
+
+      if ( _fullDirty )
+      {
+         dirtyNum = _size ;
+      }
+      else
+      {
+         UINT32 beginPos = _dirtyBegin.peek() ;
+         UINT32 endPos = _dirtyEnd.peek() + 1 ;
+
+         while ( beginPos < endPos )
+         {
+            if ( 0 == ( beginPos & 7 ) &&
+                 0 == _pData[ beginPos >> 3 ] )
+            {
+               beginPos += 8 ;
+            }
+            else
+            {
+               if ( isDirty( beginPos ) )
+               {
+                  ++dirtyNum ;
+               }
+               ++beginPos ;
+            }
+         }
+      }
+      return dirtyNum ;
+   }
+
+   UINT32 _dmsDirtyList::dirtyGap() const
+   {
+      if ( _fullDirty )
+      {
+         return _size ;
+      }
+      else
+      {
+         UINT32 beginPos = _dirtyBegin.peek() ;
+         UINT32 endPos = _dirtyEnd.peek() ;
+         if ( beginPos > endPos )
+         {
+            return 0 ;
+         }
+         return endPos - beginPos + 1 ;
+      }
+   }
+
+   /*
+      _dmsExtRW implement
+   */
+   _dmsExtRW::_dmsExtRW()
+   {
+      _extentID = -1 ;
+      _collectionID = -1 ;
+      _attr = 0 ;
+      _pBase = NULL ;
+      _ptr   = ( ossValuePtr ) 0 ;
+   }
+
+   _dmsExtRW::~_dmsExtRW()
+   {
+      if ( _pBase && isDirty() )
+      {
+         _pBase->markDirty( _collectionID, _extentID, DMS_CHG_AFTER ) ;
+      }
+   }
+
+   BOOLEAN _dmsExtRW::isEmpty() const
+   {
+      return _pBase ? FALSE : TRUE ;
+   }
+
+   void _dmsExtRW::setNothrow( BOOLEAN nothrow )
+   {
+      if ( nothrow )
+      {
+         _attr |= DMS_RW_ATTR_NOTHROW ;
+      }
+      else
+      {
+         OSS_BIT_CLEAR( _attr, DMS_RW_ATTR_NOTHROW ) ;
+      }
+   }
+
+   BOOLEAN _dmsExtRW::isNothrow() const
+   {
+      return ( _attr & DMS_RW_ATTR_NOTHROW ) ? TRUE : FALSE ;
+   }
+
+   const CHAR* _dmsExtRW::readPtr( UINT32 offset, UINT32 len )
+   {
+      if ( (ossValuePtr)0 == _ptr )
+      {
+         std::string text = "Point is NULL: " ;
+         text += toString() ;
+
+         if ( isNothrow() )
+         {
+            PD_LOG( PDERROR, "Exception: %s", text.c_str() ) ;
+            pdSetLastError( SDB_SYS ) ;
+            return NULL ;
+         }
+         throw pdGeneralException( SDB_SYS, text ) ;
+      }
+      return ( const CHAR* )_ptr + offset ;
+   }
+
+   CHAR* _dmsExtRW::writePtr( UINT32 offset, UINT32 len )
+   {
+      if ( (ossValuePtr)0 == _ptr )
+      {
+         std::string text = "Point is NULL: " ;
+         text += toString() ;
+
+         if ( isNothrow() )
+         {
+            PD_LOG( PDERROR, "Exception: %s", text.c_str() ) ;
+            pdSetLastError( SDB_SYS ) ;
+            return NULL ;
+         }
+         throw pdGeneralException( SDB_SYS, text ) ;
+      }
+      _markDirty() ;
+      _pBase->markDirty( _collectionID, _extentID, DMS_CHG_BEFORE ) ;
+      return ( CHAR* )_ptr + offset ;
+   }
+
+   _dmsExtRW _dmsExtRW::derive( INT32 extentID )
+   {
+      if ( _pBase )
+      {
+         return _pBase->extent2RW( extentID, _collectionID ) ;
+      }
+      return _dmsExtRW() ;
+   }
+
+   BOOLEAN _dmsExtRW::isDirty() const
+   {
+      return ( _attr & DMS_RW_ATTR_DIRTY ) ? TRUE : FALSE ;
+   }
+
+   void _dmsExtRW::_markDirty()
+   {
+      _attr |= DMS_RW_ATTR_DIRTY ;
+   }
+
+   std::string _dmsExtRW::toString() const
+   {
+      std::stringstream ss ;
+      ss << "ExtentRW(" << _collectionID << "," << _extentID << ")" ;
+      return ss.str() ;
+   }
+
    #define DMS_EXTEND_THRESHOLD_SIZE      ( 33554432 )   // 32MB
-   #define DMS_NO_WRITE_TIME_FOR_SYNC     ( 120000 )     // 2 Mins
+
+   /*
+      Sync Config Default Value
+   */
+   #define DMS_SYNC_RECORDNUM_DFT         ( 0 )
+   #define DMS_SYNC_DIRTYRATIO_DFT        ( 50 )
+   #define DMS_SYNC_INTERVAL_DFT          ( 10000 )
+   #define DMS_SYNC_NOWRITE_DFT           ( 5000 )
+
    /*
       _dmsStorageBase : implement
    */
    _dmsStorageBase::_dmsStorageBase( const CHAR *pSuFileName,
                                      dmsStorageInfo *pInfo )
-   :_lastLSN( 0 )
    {
       SDB_ASSERT( pSuFileName, "SU file name can't be NULL" ) ;
 
@@ -85,7 +358,6 @@ namespace engine
       _dmsHeader          = NULL ;
       _dmsSME             = NULL ;
       _dataSegID          = 0 ;
-      _dirtyList          = NULL ;
 
       _pageNum            = 0 ;
       _maxSegID           = -1 ;
@@ -93,6 +365,7 @@ namespace engine
       _segmentPagesSquare = 0 ;
       _pageSizeSquare     = 0 ;
       _isTempSU           = FALSE ;
+      _blockScanSupport   = TRUE ;
       _pageSize           = 0 ;
       _lobPageSize        = 0 ;
 
@@ -103,21 +376,252 @@ namespace engine
       if ( 0 == ossStrcmp( pInfo->_suName, SDB_DMSTEMP_NAME ) )
       {
          _isTempSU = TRUE ;
+         _blockScanSupport = FALSE ;
       }
 
-      _validFlag          = 0 ;
-      _lastTick           = 0 ;
+      _pSyncMgr           = NULL ;
+      _isClosed           = TRUE ;
+      _commitFlag         = 0 ;
       _isCrash            = FALSE ;
+      _forceSync          = FALSE ;
+
+      _syncInterval       = DMS_SYNC_INTERVAL_DFT ;
+      _syncRecordNum      = DMS_SYNC_RECORDNUM_DFT ;
+      _syncDirtyRatio     = DMS_SYNC_DIRTYRATIO_DFT ;
+      _syncNoWriteTime    = DMS_SYNC_NOWRITE_DFT ;
+      _syncDeep           = FALSE ;
+
+      _lastWriteTick      = 0 ;
+      _writeReordNum      = 0 ;
+      _lastSyncTime       = 0 ;
+      _syncEnable         = TRUE ;
    }
 
    _dmsStorageBase::~_dmsStorageBase()
    {
+      SDB_ASSERT( !ossMmapFile::_opened, "Must Call closeStorage before "
+                  "delete the object" ) ;
       closeStorage() ;
       _pStorageInfo = NULL ;
-      if ( _dirtyList )
+      _dirtyList.destory() ;
+   }
+
+   BOOLEAN _dmsStorageBase::isClosed() const
+   {
+      return _isClosed ;
+   }
+
+   void _dmsStorageBase::setSyncConfig( UINT32 syncInterval,
+                                        UINT32 syncRecordNum,
+                                        UINT32 syncDirtyRatio )
+   {
+      _syncInterval = syncInterval ;
+      _syncRecordNum = syncRecordNum ;
+      _syncDirtyRatio = syncDirtyRatio ;
+   }
+
+   void _dmsStorageBase::setSyncDeep( BOOLEAN syncDeep )
+   {
+      _syncDeep = syncDeep ;
+   }
+
+   void _dmsStorageBase::setSyncNoWriteTime( UINT32 millsec )
+   {
+      _syncNoWriteTime = millsec ;
+   }
+
+   BOOLEAN _dmsStorageBase::isSyncDeep() const
+   {
+      return _syncDeep ;
+   }
+
+   UINT32 _dmsStorageBase::getSyncInterval() const
+   {
+      return _syncInterval ;
+   }
+
+   UINT32 _dmsStorageBase::getSyncRecordNum() const
+   {
+      return _syncRecordNum ;
+   }
+
+   UINT32 _dmsStorageBase::getSyncDirtyRatio() const
+   {
+      return _syncDirtyRatio ;
+   }
+
+   UINT32 _dmsStorageBase::getSyncNoWriteTime() const
+   {
+      return _syncNoWriteTime ;
+   }
+
+   UINT32 _dmsStorageBase::getCommitFlag() const
+   {
+      if ( _dmsHeader )
       {
-         SDB_OSS_FREE ( _dirtyList ) ;
+         return _dmsHeader->_commitFlag ;
       }
+      return 1 ;
+   }
+
+   UINT64 _dmsStorageBase::getCommitLSN() const
+   {
+      if ( _dmsHeader )
+      {
+         return _dmsHeader->_commitLsn ;
+      }
+      return 0 ;
+   }
+
+   UINT64 _dmsStorageBase::getCommitTime() const
+   {
+      if ( _dmsHeader )
+      {
+         return _dmsHeader->_commitTime ;
+      }
+      return 0 ;
+   }
+
+   void _dmsStorageBase::restoreForCrash()
+   {
+      _isCrash = FALSE ;
+      _forceSync = TRUE ;
+      _onRestore() ;
+   }
+
+   BOOLEAN _dmsStorageBase::isCrashed() const
+   {
+      return _isCrash ;
+   }
+
+   void _dmsStorageBase::enableSync( BOOLEAN enable )
+   {
+      lock() ;
+      _syncEnable = enable ;
+      unlock() ;
+   }
+
+   BOOLEAN _dmsStorageBase::canSync( BOOLEAN &force ) const
+   {
+      force = FALSE ;
+      UINT64 oldestTick = _getOldestWriteTick() ;
+      UINT64 oldTimeSpan = 0 ;
+
+      if ( !_syncEnable )
+      {
+         return FALSE ;
+      }
+      else if ( _forceSync )
+      {
+         force = TRUE ;
+         return TRUE ;
+      }
+
+      if ( (UINT64)~0 != oldestTick )
+      {
+         oldTimeSpan = pmdGetTickSpanTime( oldestTick ) ;
+      }
+
+      if ( 0 != _commitFlag && _dirtyList.dirtyNumber() <= 0 )
+      {
+         return FALSE ;
+      }
+      else if ( _syncInterval > 0 &&
+                oldTimeSpan >= _syncNoWriteTime &&
+                oldTimeSpan > 60 * _syncInterval )
+      {
+         force = TRUE ;
+         return TRUE ;
+      }
+      else if ( _syncRecordNum > 0 && _writeReordNum >= _syncRecordNum )
+      {
+         PD_LOG( PDDEBUG, "Write record number[%u] more than threshold[%u]",
+                 _writeReordNum, _syncRecordNum ) ;
+         force = TRUE ;
+         return TRUE ;
+      }
+      else if ( pmdGetTickSpanTime( _lastWriteTick ) < _syncNoWriteTime )
+      {
+         return FALSE ;
+      }
+      else if ( _syncInterval > 0 )
+      {
+         ossTimestamp tm ;
+         ossGetCurrentTime( tm ) ;
+         UINT64 curTime = tm.time * 1000 + tm.microtm / 1000 ;
+
+         if ( curTime - _lastSyncTime >= _syncInterval )
+         {
+            PD_LOG( PDDEBUG, "Time interval threshold tiggered, "
+                    "CurTime:%llu, LastSyncTime:%llu, SyncInterval:%u",
+                    curTime, _lastSyncTime, _syncInterval ) ;
+            return TRUE ;
+         }
+      }
+      return FALSE ;
+   }
+
+   void _dmsStorageBase::lock()
+   {
+      _persistLatch.get() ;
+   }
+
+   void _dmsStorageBase::unlock()
+   {
+      _persistLatch.release() ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DMSSTORAGEBASE_SYNC, "_dmsStorageBase::sync" )
+   INT32 _dmsStorageBase::sync( BOOLEAN force,
+                                BOOLEAN sync,
+                                IExecutor *cb )
+   {
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY ( SDB__DMSSTORAGEBASE_SYNC ) ;
+      ossTimestamp t ;
+      UINT32 num = 0 ;
+
+      if ( !_syncEnable )
+      {
+         goto done ;
+      }
+
+      ossGetCurrentTime( t ) ;
+      _lastSyncTime = t.time * 1000 + t.microtm / 1000 ;
+
+      _commitFlag = 1 ;
+      _forceSync = FALSE ;
+
+      if ( _dirtyList.isFullDirty() )
+      {
+         num = 1 ;
+         rc = flushAll( sync ) ;
+         PD_LOG( PDDEBUG, "Flushed all pages to file[%s], rc: %d",
+                 _suFileName, rc ) ;
+      }
+      else
+      {
+         rc = flushDirtySegments( &num, force, sync ) ;
+         PD_LOG( PDDEBUG, "Flushed %u segments to file[%s], rc: %d",
+                 num, _suFileName, rc ) ;
+      }
+      if ( rc )
+      {
+         goto error ;
+      }
+
+      rc = _markHeaderValid( sync, force, num > 0 ? TRUE : FALSE,
+                             _lastSyncTime ) ;
+      if ( rc )
+      {
+         goto error ;
+      }
+
+   done:
+      PD_TRACE_EXITRC ( SDB__DMSSTORAGEBASE_SYNC, rc ) ;
+      return rc ;
+   error:
+      goto done ;
    }
 
    const CHAR* _dmsStorageBase::getSuFileName () const
@@ -134,32 +638,30 @@ namespace engine
       return "" ;
    }
 
-   INT32 _dmsStorageBase::openStorage( const CHAR *pPath, BOOLEAN createNew,
-                                       BOOLEAN delWhenExist )
+   INT32 _dmsStorageBase::openStorage( const CHAR *pPath,
+                                       IDataSyncManager *pSyncMgr,
+                                       BOOLEAN createNew )
    {
       INT32 rc               = SDB_OK ;
       UINT64 fileSize        = 0 ;
       UINT64 currentOffset   = 0 ;
       UINT32 mode = OSS_READWRITE|OSS_EXCLUSIVE ;
+      UINT64 rightSize = 0 ;
+      BOOLEAN reGetSize = FALSE ;
 
       SDB_ASSERT( pPath, "path can't be NULL" ) ;
 
-      if ( NULL == _pStorageInfo )
+      if ( NULL == _pStorageInfo || NULL == pSyncMgr )
       {
          rc = SDB_INVALIDARG ;
          goto error ;
       }
+      _pSyncMgr = pSyncMgr ;
 
       if ( createNew )
       {
-         if ( delWhenExist )
-         {
-            mode |= OSS_REPLACE ;
-         }
-         else
-         {
-            mode |= OSS_CREATEONLY ;
-         }
+         mode |= OSS_CREATEONLY ;
+         _isCrash = FALSE ;
       }
 
       rc = utilBuildFullPath( pPath, _suFileName, OSS_MAX_PATHSIZE,
@@ -175,7 +677,6 @@ namespace engine
 
       PD_LOG ( PDDEBUG, "Open storage unit file %s", _fullPathName ) ;
 
-      // open the file, create one if not exist
       rc = ossMmapFile::open ( _fullPathName, mode, OSS_RU|OSS_WU|OSS_RG ) ;
       if ( rc )
       {
@@ -184,25 +685,23 @@ namespace engine
       }
       if ( createNew )
       {
-         PD_LOG( PDEVENT, "Create storage unit file[%s] succeed, mode: %x",
-                 _fullPathName, mode ) ;
+         PD_LOG( PDEVENT, "Create storage unit file[%s] succeed, "
+                 "mode: 0x%08x", _fullPathName, mode ) ;
       }
 
       rc = ossMmapFile::size ( fileSize ) ;
       if ( rc )
       {
-         PD_LOG ( PDERROR, "Failed to get file size: %s", _fullPathName ) ;
+         PD_LOG ( PDERROR, "Failed to get file size: %s, rc: %d",
+                  _fullPathName, rc ) ;
          goto error ;
       }
 
-      // is it a brand new file
       if ( 0 == fileSize )
       {
-         // if it's a brand new file but we don't ask for creating new storage
-         // unit, then we exit with invalid su error
          if ( !createNew )
          {
-            PD_LOG ( PDERROR, "storage unit file is empty: %s", _suFileName ) ;
+            PD_LOG ( PDERROR, "Storage unit file[%s] is empty", _suFileName ) ;
             rc = SDB_DMS_INVALID_SU ;
             goto error ;
          }
@@ -212,11 +711,11 @@ namespace engine
             PD_LOG ( PDERROR, "Failed to initialize Storage Unit, rc=%d", rc ) ;
             goto error ;
          }
-         // then we get the size again to make sure it's what we need
          rc = ossMmapFile::size ( fileSize ) ;
          if ( rc )
          {
-            PD_LOG ( PDERROR, "Failed to get file size: %s", _suFileName ) ;
+            PD_LOG ( PDERROR, "Failed to get file size: %s, rc: %d",
+                     _suFileName, rc ) ;
             goto error ;
          }
       }
@@ -230,8 +729,6 @@ namespace engine
          goto error ;
       }
 
-      // map metadata
-      // header, 64K
       rc = map ( DMS_HEADER_OFFSET, DMS_HEADER_SZ, (void**)&_dmsHeader ) ;
       if ( rc )
       {
@@ -239,20 +736,11 @@ namespace engine
          goto error ;
       }
 
-      /// lobPageSize is 0 if it was created by db with older version.
-      /// we reassign it with 256K -- yunwu
       if ( 0 == _dmsHeader->_lobdPageSize )
       {
          _dmsHeader->_lobdPageSize = DMS_DEFAULT_LOB_PAGE_SZ ;
       }
 
-      if ( createNew )
-      {
-         /// set flag as true when it is a new file.
-         _dmsHeader->_validFlag = 1 ;
-      }
-
-      // after we load SU, let's verify it's expected file
       rc = _validateHeader( _dmsHeader ) ;
       if ( rc )
       {
@@ -260,8 +748,35 @@ namespace engine
                   _suFileName, rc ) ;
          goto error ;
       }
+      else if ( !createNew )
+      {
+         if ( _pStorageInfo->_dataIsOK && 0 == _dmsHeader->_commitFlag )
+         {
+            if ( 0 == _dmsHeader->_commitLsn )
+            {
+               ossTimestamp t ;
+               ossGetCurrentTime( t ) ;
+               _dmsHeader->_commitTime = t.time * 1000 + t.microtm / 1000 ;
+               _dmsHeader->_commitLsn = _pStorageInfo->_curLSNOnStart ;
+            }
+            _dmsHeader->_commitFlag = 1 ;
+         }
+         _commitFlag = _dmsHeader->_commitFlag ;
+         _isCrash = ( 0 == _commitFlag ) ? TRUE : FALSE ;
 
-      // SME, 8MB
+         ossTimestamp commitTm ;
+         commitTm.time = _dmsHeader->_commitTime / 1000 ;
+         commitTm.microtm = ( _dmsHeader->_commitTime % 1000 ) * 1000 ;
+         CHAR strTime[ OSS_TIMESTAMP_STRING_LEN + 1 ] = { 0 } ;
+         ossTimestampToString( commitTm, strTime ) ;
+
+         PD_LOG( PDEVENT, "Storage file[%s] is %s[%u], CommitLSN: %lld, "
+                 "CommitTime: %s[%llu]", _suFileName,
+                 ( _isCrash ? "Invalid" : "Valid" ), _commitFlag,
+                 _dmsHeader->_commitLsn,
+                 strTime, _dmsHeader->_commitTime ) ;
+      }
+
       rc = map ( DMS_SME_OFFSET, DMS_SME_SZ, (void**)&_dmsSME ) ;
       if ( rc )
       {
@@ -269,9 +784,6 @@ namespace engine
          goto error ;
       }
 
-      // initialize SME Manager, which is used to do fast-lookup and release
-      // for extents. Note _pageSize is initialized in _validateHeader, so
-      // we are safe to use page size here
       rc = _smeMgr.init ( this, _dmsSME ) ;
       if ( rc )
       {
@@ -283,38 +795,86 @@ namespace engine
       PD_RC_CHECK( rc, PDERROR, "map file[%s] meta failed, rc: %d",
                    _suFileName, rc ) ;
 
-      // make sure the file size is multiple of segments
       if ( 0 != ( fileSize - _dataOffset() ) % _getSegmentSize() )
       {
-         PD_LOG ( PDERROR, "Unexpected length[%d] of file: %s", fileSize,
+         PD_LOG ( PDWARNING, "Unexpected length[%llu] of file: %s", fileSize,
                   _suFileName ) ;
-         rc = SDB_DMS_INVALID_SU ;
-         goto error ;
+
+         rightSize = ( ( fileSize - _dataOffset() ) /
+                       _getSegmentSize() ) * _getSegmentSize() +
+                       _dataOffset() ;
+         rc = ossTruncateFile( &_file, (INT64)rightSize ) ;
+         if ( rc )
+         {
+            PD_LOG( PDERROR, "Truncate file[%s] to size[%llu] failed, rc: %d",
+                    _suFileName, rightSize, rc ) ;
+            goto error ;
+         }
+         PD_LOG( PDEVENT, "Truncate file[%s] to size[%llu] succeed",
+                 _suFileName, rightSize ) ;
+         rc = ossMmapFile::size ( fileSize ) ;
+         if ( rc )
+         {
+            PD_LOG ( PDERROR, "Failed to get file size: %s, rc: %d",
+                     _suFileName, rc ) ;
+            goto error ;
+         }
       }
-      if ( fileSize != (UINT64)_dmsHeader->_storageUnitSize * pageSize() )
+
+      rightSize = (UINT64)_dmsHeader->_storageUnitSize * pageSize() ;
+      if ( fileSize > rightSize )
       {
-         PD_LOG( PDWARNING, "File[%s] size[%llu] is not match with storage "
+         PD_LOG( PDWARNING, "File[%s] size[%llu] is grater than storage "
                  "unit pages[%u]", _suFileName, fileSize,
                  _dmsHeader->_storageUnitSize ) ;
 
-         fileSize = (UINT64)_dmsHeader->_storageUnitSize * pageSize() ;
-         rc = ossTruncateFile( &_file, fileSize ) ;
+         rc = ossTruncateFile( &_file, (INT64)rightSize ) ;
          if ( rc )
          {
-            PD_LOG( PDERROR, "Truncate file[%s] to size[%lld] failed, rc: %d",
-                    _suFileName, fileSize, rc ) ;
+            PD_LOG( PDERROR, "Truncate file[%s] to size[%llu] failed, rc: %d",
+                    _suFileName, rightSize, rc ) ;
             goto error ;
          }
-         PD_LOG( PDEVENT, "Truncate file[%s] to size[%lld]", _suFileName,
-                 fileSize ) ;
+         PD_LOG( PDEVENT, "Truncate file[%s] to size[%lld] succeed",
+                 _suFileName, rightSize ) ;
+         reGetSize = TRUE ;
+      }
+      else if ( fileSize < rightSize )
+      {
+         PD_LOG( PDWARNING, "File[%s] size[%llu] is less than storage "
+                 "unit pages[%u]", _suFileName, fileSize,
+                 _dmsHeader->_storageUnitSize ) ;
+
+         rc = ossExtendFile( &_file, (INT64)( rightSize - fileSize ) ) ;
+         if ( rc )
+         {
+            PD_LOG( PDERROR, "Extend file[%s] to size[%lld] from size[%lld] "
+                    "failed, rc: %d", _suFileName, rightSize,
+                    fileSize, rc ) ;
+            goto error ;
+         }
+         PD_LOG( PDEVENT, "Extend file[%s] to size[%lld] from size[%lld] "
+                 "succeed", _suFileName, rightSize, fileSize ) ;
+         reGetSize = TRUE ;
       }
 
-      // loop and map each segment into separate mem range
-      _dataSegID = ossMmapFile::segmentSize() ;
+      if ( reGetSize )
+      {
+         rc = ossMmapFile::size ( fileSize ) ;
+         if ( rc )
+         {
+            PD_LOG ( PDERROR, "Failed to get file size: %s, rc: %d",
+                     _suFileName, rc ) ;
+            goto error ;
+         }
+         reGetSize = FALSE ;
+      }
+
+      _dataSegID = segmentSize() ;
       currentOffset = _dataOffset() ;
       while ( currentOffset < fileSize )
       {
-         rc = map ( currentOffset, _getSegmentSize(), NULL ) ;
+         rc = map( currentOffset, _getSegmentSize(), NULL ) ;
          if ( rc )
          {
             PD_LOG ( PDERROR, "Failed to map data segment at offset %lld",
@@ -323,74 +883,73 @@ namespace engine
          }
          currentOffset += _getSegmentSize() ;
       }
-      _maxSegID = (INT32)ossMmapFile::segmentSize() - 1 ;
+      _maxSegID = (INT32)segmentSize() - 1 ;
 
-      if ( isTempSU() && createNew )
+      rc = _dirtyList.init( maxSegmentNum() ) ;
+      if ( rc )
       {
-         rc = _extendSegments( 1 ) ;
-         PD_RC_CHECK( rc, PDERROR, "Extent segments failed, rc: %d", rc ) ;
-      }
-
-      // create dirtyList to record dirty pages
-      // note dirty list doesn't contain header and metadata segments, only for
-      // data segments
-      if ( _dirtyList )
-      {
-         SDB_OSS_FREE ( _dirtyList ) ;
-      }
-      // memory will be freed in destructor
-      _dirtyList = (CHAR*)SDB_OSS_MALLOC ( maxSegmentNum() / 8 ) ;
-      if ( !_dirtyList )
-      {
-         rc = SDB_OOM ;
-         PD_LOG ( PDERROR, "Failed to allocate memory for dirty list for "
-                  "%d bytes", maxSegmentNum() / 8 ) ;
+         PD_LOG ( PDERROR, "Init dirty list failed in file[%s], rc: %d",
+                  _suFileName, rc ) ;
          goto error ;
       }
-      ossMemset ( _dirtyList, 0, maxSegmentNum() / 8 ) ;
+      _dirtyList.setSize( segmentSize() - _dataSegID ) ;
 
       rc = _onOpened() ;
       if ( rc )
       {
-         SDB_OSS_FREE ( _dirtyList ) ;
-         PD_LOG( PDERROR, "Failed on post open operation for file: %s",
-                 _suFileName ) ;
+         PD_LOG( PDERROR, "Failed on post open operation for file[%s], rc: %d",
+                 _suFileName, rc ) ;
          goto error ;
       }
 
-      _validFlag = _dmsHeader->_validFlag ;
-      _lastLSN.init( -1 == ( INT64 )(_dmsHeader->_lsn) ?
-                     0 : _dmsHeader->_lsn ) ;
+      if ( !isTempSU() )
+      {
+         _pSyncMgr->registerSync( this ) ;
+      }
+      else
+      {
+         _pSyncMgr = NULL ;
+      }
+      _isClosed = FALSE ;
+
    done:
       return rc ;
    error:
       ossMmapFile::close () ;
+      _postOpen( rc ) ;
       goto done ;
    }
 
    void _dmsStorageBase::closeStorage ()
    {
-      // be sure the extend job has quit
+      _isClosed = TRUE ;
+
       ossLatch( &_segmentLatch, SHARED ) ;
       ossUnlatch( &_segmentLatch, SHARED );
 
+      if ( _pSyncMgr )
+      {
+         _pSyncMgr->unregSync( this ) ;
+         _pSyncMgr = NULL ;
+      }
+
+      lock() ;
+      unlock() ;
+
       if ( ossMmapFile::_opened )
       {
-         if ( !_isCrash )
-         {
-            _dmsHeader->_validFlag = 1 ;
-            _dmsHeader->_lsn = _lastLSN.peek() ;
-         }
-         _dmsHeader     = NULL ;
-         _dmsSME        = NULL ;
-         // release header and attempt to get page cleaner latch
-         // once page cleaner released the latch, the function is able to
-         // proceed
-         ossLatch ( &_pagecleanerLatch ) ;
          _onClosed() ;
 
+         if ( _dirtyList.dirtyNumber() > 0 )
+         {
+            flushAll( _syncDeep ) ;
+         }
+         _commitFlag = 1 ;
+         _markHeaderValid( _syncDeep, TRUE, TRUE, 0 ) ;
          ossMmapFile::close() ;
-         ossUnlatch ( &_pagecleanerLatch ) ;
+
+         _dmsHeader = NULL ;
+         _dmsSME = NULL ;
       }
       _maxSegID = -1 ;
    }
@@ -404,7 +963,8 @@ namespace engine
          goto done ;
       }
 
-      // close
+      _dirtyList.cleanAll() ;
+
       closeStorage() ;
 
       rc = ossDelete( _fullPathName ) ;
@@ -416,6 +976,125 @@ namespace engine
 
    done:
       return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _dmsStorageBase::renameStorage( const CHAR *csName,
+                                         const CHAR *suFileName )
+   {
+      INT32 rc = SDB_OK ;
+      CHAR tmpPathFile[ OSS_MAX_PATHSIZE + 1 ] = { 0 } ;
+      ossStrcpy( tmpPathFile, _fullPathName ) ;
+
+      CHAR *pos = ossStrstr( tmpPathFile, _suFileName ) ;
+      if ( !pos )
+      {
+         PD_LOG( PDERROR, "File full path[%s] is not include su file[%s]",
+                 _fullPathName, _suFileName ) ;
+         rc = SDB_SYS ;
+         goto error ;
+      }
+      *pos = '\0' ;
+      utilCatPath( tmpPathFile, OSS_MAX_PATHSIZE, suFileName ) ;
+
+      if ( !_dmsHeader || _isClosed )
+      {
+         PD_LOG( PDERROR, "File is not open" ) ;
+         rc = SDB_SYS ;
+         goto error ;
+      }
+
+#ifdef _WINDOWS
+      ossStrncpy( _dmsHeader->_name, csName, DMS_SU_NAME_SZ ) ;
+      _dmsHeader->_name[ DMS_SU_NAME_SZ ] = 0 ;
+      flushHeader( TRUE ) ;
+
+      {
+         IDataSyncManager *pSyncMgr = _pSyncMgr ;
+         closeStorage() ;
+
+         rc = ossRenamePath( _fullPathName, tmpPathFile ) ;
+         if ( rc )
+         {
+            PD_LOG( PDERROR, "Rename file[%s] to %s failed, rc: %d",
+                    _fullPathName, tmpPathFile, rc ) ;
+            goto error ;
+         }
+
+         *pos = '\0' ;
+         ossStrncpy( _suFileName, suFileName, DMS_SU_FILENAME_SZ ) ;
+         _suFileName[ DMS_SU_FILENAME_SZ ] = '\0' ;
+         ossStrncpy( _pStorageInfo->_suName, csName, DMS_SU_NAME_SZ ) ;
+         _pStorageInfo->_suName[ DMS_SU_NAME_SZ ] = 0 ;
+         rc = openStorage( tmpPathFile, pSyncMgr, FALSE ) ;
+         if ( rc )
+         {
+            PD_LOG( PDERROR, "Open storage file failed, rc: %d", rc ) ;
+            goto error ;
+         }
+      }
+#else
+      rc = ossRenamePath( _fullPathName, tmpPathFile ) ;
+      if ( rc )
+      {
+         PD_LOG( PDERROR, "Rename file[%s] to %s failed, rc: %d",
+                 _fullPathName, tmpPathFile, rc ) ;
+         goto error ;
+      }
+
+      ossStrncpy( _suFileName, suFileName, DMS_SU_FILENAME_SZ ) ;
+      _suFileName[ DMS_SU_FILENAME_SZ ] = '\0' ;
+
+      ossStrcpy( _fullPathName, tmpPathFile ) ;
+
+      ossStrncpy( _dmsHeader->_name, csName, DMS_SU_NAME_SZ ) ;
+      _dmsHeader->_name[ DMS_SU_NAME_SZ ] = 0 ;
+      flushHeader( TRUE ) ;
+
+#endif // _WINDOWS
+
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _dmsStorageBase::_postOpen( INT32 cause )
+   {
+      INT32 rc = SDB_OK ;
+
+      if ( SDB_DMS_INVALID_SU == cause &&
+           _fullPathName[0] != '\0' )
+      {
+         CHAR tmpFile[ OSS_MAX_PATHSIZE + 1 ] = { 0 } ;
+         ossSnprintf( tmpFile, OSS_MAX_PATHSIZE, "%s.err.%u",
+                      _fullPathName, ossGetCurrentProcessID() ) ;
+         if ( SDB_OK == ossAccess( tmpFile, 0 ) )
+         {
+            rc = ossDelete( tmpFile ) ;
+            if ( rc )
+            {
+               PD_LOG( PDERROR, "Remove file[%s] failed, rc: %d",
+                       tmpFile, rc ) ;
+               goto error ;
+            }
+         }
+         rc = ossRenamePath( _fullPathName, tmpFile ) ;
+         if ( rc )
+         {
+            PD_LOG( PDERROR, "Rename file[%s] to [%s] failed, rc: %d",
+                    _fullPathName, tmpFile, rc ) ;
+         }
+         else
+         {
+            PD_LOG( PDEVENT, "Rename file[%s] to [%s] succeed",
+                    _fullPathName, tmpFile ) ;
+         }
+      }
+
+   done:
+      return cause ;
    error:
       goto done ;
    }
@@ -453,7 +1132,6 @@ namespace engine
       _dmsHeader        = NULL ;
       _dmsSME           = NULL ;
 
-      // move to beginning of the file
       rc = ossSeek ( &_file, 0, OSS_SEEK_SET ) ;
       if ( rc )
       {
@@ -462,7 +1140,6 @@ namespace engine
          goto error ;
       }
 
-      // allocate buffer for dmsHeader
       _dmsHeader = SDB_OSS_NEW dmsStorageUnitHeader ;
       if ( !_dmsHeader )
       {
@@ -472,10 +1149,8 @@ namespace engine
          goto error ;
       }
 
-      // initialize a new header with empty size
       _initHeader ( _dmsHeader ) ;
 
-      // write the buffer into file
       rc = _writeFile ( &_file, (const CHAR *)_dmsHeader, DMS_HEADER_SZ ) ;
       if ( rc )
       {
@@ -486,7 +1161,6 @@ namespace engine
       SDB_OSS_DEL _dmsHeader ;
       _dmsHeader = NULL ;
 
-      // then SME
       _dmsSME = SDB_OSS_NEW dmsSpaceManagementExtent ;
       if ( !_dmsSME )
       {
@@ -546,15 +1220,15 @@ namespace engine
       pHeader->_pageNum  = 0 ;
       pHeader->_secretValue = _pStorageInfo->_secretValue ;
       pHeader->_createLobs = 0 ;
-      pHeader->_validFlag  = 0 ;
-      pHeader->_lsn        = 0 ;
+      pHeader->_commitFlag = 0 ;
+      pHeader->_commitLsn  = ~0 ;
+      pHeader->_commitTime = 0 ;
    }
 
    INT32 _dmsStorageBase::_checkPageSize( dmsStorageUnitHeader * pHeader )
    {
       INT32 rc = SDB_OK ;
 
-      // check page size
       if ( DMS_PAGE_SIZE4K  != pHeader->_pageSize &&
            DMS_PAGE_SIZE8K  != pHeader->_pageSize &&
            DMS_PAGE_SIZE16K != pHeader->_pageSize &&
@@ -583,8 +1257,6 @@ namespace engine
          goto error ;
       }
 
-      // set storage info page size, lob meta page size is 256B,
-      // so can't be assign to storage info
       if ( (UINT32)_pStorageInfo->_pageSize != pHeader->_pageSize )
       {
          _pStorageInfo->_pageSize = pHeader->_pageSize ;
@@ -600,7 +1272,6 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
 
-      // check eye catcher
       if ( 0 != ossStrncmp ( pHeader->_eyeCatcher, _getEyeCatcher(),
                              DMS_HEADER_EYECATCHER_LEN ) )
       {
@@ -611,13 +1282,11 @@ namespace engine
          goto error ;
       }
 
-      // check version
       rc = _checkVersion( pHeader ) ;
       if ( rc )
       {
          goto error ;
       }
-      // check page size
       rc = _checkPageSize( pHeader ) ;
       if ( rc )
       {
@@ -692,12 +1361,6 @@ namespace engine
                getSuFileName(), pHeader->_pageSize, pHeader->_pageNum,
                pHeader->_name, pHeader->_sequence ) ;
 
-      _validFlag = pHeader->_validFlag ;
-      if ( !_validFlag )
-      {
-         _isCrash = TRUE ;
-      }
-
    done :
       return rc ;
    error:
@@ -707,7 +1370,6 @@ namespace engine
    INT32 _dmsStorageBase::_preExtendSegment ()
    {
       INT32 rc = _extendSegments( 1 ) ;
-      // release lock
       ossUnlatch( &_segmentLatch, EXCLUSIVE ) ;
 
       if ( rc )
@@ -717,14 +1379,13 @@ namespace engine
       return rc ;
    }
 
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DMSSTORAGEBASE__EXTENDSEG, "_dmsStorageBase::_extendSegments" )
    INT32 _dmsStorageBase::_extendSegments( UINT32 numSeg )
    {
       INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY ( SDB__DMSSTORAGEBASE__EXTENDSEG ) ;
       INT64 fileSize = 0 ;
 
-      // now other normal applications still able to access metadata in
-      // read-only mode
-      // Then we'll check if adding new segments will exceed the limit
       UINT32 beginExtentID = _dmsHeader->_pageNum ;
       UINT32 endExtentID   = beginExtentID + _segmentPages * numSeg ;
 
@@ -736,7 +1397,6 @@ namespace engine
          goto error ;
       }
 
-      // We'll also verify the SME shows DMS_SME_FREE for all needed pages
       for ( UINT32 i = beginExtentID; i < endExtentID; i++ )
       {
          if ( DMS_SME_FREE != _dmsSME->getBitMask( i ) )
@@ -746,12 +1406,10 @@ namespace engine
          }
       }
 
-      // get file size for map or rollback
       rc = ossGetFileSize ( &_file, &fileSize ) ;
       PD_RC_CHECK ( rc, PDERROR, "Failed to get file size, rc = %d", rc ) ;
 
-      // check wether the file length is match storage unit pages
-      if ( fileSize != (INT64)_dmsHeader->_storageUnitSize * pageSize() )
+      if ( fileSize > (INT64)_dmsHeader->_storageUnitSize * pageSize() )
       {
          PD_LOG( PDWARNING, "File[%s] size[%llu] is not match with storage "
                  "unit pages[%u]", _suFileName, fileSize,
@@ -769,36 +1427,40 @@ namespace engine
                  fileSize ) ;
       }
 
-      // now we only hold extendsegment latch, no other sessions can extend
-      // but other sessions can freely create new extents in existing segments
-      // This should be safe because no one knows we are increasing the size of
-      // file, so other sessions will not attempt to access the new space
-      // then we need to increase the size of file first
-      // MAKE SURE NOT HOLD ANY METADATA LATCH DURING SUCH EXPENSIVE DISK
-      // OPERATION extendSeg latch is held here so that it's not possible //
-      // two sessions doing same extend
-      rc = ossExtendFile( &_file, _getSegmentSize() * numSeg ) ;
+   retry:
+      if ( _pStorageInfo->_enableSparse )
+      {
+         rc = ossExtentBySparse( &_file, (UINT64)_getSegmentSize() * numSeg ) ;
+      }
+      else
+      {
+         rc = ossExtendFile( &_file, _getSegmentSize() * numSeg ) ;
+      }
+
       if ( rc )
       {
          INT32 rc1 = SDB_OK ;
-         PD_LOG ( PDERROR, "Failed to extend storage unit for %lld bytes",
-                  _getSegmentSize() * (UINT64)numSeg ) ;
+         PD_LOG ( PDERROR, "Failed to extend storage unit for %lld "
+                  "bytes, sparse:%s, rc: %d",
+                  _getSegmentSize() * (UINT64)numSeg,
+                  _pStorageInfo->_enableSparse ? "TRUE" : "FALSE", rc ) ;
 
-         // truncate the file when it's failed to extend file
          rc1 = ossTruncateFile ( &_file, fileSize ) ;
          if ( rc1 )
          {
             PD_LOG ( PDSEVERE, "Failed to revert the increase of segment, "
                      "rc = %d", rc1 ) ;
-            // if we increased the file size but got error, and we are not able
-            // to decrease it, something BIG wrong, let's panic
             ossPanic () ;
          }
-         // we need to manage how to truncate the file to original size here
+
+         if ( SDB_INVALIDARG == rc && _pStorageInfo->_enableSparse )
+         {
+            _pStorageInfo->_enableSparse = FALSE ;
+            goto retry ;
+         }
          goto error ;
       }
 
-      // map all new segments into memory
       for ( UINT32 i = 0; i < numSeg ; i++ )
       {
          rc = map ( fileSize, _getSegmentSize(), NULL ) ;
@@ -809,8 +1471,8 @@ namespace engine
             goto error ;
          }
          _maxSegID += 1 ;
+         _dirtyList.setSize( segmentSize() - _dataSegID ) ;
 
-         // update SME Manager
          rc = _smeMgr.depositASegment( (dmsExtentID)beginExtentID ) ;
          if ( rc )
          {
@@ -822,13 +1484,13 @@ namespace engine
          beginExtentID += _segmentPages ;
          fileSize += _getSegmentSize() ;
 
-         // update header
          _dmsHeader->_storageUnitSize += _segmentPages ;
          _dmsHeader->_pageNum += _segmentPages ;
          _pageNum = _dmsHeader->_pageNum ;
       }
 
    done :
+      PD_TRACE_EXITRC ( SDB__DMSSTORAGEBASE__EXTENDSEG, rc ) ;
       return rc ;
    error :
       goto done ;
@@ -848,12 +1510,14 @@ namespace engine
       return DMS_SEGMENT_SZ ;
    }
 
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DMSSTORAGEBASE__FINDFREESPACE, "_dmsStorageBase::_findFreeSpace" )
    INT32 _dmsStorageBase::_findFreeSpace( UINT16 numPages, SINT32 & foundPage,
                                           dmsContext *context )
    {
       UINT32 segmentSize = 0 ;
       INT32 rc = SDB_OK ;
       INT32 rc1 = SDB_OK ;
+      PD_TRACE_ENTRY ( SDB__DMSSTORAGEBASE__FINDFREESPACE ) ;
 
       while ( TRUE )
       {
@@ -868,8 +1532,6 @@ namespace engine
             break ;
          }
 
-         // if not able to find any, that means all pages are occupied
-         // then we should call extendSegments
          if ( ossTestAndLatch( &_segmentLatch, EXCLUSIVE ) )
          {
             if ( segmentSize != _smeMgr.segmentNum() )
@@ -878,7 +1540,6 @@ namespace engine
                continue ;
             }
 
-            // begin for extent
             rc = context ? context->pause() : SDB_OK ;
             if ( rc )
             {
@@ -890,7 +1551,6 @@ namespace engine
 
             rc = _extendSegments( 1 ) ;
 
-            // end to resume
             rc1 = context ? context->resume() : SDB_OK ;
 
             ossUnlatch( &_segmentLatch, EXCLUSIVE ) ;
@@ -908,20 +1568,23 @@ namespace engine
          }
          else
          {
-            // begin for extent
+            BOOLEAN needAlloc = TRUE ;
             rc = context ? context->pause() : SDB_OK ;
             PD_RC_CHECK( rc, PDERROR, "Failed to pause context[%s], rc: %d",
                          context->toString().c_str(), rc ) ;
             ossLatch( &_segmentLatch, SHARED ) ;
             ossUnlatch( &_segmentLatch, SHARED );
-            // end to resume
             rc = context ? context->resume() : SDB_OK ;
             PD_RC_CHECK( rc, PDERROR, "Failed to resum context[%s], rc: %d",
                          context->toString().c_str(), rc ) ;
+            _onAllocSpaceReady( context, needAlloc ) ;
+            if ( !needAlloc )
+            {
+               break ;
+            }
          }
       }
 
-      // start extend segment job
       if ( _extendThreshold() > 0 &&
            _smeMgr.totalFree() < _extendThreshold() &&
            ossTestAndLatch( &_segmentLatch, EXCLUSIVE ) )
@@ -934,6 +1597,7 @@ namespace engine
       }
 
    done:
+      PD_TRACE_EXITRC( SDB__DMSSTORAGEBASE__FINDFREESPACE, rc ) ;
       return rc ;
    error:
       goto done ;
@@ -951,12 +1615,12 @@ namespace engine
 
    INT32 _dmsStorageBase::flushHeader( BOOLEAN sync )
    {
-      return ossMmapFile::flush( 0, sync ) ;
+      return flush( 0, sync ) ;
    }
 
    INT32 _dmsStorageBase::flushSME( BOOLEAN sync )
    {
-      return ossMmapFile::flush( 1, sync ) ;
+      return _ossMmapFile::flush( 1, sync ) ;
    }
 
    INT32 _dmsStorageBase::flushMeta( BOOLEAN sync, UINT32 *pExceptID,
@@ -985,7 +1649,7 @@ namespace engine
                continue ;
             }
          }
-         rcTmp = ossMmapFile::flush( i, sync ) ;
+         rcTmp = _ossMmapFile::flush( i, sync ) ;
          if ( rcTmp )
          {
             PD_LOG( PDERROR, "Flush segment %u to disk failed, rc: %d",
@@ -1014,7 +1678,7 @@ namespace engine
          UINT32 segmentID = extent2Segment( pageID, &offset ) ;
          INT32 length = (INT32)pageNum << pageSizeSquareRoot() ;
          offset <<= pageSizeSquareRoot() ;
-         rc = ossMmapFile::flushBlock( segmentID, offset, length, sync ) ;
+         rc = _ossMmapFile::flushBlock( segmentID, offset, length, sync ) ;
       }
 
       return rc ;
@@ -1022,139 +1686,180 @@ namespace engine
 
    INT32 _dmsStorageBase::flushSegment( UINT32 segmentID, BOOLEAN sync )
    {
-      return ossMmapFile::flush( segmentID, sync ) ;
+      if ( _dataSegID > 0 && segmentID >= _dataSegID )
+      {
+         _dirtyList.cleanDirty( segmentID - _dataSegID ) ;
+      }
+      return _ossMmapFile::flush( segmentID, sync ) ;
    }
 
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DMSSTORAGEBASE_FLUSHALL, "_dmsStorageBase::flushAll" )
    INT32 _dmsStorageBase::flushAll( BOOLEAN sync )
    {
-      return ossMmapFile::flushAll( sync ) ;
-   }
-
-   // flush all dirty segments to disk by traverse _dirtyList array
-   // this function returns void since it doesn't affect frontend workload
-   // regardless whether the flush success or not
-   void _dmsStorageBase::flushDirtySegments ( UINT32 *pNum, BOOLEAN sync )
-   {
       INT32 rc = SDB_OK ;
-      INT32 maxSegmentID = 0 ;
-      UINT32 numbers = 0 ;
-      UINT32 segmentID = 0 ;
-      // once we latch the storage unit, we have to check if the header is null.
-      // If the header is null, that means closeStorage is called and we should
-      // get out of the function
-      if ( !_dmsHeader )
-         goto done ;
-      SDB_ASSERT ( _dataSegID && _dirtyList,
-                   "starting data segment can't be 0, and "
-                   "dirty list can't be NULL" ) ;
-      SDB_ASSERT ( (UINT32)_maxSegID <=
-                   maxSegmentNum() + _dataSegID,
-                   "current top segment id can't be greater than "
-                   "maximum number of segment for storage unit" ) ;
+      PD_TRACE_ENTRY ( SDB__DMSSTORAGEBASE_FLUSHALL ) ;
 
-      if ( SDB_OK != _onFlushDirty( sync ) )
+      syncMemToMmap() ;
+
+      rc = _onFlushDirty( TRUE, sync ) ;
+      if ( rc )
       {
-         /// stop
          goto done ;
       }
 
-      /// first flush meta
-      flushMeta( sync ) ;
-
-      // calculate how many "segment groups" we should go through
-      // note each group is consists of 8 segments
-      maxSegmentID = ceil (( _maxSegID + 1 - _dataSegID ) / 8.0f ) ;
-      // then flush data with dirty pages
-      for ( INT32 i = 0; i < maxSegmentID; ++i )
+      _dirtyList.cleanAll() ;
+      _writeReordNum = 0 ;
+      rc = _ossMmapFile::flushAll( sync ) ;
+      if ( rc )
       {
-         // we should check the header before every phyical flush,
-         // to make sure the storage unit is still open at the time
-         if ( !_dmsHeader )
-            goto done ;
-         // each byte represents 8 segments, let's check each byte first
-         if ( 0 == _dirtyList[i] )
+         goto done ;
+      }
+
+   done:
+      PD_TRACE_EXITRC( SDB__DMSSTORAGEBASE_FLUSHALL, rc ) ;
+      return rc ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DMSSTORAGEBASE_FLUSHDIRTYSEGS, "_dmsStorageBase::flushDirtySegments" )
+   INT32 _dmsStorageBase::flushDirtySegments ( UINT32 *pNum,
+                                               BOOLEAN force,
+                                               BOOLEAN sync )
+   {
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY ( SDB__DMSSTORAGEBASE_FLUSHDIRTYSEGS ) ;
+
+      UINT32 numbers = 0 ;
+      INT32 segmentID = 0 ;
+      UINT32 fromPos = 0 ;
+
+      rc = flushMeta( sync ) ;
+      if ( rc )
+      {
+         goto done ;
+      }
+      rc = _onFlushDirty( force, sync ) ;
+      if ( rc )
+      {
+         goto done ;
+      }
+
+      _writeReordNum = 0 ;
+      segmentID = _dirtyList.nextDirtyPos( fromPos ) ;
+      while( segmentID >= 0 )
+      {
+         if ( _isClosed )
          {
-            continue ;
+            rc = SDB_APP_INTERRUPT ;
+            break ;
          }
-         // if the byte is not 0, let's see which page need to be flushed
-         for ( INT32 j = 0 ; j < 8 ; ++j )
+         else if ( !force && 0 == _commitFlag )
          {
-            // if the segment on j's bit is dirty, let's flush
-            if ( OSS_BIT_TEST( _dirtyList[i], ( 1 << j ) ) )
-            {
-               // now let's convert the bit back to 0
-               OSS_BIT_CLEAR( _dirtyList[i], ( 1 << j ) ) ;
-               segmentID = _dataSegID + ( i << 3 ) + j ;
-               rc = flushSegment( segmentID, sync ) ;
-               if ( rc )
-               {
-                  OSS_BIT_SET( _dirtyList[i], ( 1 << j ) ) ;
-                  PD_LOG ( PDWARNING, "Failed to flush segment %d to disk, "
-                           "rc = %d", segmentID, rc ) ;
-               }
-               ++numbers ;
-            } // if ( _dirtyList[i] & ( 1 << j ) )
-         } // for ( INT32 j = 0; j < 8; ++j )
-      } // for ( INT32 i = 0; i < maxSegmentNum; ++i )
+            rc = SDB_APP_INTERRUPT ;
+            break ;
+         }
+         rc = flushSegment( (UINT32)segmentID + _dataSegID, sync ) ;
+         if ( rc )
+         {
+            PD_LOG( PDWARNING, "Failed to flush segment[%u] to file[%s], "
+                    "rc: %d", segmentID, _suFileName, rc ) ;
+         }
+         ++numbers ;
+         segmentID = _dirtyList.nextDirtyPos( fromPos ) ;
+      }
 
    done :
       if ( pNum )
       {
          *pNum = numbers ;
       }
+      PD_TRACE_EXITRC( SDB__DMSSTORAGEBASE_FLUSHDIRTYSEGS, rc ) ;
+      return rc ;
    }
 
-   void _dmsStorageBase::_markHeaderInvalid( BOOLEAN doublecheck )
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DMSSTORAGEBASE__MARKHEADEERINVALID, "_dmsStorageBase::_markHeaderInvalid" )
+   void _dmsStorageBase::_markHeaderInvalid( INT32 collectionID,
+                                             BOOLEAN isAll )
    {
-      BOOLEAN locked = FALSE ;
-      if ( _validFlag && _dmsHeader )
-      {
-         if ( doublecheck )
-         {
-            ossLatch ( &_pagecleanerLatch ) ;
-            locked = TRUE ;
-
-            if ( !_validFlag )
-            {
-               goto done ;
-            }
-         }
-
-         _validFlag = 0 ;
-         _dmsHeader->_validFlag = 0 ;
-         _dmsHeader->_lsn = -1 ;
-
-            /// flush to file
-         flushHeader( TRUE ) ;
-      }
-   done:
-       if ( locked )
-       {
-          ossUnlatch( &_pagecleanerLatch ) ;
-       }
-   }
-
-   void _dmsStorageBase::_markHeaderValid()
-   {
+      PD_TRACE_ENTRY ( SDB__DMSSTORAGEBASE__MARKHEADEERINVALID ) ;
       if ( _dmsHeader )
       {
-         _dmsHeader->_validFlag = 1 ;
-         _dmsHeader->_lsn = _lastLSN.peek() ;
-         flushHeader( TRUE ) ;
+         if ( isAll )
+         {
+            _onMarkHeaderInvalid( -1 ) ;
+         }
+         else if ( collectionID >= 0 )
+         {
+            _onMarkHeaderInvalid( collectionID ) ;
+         }
       }
-      return ;
+
+      if ( _dmsHeader && !_isCrash && _commitFlag )
+      {
+         ossScopedLock lock( &_commitLatch ) ;
+
+         if ( _commitFlag )
+         {
+            _commitFlag = 0 ;
+            _dmsHeader->_commitFlag = 0 ;
+            flushHeader( _syncDeep ) ;
+         }
+      }
+      PD_TRACE_EXIT( SDB__DMSSTORAGEBASE__MARKHEADEERINVALID ) ;
    }
 
-   void _dmsStorageBase::_registerNewWriting()
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DMSSTORAGEBASE__MARKHEADEERVALID, "_dmsStorageBase::_markHeaderValid" )
+   INT32 _dmsStorageBase::_markHeaderValid( BOOLEAN sync,
+                                            BOOLEAN force,
+                                            BOOLEAN hasFlushedData,
+                                            UINT64 lastTime )
    {
-      _lastTick = pmdGetDBTick() ;
-      _markHeaderInvalid( TRUE ) ;
-      return ;
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY ( SDB__DMSSTORAGEBASE__MARKHEADEERVALID ) ;
+
+      if ( _dmsHeader )
+      {
+         if ( 0 == lastTime )
+         {
+            ossTimestamp t ;
+            ossGetCurrentTime( t ) ;
+            lastTime = t.time * 1000 + t.microtm / 1000 ;
+         }
+
+         if ( _commitFlag || force )
+         {
+            UINT64 lastLSN = ~0 ;
+            UINT32 tmpCommitFlag = 0 ;
+            ossScopedLock lock( &_commitLatch ) ;
+            if ( _commitFlag || force )
+            {
+               _onMarkHeaderValid( lastLSN, sync, lastTime ) ;
+
+               tmpCommitFlag = _isCrash ? 0 : _commitFlag ;
+               if ( hasFlushedData ||
+                    tmpCommitFlag != _dmsHeader->_commitFlag ||
+                    lastLSN != _dmsHeader->_commitLsn )
+               {
+                  _dmsHeader->_commitFlag = tmpCommitFlag ;
+                  _dmsHeader->_commitLsn = lastLSN ;
+                  _dmsHeader->_commitTime = lastTime ;
+                  rc = flushHeader( sync ) ;
+               }
+            }
+         }
+      }
+
+      PD_TRACE_EXITRC( SDB__DMSSTORAGEBASE__MARKHEADEERVALID, rc ) ;
+      return rc ;
    }
 
-   BOOLEAN _dmsStorageBase::_noWriteForAWhile() const
+   void _dmsStorageBase::_incWriteRecord()
    {
-      return DMS_NO_WRITE_TIME_FOR_SYNC < pmdGetTickSpanTime( _lastTick ) ;
+      ++_writeReordNum ;
+   }
+
+   void _dmsStorageBase::_disableBlockScan()
+   {
+      _blockScanSupport = FALSE ;
    }
 
    /*
@@ -1163,8 +1868,6 @@ namespace engine
    BOOLEAN dmsAccessAndFlagCompatiblity ( UINT16 collectionFlag,
                                           DMS_ACCESS_TYPE accessType )
    {
-      // if we are in crash recovery mode, only recovery thread is able to
-      // perform query, in this case we always return TRUE
       if ( !pmdGetStartup().isOK() )
       {
          return TRUE ;
@@ -1185,7 +1888,8 @@ namespace engine
          {
             return TRUE ;
          }
-         else if ( DMS_IS_MB_OFFLINE_REORG_SHADOW_COPY ( collectionFlag ) &&
+         else if ( ( DMS_IS_MB_OFFLINE_REORG_SHADOW_COPY ( collectionFlag ) ||
+                     DMS_IS_MB_OFFLINE_REORG_REBUILD( collectionFlag ) ) &&
                   ( ( accessType == DMS_ACCESS_TYPE_QUERY ) ||
                     ( accessType == DMS_ACCESS_TYPE_FETCH ) ) )
          {

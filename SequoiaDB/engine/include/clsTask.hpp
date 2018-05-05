@@ -64,7 +64,6 @@ namespace engine
       CLS_TASK_STATUS_CANCELED= 3,  // canceled
       CLS_TASK_STATUS_META    = 4,  // when meta( ex:catalog info ) changed
       CLS_TASK_STATUS_FINISH  = 9,  // when stopped, this should be the last
-                                    // status before the task is removed
       CLS_TASK_STATUS_END     = 10  // nothing should have this status
    } ;
 
@@ -86,6 +85,8 @@ namespace engine
       public:
          virtual CLS_TASK_TYPE   taskType () const = 0 ;
          virtual const CHAR*     taskName () const = 0 ;
+         virtual const CHAR*     collectionName() const = 0 ;
+         virtual const CHAR*     collectionSpaceName() const = 0 ;
 
          virtual BOOLEAN         muteXOn ( const _clsTask *pOther ) = 0 ;
 
@@ -102,6 +103,8 @@ namespace engine
          ~_clsDummyTask () ;
          virtual CLS_TASK_TYPE   taskType () const ;
          virtual const CHAR*     taskName () const ;
+         virtual const CHAR*     collectionName() const ;
+         virtual const CHAR*     collectionSpaceName() const ;
          virtual BOOLEAN         muteXOn ( const _clsTask *pOther ) ;
    };
 
@@ -117,6 +120,11 @@ namespace engine
       public:
          UINT32      taskCount () ;
          UINT32      taskCount( CLS_TASK_TYPE type ) ;
+
+         UINT32      taskCountByCL( const CHAR *pCLName ) ;
+         UINT32      taskCountByCS( const CHAR *pCSName ) ;
+         INT32       waitTaskEvent( INT64 millisec = OSS_ONE_SEC ) ;
+
          INT32       addTask ( _clsTask *pTask,
                                UINT64 taskID = CLS_INVALID_TASKID ) ;
          INT32       removeTask ( _clsTask *pTask ) ;
@@ -132,9 +140,12 @@ namespace engine
          UINT32      getRegCount( const string &clName,
                                   BOOLEAN noLatch = FALSE ) ;
 
+         string      dumpTasks( CLS_TASK_TYPE type ) ;
+
       private:
          std::map<UINT64, _clsTask*>         _taskMap ;
          ossSpinSLatch                       _taskLatch ;
+         ossAutoEvent                        _taskEvent ;
 
          std::map<string, UINT32>            _mapRegister ;
          ossSpinSLatch                       _regLatch ;
@@ -160,9 +171,7 @@ namespace engine
 #define CLS_SPLIT_MASK_SHARDINGKEY        0x00000400
 #define CLS_SPLIT_MASK_SHARDINGTYPE       0x00000800
 #define CLS_SPLIT_MASK_PERCENT            0x00001000
-//#define CLS_SPLIT_MASK_LOCKEND            0x00002000
 
-//#define CLS_SPLIT_TASK_LOCK_END           "LockEnd"
 
    class _clsSplitTask : public _clsTask
    {
@@ -189,6 +198,8 @@ namespace engine
       public:
          virtual CLS_TASK_TYPE   taskType () const ;
          virtual const CHAR*     taskName () const ;
+         virtual const CHAR*     collectionName() const ;
+         virtual const CHAR*     collectionSpaceName() const ;
 
          virtual BOOLEAN         muteXOn ( const _clsTask *pOther ) ;
 
@@ -209,6 +220,7 @@ namespace engine
 
       protected:
          std::string             _clFullName ;
+         std::string             _csName ;
          std::string             _sourceName ;
          std::string             _dstName ;
          std::string             _shardingType ;
@@ -219,7 +231,6 @@ namespace engine
          BSONObj                 _shardingKey ;
          CLS_TASK_TYPE           _taskType ;
          FLOAT64                 _percent ;
-         //BOOLEAN                 _lockEnd ;
 
       private:
          std::string             _taskName ;

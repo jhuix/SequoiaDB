@@ -37,6 +37,7 @@
 #include "dms.hpp"
 #include "pmd.hpp"
 #include "pmdCB.hpp"
+#include "rtnContextDel.hpp"
 #include "rtnContext.hpp"
 #include "dmsStorageUnit.hpp"
 #include "pdTrace.hpp"
@@ -44,16 +45,21 @@
 #include "monDump.hpp"
 #include "ossMem.h"
 #include "rtnContextListLob.hpp"
+#include "rtnSessionProperty.hpp"
 #include "aggrDef.hpp"
 #include "utilCompressor.hpp"
 #include "msgMessageFormat.hpp"
 
 #if defined (_DEBUG)
-// for qgmDebugQuery function
 #endif
 
 using namespace bson ;
 using namespace std ;
+
+#define MAX_CL_SIZE_ALIGN_SIZE            ( 32 * 1024 * 1024 )
+
+#define MAX_CAP_CL_SIZE                   ( OSS_SINT64_MAX >> 20 )
+#define TEXT_INDEX_DATA_BUFF_DEFAULT_SIZE  ( 30 * 1024 )
 
 namespace engine
 {
@@ -215,7 +221,6 @@ namespace engine
       }
       else
       {
-         //split next node first
          newCmdInfo = SDB_OSS_NEW _cmdBuilderInfo ;
          newCmdInfo->cmdName = pCmdInfo->cmdName.substr( sameNum ) ;
          newCmdInfo->createFunc = pCmdInfo->createFunc ;
@@ -225,7 +230,6 @@ namespace engine
 
          pCmdInfo->next = newCmdInfo ;
 
-         //change cur node
          pCmdInfo->cmdName = pCmdInfo->cmdName.substr ( 0, sameNum ) ;
          pCmdInfo->nameSize = sameNum ;
 
@@ -348,7 +352,6 @@ namespace engine
    {
    }
 
-   //Command list:
    IMPLEMENT_CMD_AUTO_REGISTER(_rtnCreateGroup)
    IMPLEMENT_CMD_AUTO_REGISTER(_rtnRemoveGroup)
    IMPLEMENT_CMD_AUTO_REGISTER(_rtnCreateNode)
@@ -362,6 +365,8 @@ namespace engine
    IMPLEMENT_CMD_AUTO_REGISTER(_rtnListDomains)
    IMPLEMENT_CMD_AUTO_REGISTER(_rtnListGroups)
    IMPLEMENT_CMD_AUTO_REGISTER(_rtnListProcedures)
+   IMPLEMENT_CMD_AUTO_REGISTER(_rtnCreateProcedure)
+   IMPLEMENT_CMD_AUTO_REGISTER(_rtnRemoveProcedure)
    IMPLEMENT_CMD_AUTO_REGISTER(_rtnListCSInDomain)
    IMPLEMENT_CMD_AUTO_REGISTER(_rtnListCLInDomain)
    IMPLEMENT_CMD_AUTO_REGISTER(_rtnCreateCataGroup)
@@ -385,7 +390,7 @@ namespace engine
       _path             = NULL ;
       _desp             = NULL ;
       _ensureInc        = FALSE ;
-      _rewrite          = TRUE ;
+      _rewrite          = FALSE ;
    }
 
    _rtnBackup::~_rtnBackup ()
@@ -486,8 +491,8 @@ namespace engine
    IMPLEMENT_CMD_AUTO_REGISTER(_rtnCreateCollection)
    _rtnCreateCollection::_rtnCreateCollection ()
    :_collectionName ( NULL ),
-    _attributes(0),
-    _compressorType(UTIL_COMPRESSOR_INVALID)
+    _attributes( 0 ),
+    _compressorType( UTIL_COMPRESSOR_INVALID )
    {
    }
 
@@ -521,11 +526,14 @@ namespace engine
       INT32 rc = SDB_OK ;
       BOOLEAN enSureIndex = TRUE ;
       BOOLEAN isCompressed = FALSE ;
+      BOOLEAN strictDataMode = FALSE ;
       BOOLEAN autoIndexId = TRUE ;
+      BOOLEAN capped = FALSE ;
       const CHAR *compressionType = NULL ;
       PD_TRACE_ENTRY ( SDB__RTNCREATECL_INIT ) ;
       BSONObj matcher ( pMatcherBuff ) ;
       BSONElement ele ;
+
       rc = rtnGetStringElement ( matcher, FIELD_NAME_NAME,
                                  &_collectionName ) ;
       if ( rc )
@@ -534,7 +542,6 @@ namespace engine
                   "creation, rc = %d", FIELD_NAME_NAME, rc ) ;
          goto error ;
       }
-      // ensure sharding key
       rc = rtnGetBooleanElement( matcher, FIELD_NAME_ENSURE_SHDINDEX,
                                  enSureIndex ) ;
       if ( SDB_FIELD_NOT_EXIST == rc )
@@ -544,7 +551,6 @@ namespace engine
       }
       PD_RC_CHECK( rc, PDERROR, "Field[%s] value is error in obj[%s]",
                    FIELD_NAME_ENSURE_SHDINDEX, matcher.toString().c_str() ) ;
-      // if we want to create sharding key index, let's do it
       if ( enSureIndex )
       {
          rc = rtnGetObjElement ( matcher, FIELD_NAME_SHARDINGKEY,
@@ -557,7 +563,6 @@ namespace engine
                       FIELD_NAME_SHARDINGKEY,
                       matcher.toString().c_str() ) ;
       }
-      // check the attribute, we don't care the return code
       rtnGetBooleanElement ( matcher, FIELD_NAME_COMPRESSED,
                              isCompressed ) ;
       if ( isCompressed )
@@ -565,69 +570,152 @@ namespace engine
          _attributes |= DMS_MB_ATTR_COMPRESSED ;
       }
 
-      // Check if the compression type is specified. If yes, set the attribute.
-      // Compression type can only be specified when Compressed is true.
-      ele = matcher.getField( FIELD_NAME_COMPRESSIONTYPE ) ;
-      if ( !ele.eoo() )
+      rtnGetBooleanElement ( matcher, FIELD_NAME_STRICTDATAMODE,
+                             strictDataMode ) ;
+      if ( strictDataMode )
       {
-         if ( !isCompressed )
-         {
-            PD_LOG( PDERROR, "Compression type is specified while Compressed "
-                    "option is false" ) ;
-            goto error ;
-         }
-
-         rtnGetStringElement ( matcher, FIELD_NAME_COMPRESSIONTYPE,
-                               &compressionType ) ;
-         if ( 0 == strcmp( compressionType, VALUE_NAME_LZW ) )
-         {
-            _compressorType = UTIL_COMPRESSOR_LZW ;
-         }
-         else if ( 0 == strcmp( compressionType, VALUE_NAME_SNAPPY ) )
-         {
-            _compressorType = UTIL_COMPRESSOR_SNAPPY ;
-         }
-         /*
-         else if ( 0 == strcmp( compressionType, VALUE_NAME_LZ4 ) )
-         {
-            _compressorType = UTIL_COMPRESSOR_LZ4 ;
-         }
-         else if ( 0 == strcmp( compressionType, VALUE_NAME_ZLIB ) )
-         {
-            _compressorType = UTIL_COMPRESSOR_ZLIB ;
-         }
-         */
-         else
-         {
-            PD_LOG( PDERROR, "Compression type is invalid: %s", compressionType ) ;
-            rc = SDB_INVALIDARG ;
-            goto error ;
-         }
+         _attributes |= DMS_MB_ATTR_STRICTDATAMODE ;
       }
-      else
+
+      rc = rtnGetStringElement( matcher, FIELD_NAME_COMPRESSIONTYPE,
+                                &compressionType ) ;
+      if ( SDB_FIELD_NOT_EXIST == rc )
       {
-         /*
-          * If 'Compressed' is set as true, but no 'CompressionType' is set,
-          * the 'CompressionType' is set to 'snappy' by default.
-          */
          if ( isCompressed )
          {
             _compressorType = UTIL_COMPRESSOR_SNAPPY ;
          }
       }
+      else
+      {
+         if ( SDB_OK == rc )
+         {
+            if ( !isCompressed )
+            {
+               PD_LOG( PDERROR, "Compression type is specified while "
+                       "Compressed option is false" ) ;
+               rc = SDB_INVALIDARG ;
+               goto error ;
+            }
 
-      /// auto index id
+            if ( 0 == ossStrcmp( compressionType, VALUE_NAME_LZW ) )
+            {
+               _compressorType = UTIL_COMPRESSOR_LZW ;
+            }
+            else if ( 0 == ossStrcmp( compressionType, VALUE_NAME_SNAPPY ) )
+            {
+               _compressorType = UTIL_COMPRESSOR_SNAPPY ;
+            }
+            else
+            {
+               PD_LOG( PDERROR, "Compression type[%s] is invalid",
+                       compressionType ) ;
+               rc = SDB_INVALIDARG ;
+               goto error ;
+            }
+         }
+         else
+         {
+            PD_LOG( PDERROR, "Failed to get CompressionType, rc: %d", rc ) ;
+            goto error ;
+         }
+      }
+
       rc = rtnGetBooleanElement( matcher, FIELD_NAME_AUTO_INDEX_ID,
                                  autoIndexId ) ;
       if ( SDB_OK == rc && !autoIndexId )
       {
          _attributes |= DMS_MB_ATTR_NOIDINDEX ;
       }
+
+      rc = rtnGetBooleanElement( matcher, FIELD_NAME_CAPPED, capped ) ;
+      if ( SDB_FIELD_NOT_EXIST == rc )
+      {
+         rc = SDB_OK ;
+         capped = FALSE ;
+      }
+      PD_RC_CHECK( rc, PDERROR, "Field[%s] value error in obj[%s]",
+                   FIELD_NAME_CAPPED, matcher.toString().c_str() ) ;
+
+      if ( capped )
+      {
+         INT64 maxSize = 0 ;
+         INT64 maxRecNum = 0 ;
+         BOOLEAN overwrite = FALSE ;
+         BSONObjBuilder builder ;
+
+         if ( isCompressed || autoIndexId )
+         {
+            PD_LOG( PDERROR, "Option Sharding/Compress/Index is not compatible "
+                    "with Capped" ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+
+         _attributes |= DMS_MB_ATTR_CAPPED ;
+         rc = rtnGetNumberLongElement( matcher, FIELD_NAME_SIZE, maxSize ) ;
+         if ( rc )
+         {
+            if ( SDB_FIELD_NOT_EXIST == rc )
+            {
+               PD_LOG( PDERROR, "Field[%s] must always be used when Capped is "
+                       "true in obj[%s]",
+                       FIELD_NAME_SIZE, matcher.toString().c_str() ) ;
+               rc = SDB_INVALIDARG ;
+            }
+            else
+            {
+               PD_LOG( PDERROR, "Field[%s] value is error in obj[%s]",
+                       FIELD_NAME_SIZE, matcher.toString().c_str() ) ;
+            }
+            goto error ;
+         }
+         if ( maxSize <= 0 || maxSize > MAX_CAP_CL_SIZE )
+         {
+            PD_LOG( PDERROR, "Invalid Size[ %lld ] when creating capped "
+                    "collection", maxSize ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+         maxSize = ossRoundUpToMultipleX( maxSize << 20,
+                                          MAX_CL_SIZE_ALIGN_SIZE ) ;
+         builder.append( FIELD_NAME_SIZE, maxSize ) ;
+
+         rc = rtnGetNumberLongElement( matcher, FIELD_NAME_MAX, maxRecNum ) ;
+         if ( SDB_OK != rc && SDB_FIELD_NOT_EXIST != rc )
+         {
+            PD_LOG( PDERROR, "Field[%s] value is error in obj[%s]",
+                    FIELD_NAME_MAX, matcher.toString().c_str() ) ;
+            goto error ;
+         }
+         if ( maxRecNum < 0 )
+         {
+            PD_LOG( PDERROR, "Invalid Max[ %lld ] when creating capped "
+                    "collection", maxRecNum ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+         builder.append( FIELD_NAME_MAX, maxRecNum ) ;
+
+         rc = rtnGetBooleanElement( matcher, FIELD_NAME_OVERWRITE, overwrite ) ;
+         if ( SDB_OK != rc && SDB_FIELD_NOT_EXIST != rc )
+         {
+            PD_LOG( PDERROR, "Field[%s] value is error in obj[%s]",
+                    FIELD_NAME_OVERWRITE, matcher.toString().c_str() ) ;
+            goto error ;
+         }
+         builder.appendBool( FIELD_NAME_OVERWRITE, overwrite ) ;
+
+         _extOptions = builder.obj() ;
+      }
+
       rc = SDB_OK ;
    done :
       PD_TRACE_EXITRC ( SDB__RTNCREATECL_INIT, rc ) ;
       return rc ;
    error :
+      _clean( pmdGetThreadEDUCB(), pmdGetKRCB()->getDMSCB(),
+              pmdGetKRCB()->getDPSCB() ) ;
       goto done ;
    }
 
@@ -646,32 +734,64 @@ namespace engine
 
       rc = rtnCreateCollectionCommand ( _collectionName, _shardingKey,
                                         _attributes, cb, dmsCB, dpsCB,
-                                        _compressorType ) ;
+                                        _compressorType, 0, FALSE,
+                                        ( _extOptions.isEmpty() ?
+                                         NULL : &_extOptions ) ) ;
 
       if ( CMD_SPACE_SERVICE_LOCAL == getFromService() )
       {
          CHAR szTmp[ 50 ] = { 0 } ;
          mbAttr2String( _attributes, szTmp, sizeof(szTmp) - 1 ) ;
-         /// AUDIT
          PD_AUDIT_COMMAND( AUDIT_DDL, name(), AUDIT_OBJ_CL,
                            _collectionName, rc,
                            "ShardingKey:%s, Attribute:0x%08x(%s), "
-                           "CompressType:%d(%s)",
+                           "CompressType:%d(%s), extend options: %s",
                            _shardingKey.toString().c_str(),
                            _attributes, szTmp,
                            _compressorType,
-                           utilCompressType2String( _compressorType ) ) ;
+                           utilCompressType2String( _compressorType ),
+                           _extOptions.toString().c_str() ) ;
       }
 
+      if ( rc )
+      {
+         goto error ;
+      }
+
+   done:
       PD_TRACE_EXITRC ( SDB__RTNCREATECL_DOIT, rc ) ;
       return rc ;
+   error:
+      _clean( cb, dmsCB, dpsCB ) ;
+      goto done ;
+   }
+
+   PD_TRACE_DECLARE_FUNCTION ( SDB__RTNCREATECL__CLEAN, "_rtnCreateCollection::_clean" )
+   void _rtnCreateCollection::_clean( pmdEDUCB *cb, SDB_DMSCB *dmsCB,
+                                      SDB_DPSCB *dpsCB )
+   {
+      PD_TRACE_ENTRY( SDB__RTNCREATECL__CLEAN ) ;
+      if ( CMD_SPACE_SERVICE_SHARD == getFromService() )
+      {
+         INT32 rc = SDB_OK ;
+         string nameStr( _collectionName ) ;
+         string csName = nameStr.substr( 0, nameStr.find( '.' ) ) ;
+         rc = dmsCB->dropEmptyCollectionSpace( csName.c_str(), cb, dpsCB ) ;
+         if ( rc && SDB_DMS_CS_NOT_EMPTY != rc )
+         {
+            PD_LOG( PDERROR, "Drop new created collection space[%s] failed, "
+                    "rc: %d", csName.c_str(), rc ) ;
+         }
+      }
+      PD_TRACE_EXIT( SDB__RTNCREATECL__CLEAN ) ;
    }
 
    IMPLEMENT_CMD_AUTO_REGISTER(_rtnCreateCollectionspace)
    _rtnCreateCollectionspace::_rtnCreateCollectionspace ()
    :_spaceName ( NULL ),
     _pageSize( 0 ),
-    _lobPageSize( 0 )
+    _lobPageSize( 0 ),
+    _storageType( DMS_STORAGE_NORMAL )
    {
 
    }
@@ -717,23 +837,34 @@ namespace engine
          _lobPageSize = DMS_DEFAULT_LOB_PAGE_SZ ;
       }
 
+      BOOLEAN capped = FALSE ;
+      rc = rtnGetBooleanElement( mather, FIELD_NAME_CAPPED, capped ) ;
+      if ( SDB_OK == rc && capped  )
+      {
+         _storageType = DMS_STORAGE_CAPPED ;
+      }
+      else
+      {
+         _storageType = DMS_STORAGE_NORMAL ;
+      }
+
       return rtnGetStringElement ( mather, FIELD_NAME_NAME, &_spaceName ) ;
    }
 
    PD_TRACE_DECLARE_FUNCTION ( SDB__RTNCREATECS_DOIT, "_rtnCreateCollectionspace::doit" )
    INT32 _rtnCreateCollectionspace::doit ( _pmdEDUCB *cb, SDB_DMSCB *dmsCB,
-                                          SDB_RTNCB *rtnCB, SDB_DPSCB *dpsCB,
-                                          INT16 w , INT64 *pContextID )
+                                           SDB_RTNCB *rtnCB, SDB_DPSCB *dpsCB,
+                                           INT16 w , INT64 *pContextID )
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__RTNCREATECS_DOIT ) ;
 
-      rc = rtnCreateCollectionSpaceCommand ( _spaceName, cb, dmsCB, dpsCB,
-                                             _pageSize, _lobPageSize ) ;
+      rc = rtnCreateCollectionSpaceCommand ( _spaceName, cb, dmsCB,
+                                             dpsCB, _pageSize,
+                                             _lobPageSize, _storageType ) ;
 
       if ( CMD_SPACE_SERVICE_LOCAL == getFromService() )
       {
-         /// AUDIT
          PD_AUDIT_COMMAND( AUDIT_DDL, name(), AUDIT_OBJ_CS,
                            _spaceName, rc,
                            "PageSize:%u, LobPageSize:%u",
@@ -748,7 +879,8 @@ namespace engine
 
    _rtnCreateIndex::_rtnCreateIndex ()
    : _collectionName ( NULL ),
-     _sortBufferSize ( SDB_INDEX_SORT_BUFFER_DEFAULT_SIZE )
+     _sortBufferSize ( SDB_INDEX_SORT_BUFFER_DEFAULT_SIZE ),
+     _textIdx( FALSE )
    {
    }
 
@@ -803,9 +935,18 @@ namespace engine
          goto error ;
       }
 
+      rc = _validateDef( _index ) ;
+      if ( SDB_OK != rc )
+      {
+         PD_LOG ( PDERROR, "Failed to validate index definition: %s, rc: %d",
+                  _index.toString().c_str(), rc ) ;
+         goto error ;
+      }
+
       if ( hint.hasField( IXM_FIELD_NAME_SORT_BUFFER_SIZE ) )
       {
-         rc = rtnGetIntElement( hint, IXM_FIELD_NAME_SORT_BUFFER_SIZE, _sortBufferSize ) ;
+         rc = rtnGetIntElement( hint, IXM_FIELD_NAME_SORT_BUFFER_SIZE,
+                                _sortBufferSize ) ;
          if ( SDB_OK != rc )
          {
             PD_LOG ( PDERROR, "Failed to get index sort buffer, hint: %s",
@@ -818,6 +959,13 @@ namespace engine
             PD_LOG ( PDERROR, "invalid index sort buffer size: %d", _sortBufferSize ) ;
             rc = SDB_INVALIDARG ;
             goto error ;
+         }
+      }
+      else
+      {
+         if ( _textIdx )
+         {
+            _sortBufferSize = TEXT_INDEX_DATA_BUFF_DEFAULT_SIZE ;
          }
       }
 
@@ -835,20 +983,82 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__RTNCREATEINDEX_DOIT ) ;
+      BOOLEAN isSys = FALSE ;
+
+      if ( _textIdx && ( CMD_SPACE_SERVICE_SHARD != getFromService() ) )
+      {
+         PD_LOG( PDERROR, "Text index is only supported in cluster" ) ;
+         rc = SDB_OPERATION_INCOMPATIBLE ;
+         goto error ;
+      }
+
+      if ( !pmdGetOptionCB()->authEnabled() )
+      {
+         isSys = TRUE ;
+      }
 
       rc = rtnCreateIndexCommand ( _collectionName, _index, cb,
-                                   dmsCB, dpsCB, FALSE, _sortBufferSize ) ;
+                                   dmsCB, dpsCB, isSys, _sortBufferSize ) ;
 
       if ( CMD_SPACE_SERVICE_LOCAL == getFromService() )
       {
-         /// AUDIT
          PD_AUDIT_COMMAND( AUDIT_DDL, name(), AUDIT_OBJ_CL,
                            _collectionName, rc,
                            "IndexDef:%s, SortBuffSize:%d",
                            _index.toString().c_str(), _sortBufferSize ) ;
       }
+
+   done:
       PD_TRACE_EXITRC ( SDB__RTNCREATEINDEX_DOIT, rc ) ;
       return rc ;
+   error:
+      goto done ;
+   }
+
+   PD_TRACE_DECLARE_FUNCTION ( SDB__RTNCREATEINDEX__VALIDATEDEF, "_rtnCreateIndex::_validateDef" )
+   INT32 _rtnCreateIndex::_validateDef( const BSONObj &index )
+   {
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY( SDB__RTNCREATEINDEX__VALIDATEDEF ) ;
+      BOOLEAN hasText = FALSE ;
+      const string textFieldVal = "text" ;
+      BSONObj idxDef = index.getObjectField( IXM_FIELD_NAME_KEY ) ;
+      BSONObjIterator itr( idxDef ) ;
+
+      while ( itr.more() )
+      {
+         BSONElement ele = itr.next() ;
+         if ( ele.eoo() )
+         {
+            PD_LOG( PDERROR, "Index definition ended unexpected. "
+                    "Definition: %s", idxDef.toString().c_str() ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+
+         if ( String == ele.type() && textFieldVal == ele.String() )
+         {
+            hasText = TRUE ;
+         }
+         else
+         {
+            if ( hasText )
+            {
+               PD_LOG( PDERROR, "Text index can only contain fields specified "
+                       "as text. Definition: %s", idxDef.toString().c_str() ) ;
+               rc = SDB_INVALIDARG ;
+               goto error ;
+            }
+         }
+      }
+
+      _textIdx = hasText ;
+
+   done:
+      PD_TRACE_EXITRC( SDB__RTNCREATEINDEX__VALIDATEDEF, rc ) ;
+      return rc ;
+   error:
+      goto done ;
    }
 
    IMPLEMENT_CMD_AUTO_REGISTER(_rtnDropCollection)
@@ -919,7 +1129,6 @@ namespace engine
       else
       {
          rc = rtnDropCollectionCommand ( _collectionName, cb, dmsCB, dpsCB ) ;
-         /// AUDIT
          PD_AUDIT_COMMAND( AUDIT_DDL, name(), AUDIT_OBJ_CL,
                            _collectionName, rc, "" ) ;
       }
@@ -1004,7 +1213,6 @@ namespace engine
       else
       {
          rc = rtnDropCollectionSpaceCommand ( _spaceName, cb, dmsCB, dpsCB ) ;
-         /// AUDIT
          PD_AUDIT_COMMAND( AUDIT_DDL, name(), AUDIT_OBJ_CS,
                            _spaceName, rc, "" ) ;
       }
@@ -1089,12 +1297,17 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__RTNDROPINDEX_DOIT ) ;
+      BOOLEAN isSys = FALSE ;
       BSONElement ele = _index.firstElement() ;
-      rc = rtnDropIndexCommand ( _collectionName, ele, cb, dmsCB, dpsCB ) ;
 
+      if ( !pmdGetOptionCB()->authEnabled() )
+      {
+         isSys = TRUE ;
+      }
+      rc = rtnDropIndexCommand ( _collectionName, ele, cb, dmsCB,
+                                 dpsCB, isSys ) ;
       if ( CMD_SPACE_SERVICE_LOCAL == getFromService() )
       {
-         /// AUDIT
          PD_AUDIT_COMMAND( AUDIT_DDL, name(), AUDIT_OBJ_CL,
                            _collectionName, rc, "IndexDef:%s",
                            _index.toString().c_str() ) ;
@@ -1104,12 +1317,9 @@ namespace engine
    }
 
    _rtnGet::_rtnGet ()
-      :_collectionName ( NULL ), _matcherBuff ( NULL ), _selectBuff ( NULL ),
-      _orderByBuff ( NULL )
+   : _options(),
+     _hintExist( FALSE )
    {
-      _flags = 0 ;
-      _numToReturn = -1 ;
-      _numToSkip = 0 ;
    }
 
    _rtnGet::~_rtnGet ()
@@ -1118,7 +1328,7 @@ namespace engine
 
    const CHAR *_rtnGet::collectionFullName ()
    {
-      return _collectionName ;
+      return _options.getCLFullName() ;
    }
 
    PD_TRACE_DECLARE_FUNCTION ( SDB__RTNGET_INIT, "_rtnGet::init" )
@@ -1128,23 +1338,33 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__RTNGET_INIT ) ;
-      _flags = flags ;
-      _numToReturn = numToReturn ;
-      _numToSkip = numToSkip ;
-      _matcherBuff = pMatcherBuff ;
-      _selectBuff = pSelectBuff ;
-      _orderByBuff = pOrderByBuff ;
 
-      BSONObj object ( pHintBuff ) ;
-      rc = rtnGetStringElement ( object, FIELD_NAME_COLLECTION,
-                                 &_collectionName ) ;
+      const CHAR * collection = NULL ;
+      BSONObj hint( pHintBuff ) ;
+      BSONObj realHint ;
+
+      _options.setFlag( flags ) ;
+      _options.setLimit( numToReturn ) ;
+      _options.setSkip( numToSkip ) ;
+      _options.setQuery( BSONObj( pMatcherBuff ) ) ;
+      _options.setSelector( BSONObj( pSelectBuff ) ) ;
+      _options.setOrderBy( BSONObj( pOrderByBuff ) ) ;
+
+      rc = rtnGetStringElement( hint, FIELD_NAME_COLLECTION, &collection ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to get field[%s], rc: %d",
                    FIELD_NAME_COLLECTION, rc ) ;
 
-      rc = rtnGetObjElement( object, FIELD_NAME_HINT, _hintObj ) ;
+      _options.setCLFullName( collection ) ;
+
+      rc = rtnGetObjElement( hint, FIELD_NAME_HINT, realHint ) ;
       if ( SDB_FIELD_NOT_EXIST == rc )
       {
          rc = SDB_OK ;
+      }
+      else
+      {
+         _options.setHint( realHint ) ;
+         _hintExist = TRUE ;
       }
       PD_RC_CHECK( rc, PDERROR, "Failed to get field[%s], rc: %d",
                    FIELD_NAME_HINT, rc ) ;
@@ -1167,26 +1387,8 @@ namespace engine
       SDB_ASSERT ( cb, "educb can't be NULL" ) ;
       SDB_ASSERT ( pContextID, "context id can't be NULL" ) ;
 
-      BSONObj matcher ;
-      BSONObj selector ;
-      BSONObj orderBy ;
-
-      if ( _matcherBuff )
-      {
-         matcher = BSONObj( _matcherBuff ) ;
-      }
-      if ( _selectBuff )
-      {
-         selector = BSONObj( _selectBuff ) ;
-      }
-      if ( _orderByBuff )
-      {
-         orderBy = BSONObj( _orderByBuff ) ;
-      }
-
-      rc = rtnGetCommandEntry ( type(), _collectionName, selector, matcher,
-                                orderBy, _hintObj, _flags, cb , _numToSkip,
-                                _numToReturn, dmsCB, rtnCB, *pContextID ) ;
+      rc = rtnGetCommandEntry ( type(), _options, cb, dmsCB, rtnCB,
+                                *pContextID ) ;
       PD_TRACE_EXITRC ( SDB__RTNGET_DOIT, rc ) ;
       return rc ;
    }
@@ -1198,38 +1400,6 @@ namespace engine
 
    _rtnGetCount::~_rtnGetCount ()
    {
-   }
-
-   INT32 _rtnGetCount::init( INT32 flags, INT64 numToSkip,
-                             INT64 numToReturn, const CHAR *pMatcherBuff,
-                             const CHAR *pSelectBuff,
-                             const CHAR *pOrderByBuff,
-                             const CHAR *pHintBuff )
-   {
-      INT32 rc = SDB_OK ;
-      _flags = flags ;
-      _numToReturn = numToReturn ;
-      _numToSkip = numToSkip ;
-      _matcherBuff = pMatcherBuff ;
-
-      BSONObj object ( pHintBuff ) ;
-      rc = rtnGetStringElement ( object, FIELD_NAME_COLLECTION,
-                                 &_collectionName ) ;
-      PD_RC_CHECK( rc, PDERROR, "Failed to get field[%s], rc: %d",
-                   FIELD_NAME_COLLECTION, rc ) ;
-
-      rc = rtnGetObjElement( object, FIELD_NAME_HINT, _hintObj ) ;
-      if ( SDB_FIELD_NOT_EXIST == rc )
-      {
-         rc = SDB_OK ;
-      }
-      PD_RC_CHECK( rc, PDERROR, "Failed to get field[%s], rc: %d",
-                   FIELD_NAME_HINT, rc ) ;
-
-   done:
-      return rc ;
-   error:
-      goto done ;
    }
 
    const CHAR *_rtnGetCount::name ()
@@ -1308,9 +1478,10 @@ namespace engine
 
       SDB_ASSERT( pContextID, "context id can't be NULL" ) ;
 
-      BSONObj matcher ( _matcherBuff ) ;
-      BSONObj hint ( _selectBuff ) ;  // for hint
-      BSONObj orderBy ( _orderByBuff ) ;
+      if ( !_hintExist )
+      {
+         _options.setHint( _options.getSelector() ) ;
+      }
 
       rc = rtnCB->contextNew( RTN_CONTEXT_DUMP, (rtnContext**)&context,
                               *pContextID, cb ) ;
@@ -1320,18 +1491,18 @@ namespace engine
       PD_RC_CHECK( rc, PDERROR, "Failed to open context[%lld], rc: %d",
                    *pContextID, rc ) ;
 
-      // sample timetamp
       if ( cb->getMonConfigCB()->timestampON )
       {
          context->getMonCB()->recordStartTimestamp() ;
       }
 
-      rc = rtnGetQueryMeta( _collectionName, matcher, orderBy, hint,
-                            dmsCB, cb, context ) ;
+      rc = rtnGetQueryMeta( _options, dmsCB, cb, context ) ;
       PD_RC_CHECK( rc, PDERROR, "Get collection[%s] query meta failed, "
                    "matcher: %s, orderby: %s, hint: %s, rc: %d",
-                   _collectionName, matcher.toString().c_str(),
-                   orderBy.toString().c_str(), hint.toString().c_str(), rc ) ;
+                   _options.getCLFullName(),
+                   _options.getQuery().toString().c_str(),
+                   _options.getOrderBy().toString().c_str(),
+                   _options.getHint().toString().c_str(), rc ) ;
 
    done:
       return rc ;
@@ -1343,68 +1514,6 @@ namespace engine
       }
       goto done ;
    }
-
-   _rtnList::_rtnList ()
-      :_matcherBuff ( NULL ), _selectBuff ( NULL ), _orderByBuff ( NULL ),
-       _hintBuff( NULL )
-   {
-      _flags = 0 ;
-      _numToSkip = 0 ;
-      _numToReturn = -1 ;
-   }
-
-   _rtnList::~_rtnList ()
-   {
-   }
-
-   INT32 _rtnList::init ( INT32 flags, INT64 numToSkip, INT64 numToReturn,
-                          const CHAR * pMatcherBuff, const CHAR * pSelectBuff,
-                          const CHAR * pOrderByBuff, const CHAR * pHintBuff )
-   {
-      _flags = flags ;
-      _numToReturn = numToReturn ;
-      _numToSkip = numToSkip ;
-      _matcherBuff = pMatcherBuff ;
-      _selectBuff = pSelectBuff ;
-      _orderByBuff = pOrderByBuff ;
-      _hintBuff = pHintBuff ;
-
-      return SDB_OK ;
-   }
-
-   PD_TRACE_DECLARE_FUNCTION ( SDB__RTNLIST_DOIT, "_rtnList::doit" )
-   INT32 _rtnList::doit ( _pmdEDUCB *cb, SDB_DMSCB *dmsCB,
-                          SDB_RTNCB *rtnCB, SDB_DPSCB *dpsCB,
-                          INT16 w , INT64 *pContextID )
-   {
-      PD_TRACE_ENTRY ( SDB__RTNLIST_DOIT ) ;
-      SDB_ASSERT ( cb, "educb can't be NULL" ) ;
-      SDB_ASSERT ( pContextID, "context id can't be NULL" ) ;
-
-      BSONObj matcher ( _matcherBuff ) ;
-      BSONObj selector ( _selectBuff ) ;
-      BSONObj orderBy ( _orderByBuff ) ;
-      BSONObj hint( _hintBuff ) ;
-      INT32 rc = SDB_OK ;
-      BOOLEAN addInfo = getFromService() == CMD_SPACE_SERVICE_SHARD ?
-                        TRUE : FALSE ;
-
-      rc = rtnListCommandEntry ( type(), selector, matcher, orderBy, hint,
-                                 _flags, cb, _numToSkip, _numToReturn,
-                                 dmsCB, rtnCB, *pContextID, addInfo ) ;
-
-      PD_TRACE_EXITRC ( SDB__RTNLIST_DOIT, rc ) ;
-      return rc;
-   }
-
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnListCollections)
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnListCollectionspaces)
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnListContexts)
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnListContextsCurrent)
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnListSessions)
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnListSessionsCurrent)
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnListStorageUnits)
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnListBackups)
 
    IMPLEMENT_CMD_AUTO_REGISTER(_rtnRenameCollection)
    _rtnRenameCollection::_rtnRenameCollection ()
@@ -1436,7 +1545,7 @@ namespace engine
       return _fullCollectionName.c_str() ;
    }
 
-   PD_TRACE_DECLARE_FUNCTION ( SDB__RTNRENAMECL_INIT, "_rtnRenameCollection::init" )
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__RTNRENAMECL_INIT, "_rtnRenameCollection::init" )
    INT32 _rtnRenameCollection::init ( INT32 flags, INT64 numToSkip,
                                       INT64 numToReturn,
                                       const CHAR * pMatcherBuff,
@@ -1447,32 +1556,41 @@ namespace engine
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__RTNRENAMECL_INIT ) ;
 
-      BSONObj arg ( pMatcherBuff ) ;
+      try
+      {
+         BSONObj arg ( pMatcherBuff ) ;
 
-      rc = rtnGetStringElement ( arg, FIELD_NAME_COLLECTIONSPACE, &_csName ) ;
-      if ( SDB_OK != rc )
-      {
-         PD_LOG ( PDERROR, "Failed to get string[collectionspace]" ) ;
-         goto error ;
-      }
-      rc = rtnGetStringElement ( arg, FIELD_NAME_OLDNAME,
-                                 &_oldCollectionName ) ;
-      if ( SDB_OK != rc )
-      {
-         PD_LOG ( PDERROR, "Failed to get string[oldname]" ) ;
-         goto error ;
-      }
-      rc = rtnGetStringElement ( arg, FIELD_NAME_NEWNAME,
-                                 &_newCollectionName ) ;
-      if ( SDB_OK != rc )
-      {
-         PD_LOG ( PDERROR, "Failed to get string[newname]" ) ;
-         goto error ;
-      }
+         rc = rtnGetStringElement ( arg, FIELD_NAME_COLLECTIONSPACE, &_csName ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG ( PDERROR, "Failed to get string[collectionspace]" ) ;
+            goto error ;
+         }
+         rc = rtnGetStringElement ( arg, FIELD_NAME_OLDNAME,
+                                    &_oldCollectionName ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG ( PDERROR, "Failed to get string[oldname]" ) ;
+            goto error ;
+         }
+         rc = rtnGetStringElement ( arg, FIELD_NAME_NEWNAME,
+                                    &_newCollectionName ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG ( PDERROR, "Failed to get string[newname]" ) ;
+            goto error ;
+         }
 
-      _fullCollectionName = _csName ;
-      _fullCollectionName += "." ;
-      _fullCollectionName += _oldCollectionName ;
+         _fullCollectionName = _csName ;
+         _fullCollectionName += "." ;
+         _fullCollectionName += _oldCollectionName ;
+      }
+      catch( std::exception &e )
+      {
+         PD_LOG( PDERROR, "Occur exception: %s", e.what() ) ;
+         rc = SDB_INVALIDARG ;
+         goto error ;
+      }
 
    done:
       PD_TRACE_EXITRC ( SDB__RTNRENAMECL_INIT, rc ) ;
@@ -1481,7 +1599,7 @@ namespace engine
       goto done ;
    }
 
-   PD_TRACE_DECLARE_FUNCTION ( SDB__RTNRENAMECL_DOIT, "_rtnRenameCollection::doit" )
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__RTNRENAMECL_DOIT, "_rtnRenameCollection::doit" )
    INT32 _rtnRenameCollection::doit ( _pmdEDUCB *cb, SDB_DMSCB *dmsCB,
                                       SDB_RTNCB *rtnCB, SDB_DPSCB *dpsCB,
                                       INT16 w , INT64 *pContextID )
@@ -1490,15 +1608,16 @@ namespace engine
       PD_TRACE_ENTRY ( SDB__RTNRENAMECL_DOIT ) ;
       dmsStorageUnit *su = NULL ;
       dmsStorageUnitID suID = DMS_INVALID_CS ;
-      SDB_DMSCB *pDmsCB = pmdGetKRCB()->getDMSCB() ;
+      BOOLEAN dmsLock = FALSE ;
 
       rc = dmsCB->writable ( cb ) ;
       if ( rc )
       {
-         // do not call writeDown if writable fail
-         goto not_locked ;
+         goto error ;
       }
-      rc = rtnCollectionSpaceLock ( _csName, pDmsCB, FALSE, &su, suID ) ;
+      dmsLock = TRUE ;
+
+      rc = rtnCollectionSpaceLock ( _csName, dmsCB, FALSE, &su, suID ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG ( PDERROR, "Failed to get collection space:%s", _csName ) ;
@@ -1510,7 +1629,6 @@ namespace engine
                                           cb, dpsCB ) ;
       if ( CMD_SPACE_SERVICE_LOCAL == getFromService() )
       {
-         /// AUDIT
          PD_AUDIT_COMMAND( AUDIT_DDL, name(), AUDIT_OBJ_CL,
                            _oldCollectionName, rc,
                            "NewCollectionName:%s",
@@ -1525,13 +1643,123 @@ namespace engine
       }
 
    done:
-      dmsCB->writeDown ( cb ) ;
-   not_locked:
       if ( suID != DMS_INVALID_CS )
       {
-         pDmsCB->suUnlock ( suID ) ;
+         dmsCB->suUnlock ( suID ) ;
+      }
+      if ( dmsLock )
+      {
+         dmsCB->writeDown ( cb ) ;
       }
       PD_TRACE_EXITRC ( SDB__RTNRENAMECL_DOIT, rc ) ;
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   IMPLEMENT_CMD_AUTO_REGISTER(_rtnRenameCollectionSpace)
+   _rtnRenameCollectionSpace::_rtnRenameCollectionSpace()
+   {
+      _oldName = NULL ;
+      _newName = NULL ;
+   }
+   _rtnRenameCollectionSpace::~_rtnRenameCollectionSpace()
+   {
+   }
+
+   INT32 _rtnRenameCollectionSpace::init ( INT32 flags, INT64 numToSkip,
+                                           INT64 numToReturn,
+                                           const CHAR * pMatcherBuff,
+                                           const CHAR * pSelectBuff,
+                                           const CHAR * pOrderByBuff,
+                                           const CHAR * pHintBuff )
+   {
+      INT32 rc = SDB_OK ;
+
+      try
+      {
+         BSONObj arg ( pMatcherBuff ) ;
+         rc = rtnGetStringElement ( arg, FIELD_NAME_OLDNAME,
+                                    &_oldName ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG ( PDERROR, "Failed to get string[oldname]" ) ;
+            goto error ;
+         }
+         rc = rtnGetStringElement ( arg, FIELD_NAME_NEWNAME,
+                                    &_newName ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG ( PDERROR, "Failed to get string[newname]" ) ;
+            goto error ;
+         }
+
+         rc = dmsCheckCSName( _oldName, FALSE ) ;
+         if ( rc )
+         {
+            goto error ;
+         }
+         rc = dmsCheckCSName( _newName, FALSE ) ;
+         if ( rc )
+         {
+            goto error ;
+         }
+      }
+      catch( std::exception &e )
+      {
+         PD_LOG( PDERROR, "Occur exception: %s", e.what() ) ;
+         rc = SDB_INVALIDARG ;
+         goto error ;
+      }
+
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__RTNRENAMECS_DOIT, "_rtnRenameCollectionSpace::doit" )
+   INT32 _rtnRenameCollectionSpace::doit ( _pmdEDUCB *cb, SDB_DMSCB *dmsCB,
+                                           SDB_RTNCB *rtnCB, SDB_DPSCB *dpsCB,
+                                           INT16 w , INT64 *pContextID )
+   {
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY ( SDB__RTNRENAMECS_DOIT ) ;
+      BOOLEAN dmsLock = FALSE ;
+
+      rc = dmsCB->writable ( cb ) ;
+      if ( rc )
+      {
+         goto error ;
+      }
+      dmsLock = TRUE ;
+
+      if ( NULL != cb )
+      {
+         rtnDelContextForCollectionSpace( _oldName, cb ) ;
+      }
+
+      rc = dmsCB->renameCollectionSpace( _oldName, _newName, cb, dpsCB ) ;
+      if ( rc )
+      {
+         PD_LOG ( PDERROR, "Failed to rename collectionspace from %s to %s",
+                  _oldName, _newName ) ;
+         goto error ;
+      }
+      if ( CMD_SPACE_SERVICE_LOCAL == getFromService() )
+      {
+         PD_AUDIT_COMMAND( AUDIT_DDL, name(), AUDIT_OBJ_CS,
+                           _oldName, rc,
+                           "NewCollectionSpaceName:%s",
+                           _newName ) ;
+      }
+
+   done:
+      if ( dmsLock )
+      {
+         dmsCB->writeDown( cb ) ;
+      }
+      PD_TRACE_EXITRC ( SDB__RTNRENAMECS_DOIT, rc ) ;
       return rc ;
    error:
       goto done ;
@@ -1572,7 +1800,7 @@ namespace engine
       return rc ;
    }
 
-   PD_TRACE_DECLARE_FUNCTION ( SDB__RTNREORG_DOIT, "_rtnReorg::doit" )
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__RTNREORG_DOIT, "_rtnReorg::doit" )
    INT32 _rtnReorg::doit ( _pmdEDUCB *cb, SDB_DMSCB *dmsCB,
                            SDB_RTNCB *rtnCB, SDB_DPSCB *dpsCB,
                            INT16 w , INT64 *pContextID )
@@ -1608,7 +1836,6 @@ namespace engine
 
       if ( CMD_SPACE_SERVICE_LOCAL == getFromService() )
       {
-         /// AUDIT
          PD_AUDIT_COMMAND( AUDIT_DDL, name(), AUDIT_OBJ_CL,
                            _collectionName, rc, "" ) ;
       }
@@ -1710,576 +1937,10 @@ namespace engine
       PD_LOG( PDEVENT, "Shut down sevice" ) ;
       PMD_SHUTDOWN_DB( SDB_OK ) ;
 
-      /// AUDIT
       PD_AUDIT_COMMAND( AUDIT_SYSTEM, name(), AUDIT_OBJ_NODE,
                         "", SDB_OK, "" ) ;
 
       return SDB_OK ;
-   }
-
-   _rtnSnapshot::_rtnSnapshot ()
-      :_matcherBuff ( NULL ), _selectBuff ( NULL ), _orderByBuff ( NULL ),
-       _hintBuff( NULL )
-   {
-      _flags = 0 ;
-      _numToReturn = -1 ;
-      _numToSkip = 0 ;
-   }
-
-   _rtnSnapshot::~_rtnSnapshot ()
-   {
-   }
-
-   INT32 _rtnSnapshot::init ( INT32 flags, INT64 numToSkip, INT64 numToReturn,
-                              const CHAR * pMatcherBuff,
-                              const CHAR * pSelectBuff,
-                              const CHAR * pOrderByBuff,
-                              const CHAR * pHintBuff )
-   {
-      _flags = flags ;
-      _numToReturn = numToReturn ;
-      _numToSkip = numToSkip ;
-      _matcherBuff = pMatcherBuff ;
-      _selectBuff = pSelectBuff ;
-      _orderByBuff = pOrderByBuff ;
-      _hintBuff = pHintBuff ;
-
-      return SDB_OK ;
-   }
-
-   // PD_TRACE_DECLARE_FUNCTION ( SDB__RTNSNAPSHOT_DOIT, "_rtnSnapshot::doit" )
-   INT32 _rtnSnapshot::doit( _pmdEDUCB *cb, SDB_DMSCB *dmsCB,
-                             SDB_RTNCB *rtnCB, SDB_DPSCB *dpsCB,
-                             INT16 w , INT64 *pContextID )
-   {
-      PD_TRACE_ENTRY ( SDB__RTNSNAPSHOT_DOIT ) ;
-      SDB_ASSERT ( cb, "educb can't be NULL" ) ;
-      SDB_ASSERT ( pContextID, "context id can't be NULL" ) ;
-
-      INT32 rc = SDB_OK ;
-      CHAR *pOutBuff = NULL ;
-      INT32 buffSize = 0 ;
-      INT32 buffUsedSize = 0 ;
-      INT32 buffObjNum = 0 ;
-
-      vector< BSONObj > vecUserAggr ;
-      BSONObj matcher ;
-      BSONObj selector ;
-      BSONObj orderBy ;
-      BSONObj hint ;
-
-      try
-      {
-         BSONObj tmpMatcher ( _matcherBuff ) ;
-         BSONObj nodeMatcher ;
-         selector = BSONObj( _selectBuff ) ;
-         orderBy = BSONObj( _orderByBuff ) ;
-         hint = BSONObj( _hintBuff ) ;
-
-         rc = parseMatcher( tmpMatcher, nodeMatcher, matcher, TRUE ) ;
-         PD_RC_CHECK( rc, PDERROR, "Parse matcher failed, rc: %d", rc ) ;
-
-         rc = parseUserAggr( hint, vecUserAggr ) ;
-         PD_RC_CHECK( rc, PDERROR, "Parse user define aggr failed, rc: %d",
-                      rc ) ;
-      }
-      catch( std::exception &e )
-      {
-         PD_LOG( PDERROR, "Parse param occur exception: %s", e.what() ) ;
-         rc = SDB_INVALIDARG ;
-         goto error ;
-      }
-
-      if ( vecUserAggr.size() > 0 )
-      {
-         /// add new matcher
-         if ( !matcher.isEmpty() )
-         {
-            rc = appendObj( BSON( AGGR_MATCH_PARSER_NAME << matcher ),
-                            pOutBuff, buffSize, buffUsedSize, buffObjNum ) ;
-            PD_RC_CHECK( rc, PDERROR, "Append new matcher failed, rc: %d",
-                         rc ) ;
-         }
-
-         /// order by
-         if ( orderBy.isEmpty() )
-         {
-            rc = appendObj( BSON( AGGR_SORT_PARSER_NAME << orderBy ),
-                            pOutBuff, buffSize, buffUsedSize, buffObjNum ) ;
-            PD_RC_CHECK( rc, PDERROR, "Append order by failed, rc: %d",
-                         rc ) ;
-         }
-
-         for ( UINT32 i = 0 ; i < vecUserAggr.size() ; ++i )
-         {
-            rc = appendObj( vecUserAggr[ i ], pOutBuff, buffSize,
-                            buffUsedSize, buffObjNum ) ;
-            PD_RC_CHECK( rc, PDERROR, "Append user define aggr[%s] failed, "
-                         "rc: %d", vecUserAggr[ i ].toString().c_str(),
-                         rc ) ;
-         }
-
-         /// open context
-         rc = openContext( pOutBuff, buffObjNum, getIntrCMDName(),
-                           selector, cb, *pContextID ) ;
-         PD_RC_CHECK( rc, PDERROR, "Open context failed, rc: %d", rc ) ;
-      }
-      else
-      {
-         BOOLEAN addInfo = getFromService() == CMD_SPACE_SERVICE_SHARD ?
-                           TRUE : FALSE ;
-         rc = rtnSnapCommandEntry ( type(), selector, matcher, orderBy,
-                                    _flags, cb, _numToSkip, _numToReturn,
-                                    dmsCB, rtnCB, *pContextID, addInfo ) ;
-         if ( rc )
-         {
-            goto error ;
-         }
-      }
-
-   done:
-      if ( pOutBuff )
-      {
-         SDB_OSS_FREE( pOutBuff ) ;
-         pOutBuff = NULL ;
-         buffSize = 0 ;
-         buffUsedSize = 0 ;
-      }
-      if ( -1 != *pContextID && !_useContext() )
-      {
-         rtnCB->contextDelete( *pContextID, cb ) ;
-         *pContextID = -1 ;
-      }
-      PD_TRACE_EXITRC ( SDB__RTNSNAPSHOT_DOIT, rc ) ;
-      return rc ;
-   error:
-      if ( -1 != *pContextID )
-      {
-         rtnCB->contextDelete ( *pContextID, cb ) ;
-         *pContextID = -1 ;
-      }
-      goto done ;
-   }
-
-   _rtnSnapshotInner::_rtnSnapshotInner()
-   :_rtnSnapshot()
-   {
-   }
-
-   _rtnSnapshotInner::~_rtnSnapshotInner()
-   {
-   }
-
-   INT32 _rtnSnapshotInner::doit( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
-                                  _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
-                                  INT16 w, INT64 *pContextID )
-   {
-      INT32 rc = SDB_OK ;
-      SDB_ASSERT ( cb, "educb can't be NULL" ) ;
-      SDB_ASSERT ( pContextID, "context id can't be NULL" ) ;
-
-      BOOLEAN addInfo = getFromService() == CMD_SPACE_SERVICE_SHARD ?
-                        TRUE : FALSE ;
-      BSONObj matcher ;
-      BSONObj selector ;
-      BSONObj orderBy ;
-
-      try
-      {
-         BSONObj tmpMatcher ( _matcherBuff ) ;
-         BSONObj nodeMatcher ;
-         selector = BSONObj( _selectBuff ) ;
-         orderBy = BSONObj( _orderByBuff ) ;
-
-         rc = parseMatcher( tmpMatcher, nodeMatcher, matcher, TRUE ) ;
-         PD_RC_CHECK( rc, PDERROR, "Parse matcher failed, rc: %d", rc ) ;
-      }
-      catch( std::exception &e )
-      {
-         PD_LOG( PDERROR, "Parse param occur exception: %s", e.what() ) ;
-         rc = SDB_INVALIDARG ;
-         goto error ;
-      }
-
-      rc = rtnSnapCommandEntry ( type(), selector, matcher, orderBy,
-                                 _flags, cb, _numToSkip, _numToReturn,
-                                 dmsCB, rtnCB, *pContextID, addInfo ) ;
-      if ( rc )
-      {
-         goto error ;
-      }
-
-   done:
-      if ( -1 != *pContextID && !_useContext() )
-      {
-         rtnCB->contextDelete( *pContextID, cb ) ;
-         *pContextID = -1 ;
-      }
-      return rc ;
-   error:
-      goto done ;
-   }
-
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnSnapshotSystem)
-   _rtnSnapshotSystem::_rtnSnapshotSystem ()
-   {
-   }
-
-   _rtnSnapshotSystem::~_rtnSnapshotSystem ()
-   {
-   }
-
-   const CHAR *_rtnSnapshotSystem::name ()
-   {
-      return NAME_SNAPSHOT_SYSTEM ;
-   }
-
-   RTN_COMMAND_TYPE _rtnSnapshotSystem::type ()
-   {
-      return CMD_SNAPSHOT_SYSTEM ;
-   }
-
-   const CHAR* _rtnSnapshotSystem::getIntrCMDName()
-   {
-      return CMD_NAME_SNAPSHOT_SYSTEM_INTR ;
-   }
-
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnSnapshotSystemInner)
-   const CHAR *_rtnSnapshotSystemInner::name ()
-   {
-      return CMD_NAME_SNAPSHOT_SYSTEM_INTR ;
-   }
-
-   RTN_COMMAND_TYPE _rtnSnapshotSystemInner::type ()
-   {
-      return CMD_SNAPSHOT_SYSTEM ;
-   }
-
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnSnapshotContexts)
-   _rtnSnapshotContexts::_rtnSnapshotContexts ()
-   {
-   }
-
-   _rtnSnapshotContexts::~_rtnSnapshotContexts ()
-   {
-   }
-
-   const CHAR *_rtnSnapshotContexts::name ()
-   {
-      return NAME_SNAPSHOT_CONTEXTS ;
-   }
-
-   RTN_COMMAND_TYPE _rtnSnapshotContexts::type ()
-   {
-      return CMD_SNAPSHOT_CONTEXTS ;
-   }
-
-   const CHAR* _rtnSnapshotContexts::getIntrCMDName()
-   {
-      return CMD_NAME_SNAPSHOT_CONTEX_INTR ;
-   }
-
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnSnapshotContextsInner)
-   const CHAR *_rtnSnapshotContextsInner::name ()
-   {
-      return CMD_NAME_SNAPSHOT_CONTEX_INTR ;
-   }
-
-   RTN_COMMAND_TYPE _rtnSnapshotContextsInner::type ()
-   {
-      return CMD_SNAPSHOT_CONTEXTS ;
-   }
-
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnSnapshotContextsCurrent)
-   _rtnSnapshotContextsCurrent::_rtnSnapshotContextsCurrent ()
-   {
-   }
-
-   _rtnSnapshotContextsCurrent::~_rtnSnapshotContextsCurrent ()
-   {
-   }
-
-   const CHAR *_rtnSnapshotContextsCurrent::name ()
-   {
-      return NAME_SNAPSHOT_CONTEXTS_CURRENT ;
-   }
-
-   RTN_COMMAND_TYPE _rtnSnapshotContextsCurrent::type ()
-   {
-      return CMD_SNAPSHOT_CONTEXTS_CURRENT ;
-   }
-
-   const CHAR* _rtnSnapshotContextsCurrent::getIntrCMDName()
-   {
-      return CMD_NAME_SNAPSHOT_CONTEXCUR_INTR ;
-   }
-
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnSnapshotContextsCurrentInner)
-   const CHAR *_rtnSnapshotContextsCurrentInner::name ()
-   {
-      return CMD_NAME_SNAPSHOT_CONTEXCUR_INTR ;
-   }
-
-   RTN_COMMAND_TYPE _rtnSnapshotContextsCurrentInner::type ()
-   {
-      return CMD_SNAPSHOT_CONTEXTS_CURRENT ;
-   }
-
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnSnapshotDatabase)
-   _rtnSnapshotDatabase::_rtnSnapshotDatabase ()
-   {
-   }
-
-   _rtnSnapshotDatabase::~_rtnSnapshotDatabase ()
-   {
-   }
-
-   const CHAR *_rtnSnapshotDatabase::name ()
-   {
-      return NAME_SNAPSHOT_DATABASE ;
-   }
-
-   RTN_COMMAND_TYPE _rtnSnapshotDatabase::type ()
-   {
-      return CMD_SNAPSHOT_DATABASE ;
-   }
-
-   const CHAR* _rtnSnapshotDatabase::getIntrCMDName()
-   {
-      return CMD_NAME_SNAPSHOT_DATABASE_INTR ;
-   }
-
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnSnapshotDatabaseInner)
-   const CHAR *_rtnSnapshotDatabaseInner::name ()
-   {
-      return CMD_NAME_SNAPSHOT_DATABASE_INTR ;
-   }
-
-   RTN_COMMAND_TYPE _rtnSnapshotDatabaseInner::type ()
-   {
-      return CMD_SNAPSHOT_DATABASE ;
-   }
-
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnSnapshotReset)
-   _rtnSnapshotReset::_rtnSnapshotReset ()
-   {
-   }
-
-   _rtnSnapshotReset::~_rtnSnapshotReset ()
-   {
-   }
-
-   const CHAR *_rtnSnapshotReset::name ()
-   {
-      return NAME_SNAPSHOT_RESET ;
-   }
-
-   RTN_COMMAND_TYPE _rtnSnapshotReset::type ()
-   {
-      return CMD_SNAPSHOT_RESET ;
-   }
-
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnSnapshotSessions)
-   _rtnSnapshotSessions::_rtnSnapshotSessions ()
-   {
-   }
-
-   _rtnSnapshotSessions::~_rtnSnapshotSessions ()
-   {
-   }
-
-   const CHAR *_rtnSnapshotSessions::name ()
-   {
-      return NAME_SNAPSHOT_SESSIONS ;
-   }
-
-   RTN_COMMAND_TYPE _rtnSnapshotSessions::type ()
-   {
-      return CMD_SNAPSHOT_SESSIONS ;
-   }
-
-   const CHAR* _rtnSnapshotSessions::getIntrCMDName()
-   {
-      return CMD_NAME_SNAPSHOT_SESSION_INTR ;
-   }
-
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnSnapshotSessionsInner)
-   const CHAR *_rtnSnapshotSessionsInner::name ()
-   {
-      return CMD_NAME_SNAPSHOT_SESSION_INTR ;
-   }
-   RTN_COMMAND_TYPE _rtnSnapshotSessionsInner::type ()
-   {
-      return CMD_SNAPSHOT_SESSIONS ;
-   }
-
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnSnapshotSessionsCurrent)
-   _rtnSnapshotSessionsCurrent::_rtnSnapshotSessionsCurrent ()
-   {
-   }
-
-   _rtnSnapshotSessionsCurrent::~_rtnSnapshotSessionsCurrent ()
-   {
-   }
-
-   const CHAR *_rtnSnapshotSessionsCurrent::name ()
-   {
-      return NAME_SNAPSHOT_SESSIONS_CURRENT ;
-   }
-
-   RTN_COMMAND_TYPE _rtnSnapshotSessionsCurrent::type ()
-   {
-      return CMD_SNAPSHOT_SESSIONS_CURRENT ;
-   }
-
-   const CHAR* _rtnSnapshotSessionsCurrent::getIntrCMDName()
-   {
-      return CMD_NAME_SNAPSHOT_SESSIONCUR_INTR ;
-   }
-
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnSnapshotSessionsCurrentInner)
-   const CHAR *_rtnSnapshotSessionsCurrentInner::name ()
-   {
-      return CMD_NAME_SNAPSHOT_SESSIONCUR_INTR ;
-   }
-   RTN_COMMAND_TYPE _rtnSnapshotSessionsCurrentInner::type ()
-   {
-      return CMD_SNAPSHOT_SESSIONS_CURRENT ;
-   }
-
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnSnapshotTransactionsCurrent)
-   _rtnSnapshotTransactionsCurrent::_rtnSnapshotTransactionsCurrent()
-   {
-   }
-
-   _rtnSnapshotTransactionsCurrent::~_rtnSnapshotTransactionsCurrent ()
-   {
-   }
-
-   const CHAR *_rtnSnapshotTransactionsCurrent::name ()
-   {
-      return NAME_SNAPSHOT_TRANSACTIONS_CUR ;
-   }
-
-   RTN_COMMAND_TYPE _rtnSnapshotTransactionsCurrent::type ()
-   {
-      return CMD_SNAPSHOT_TRANSACTIONS_CUR ;
-   }
-
-   INT32 _rtnSnapshotTransactionsCurrent::doit ( _pmdEDUCB *cb,
-                                                 _SDB_DMSCB *dmsCB,
-                                                 _SDB_RTNCB *rtnCB,
-                                                 _dpsLogWrapper *dpsCB,
-                                                 INT16 w,
-                                                 INT64 *pContextID )
-   {
-      INT32 rc = SDB_OK ;
-      rtnContextTransDump *context = NULL ;
-      BSONObj matcher( _matcherBuff ) ;
-      BSONObj selector( _selectBuff ) ;
-
-      rc = rtnCB->contextNew( RTN_CONTEXT_TRANS_DUMP,
-                              (rtnContext **)&context,
-                              *pContextID, cb ) ;
-      PD_RC_CHECK( rc, PDERROR,
-                   "Failed to create new context(rc = %d)!",
-                   rc ) ;
-      rc = context->open( selector, matcher, _numToReturn, _numToSkip,
-                          isDumpCurrent() ) ;
-      PD_RC_CHECK( rc, PDERROR,
-                   "Failed to open the context(rc = %d)!",
-                   rc ) ;
-   done:
-      return rc ;
-   error:
-      goto done ;
-   }
-
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnSnapshotTransactions)
-   _rtnSnapshotTransactions::_rtnSnapshotTransactions()
-   {
-   }
-
-   _rtnSnapshotTransactions::~_rtnSnapshotTransactions()
-   {
-   }
-
-   const CHAR *_rtnSnapshotTransactions::name ()
-   {
-      return NAME_SNAPSHOT_TRANSACTIONS ;
-   }
-
-   RTN_COMMAND_TYPE _rtnSnapshotTransactions::type ()
-   {
-      return CMD_SNAPSHOT_TRANSACTIONS ;
-   }
-
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnSnapshotCollections)
-   _rtnSnapshotCollections::_rtnSnapshotCollections ()
-   {
-   }
-
-   _rtnSnapshotCollections::~_rtnSnapshotCollections ()
-   {
-   }
-
-   const CHAR *_rtnSnapshotCollections::name ()
-   {
-      return NAME_SNAPSHOT_COLLECTIONS ;
-   }
-
-   RTN_COMMAND_TYPE _rtnSnapshotCollections::type ()
-   {
-      return CMD_SNAPSHOT_COLLECTIONS ;
-   }
-
-   const CHAR* _rtnSnapshotCollections::getIntrCMDName()
-   {
-      return CMD_NAME_SNAPSHOT_COLLECTION_INTR ;
-   }
-
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnSnapshotCollectionsInner)
-   const CHAR *_rtnSnapshotCollectionsInner::name ()
-   {
-      return CMD_NAME_SNAPSHOT_COLLECTION_INTR ;
-   }
-   RTN_COMMAND_TYPE _rtnSnapshotCollectionsInner::type ()
-   {
-      return CMD_SNAPSHOT_COLLECTIONS ;
-   }
-
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnSnapshotCollectionSpaces)
-   _rtnSnapshotCollectionSpaces::_rtnSnapshotCollectionSpaces ()
-   {
-   }
-
-   _rtnSnapshotCollectionSpaces::~_rtnSnapshotCollectionSpaces ()
-   {
-   }
-
-   const CHAR *_rtnSnapshotCollectionSpaces::name ()
-   {
-      return NAME_SNAPSHOT_COLLECTIONSPACES ;
-   }
-
-   RTN_COMMAND_TYPE _rtnSnapshotCollectionSpaces::type ()
-   {
-      return CMD_SNAPSHOT_COLLECTIONSPACES ;
-   }
-
-   const CHAR* _rtnSnapshotCollectionSpaces::getIntrCMDName()
-   {
-      return CMD_NAME_SNAPSHOT_SPACE_INTR ;
-   }
-
-   IMPLEMENT_CMD_AUTO_REGISTER(_rtnSnapshotCollectionSpacesInner)
-   const CHAR *_rtnSnapshotCollectionSpacesInner::name ()
-   {
-      return CMD_NAME_SNAPSHOT_SPACE_INTR ;
-   }
-   RTN_COMMAND_TYPE _rtnSnapshotCollectionSpacesInner::type ()
-   {
-      return CMD_SNAPSHOT_COLLECTIONSPACES ;
    }
 
    _rtnTest::_rtnTest ()
@@ -2438,6 +2099,79 @@ namespace engine
       return SDB_OK ;
    }
 
+   IMPLEMENT_CMD_AUTO_REGISTER(_rtnReloadConfig)
+
+   _rtnReloadConfig::_rtnReloadConfig()
+   {
+   }
+
+   _rtnReloadConfig::~_rtnReloadConfig()
+   {
+   }
+
+   const CHAR* _rtnReloadConfig::name()
+   {
+      return NAME_RELOAD_CONFIG ;
+   }
+
+   RTN_COMMAND_TYPE _rtnReloadConfig::type()
+   {
+      return CMD_RELOAD_CONFIG ;
+   }
+
+   INT32 _rtnReloadConfig::init( INT32 flags, INT64 numToSkip,
+                                 INT64 numToReturn,
+                                 const CHAR *pMatcherBuff,
+                                 const CHAR * pSelectBuff,
+                                 const CHAR * pOrderByBuff,
+                                 const CHAR * pHintBuff )
+   {
+      return SDB_OK ;
+   }
+
+   INT32 _rtnReloadConfig::doit( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
+                                 _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
+                                 INT16 w, INT64 * pContextID )
+   {
+      INT32 rc = SDB_OK ;
+
+      pmdOptionsCB *optCB = pmdGetOptionCB() ;
+      pmdOptionsCB tmpCB ;
+      BSONObj cfgObj ;
+
+      rc = tmpCB.initFromFile( optCB->getConfFile(), FALSE ) ;
+      if ( rc )
+      {
+         PD_LOG( PDERROR, "Init config file[%s] failed, rc: %d",
+                 optCB->getConfFile(), rc ) ;
+         goto error ;
+      }
+
+      rc = tmpCB.toBSON( cfgObj, PMD_CFG_MASK_SKIP_UNFIELD ) ;
+      if ( rc )
+      {
+         PD_LOG( PDERROR, "Convert config to bson failed, rc: %d", rc ) ;
+         goto error ;
+      }
+
+      rc = optCB->change( cfgObj, TRUE ) ;
+      if ( rc )
+      {
+         PD_LOG( PDERROR, "Reload config[%s] failed, rc: %d",
+                 cfgObj.toString().c_str(), rc ) ;
+         goto error ;
+      }
+      optCB->toBSON( cfgObj ) ;
+
+      PD_LOG( PDEVENT, "Reload config succeed. All configs: %s",
+              cfgObj.toString().c_str() ) ;
+
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
    IMPLEMENT_CMD_AUTO_REGISTER(_rtnTraceStart)
    _rtnTraceStart::_rtnTraceStart ()
    {
@@ -2479,7 +2213,6 @@ namespace engine
             BSONObjIterator it ( eleComp.embeddedObject() ) ;
             if ( !it.more () )
             {
-               // if there's no element, that means we need mask everything
                for( INT32 i = 0; i < _pdTraceComponentNum; ++i )
                {
                   _mask |= one << i ;
@@ -2520,8 +2253,6 @@ namespace engine
                      if( 0 == ossStrcmp( funcName, eleStr ) )
                      {
                         _funcCode.push_back ( i ) ;
-                        // do NOT break since we may have functions with
-                        // duplicate names
                      } // if( 0 == ossStrcmp( funcName, eleStr ) )
                   } // for( UINT64 i = 0; i < pdGetTraceFunctionListNum(); i++ )
                } // if( ele.type() == String )
@@ -2536,7 +2267,8 @@ namespace engine
                BSONElement ele = it.next() ;
                if ( ele.isNumber() )
                {
-                  _tid.push_back ( (UINT32)ele.numberLong() ) ;
+                  UINT32 tid = (UINT32)ele.numberInt() ;
+                  _tid.push_back ( tid ) ;
                }
             } // while ( it.more () )
          } // if ( eleTID.type() == Array )
@@ -2567,7 +2299,7 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__RTNTRACESTART_DOIT ) ;
-      rc = sdbGetPDTraceCB()->start ( (UINT64)_size, _mask, &_funcCode ) ;
+      rc = sdbGetPDTraceCB()->start ( (UINT64)_size, _mask, &_funcCode, &_tid ) ;
       PD_TRACE_EXITRC ( SDB__RTNTRACESTART_DOIT, rc ) ;
       return rc ;
    }
@@ -2610,10 +2342,6 @@ namespace engine
       PD_TRACE_ENTRY ( SDB__RTNTRACERESUME_DOIT ) ;
       pdTraceCB *pdTraceCB = sdbGetPDTraceCB() ;
       pdTraceCB->removeAllBreakPoint () ;
-      // sleep for a second so that break point removal information is broadcast
-      // to all CPUs
-      // Note this is not performance sensitive code, so it's safe to sleep for
-      // 1 second
       ossSleepsecs(1) ;
       pdTraceCB->resumePausedEDUs () ;
       PD_TRACE_EXITRC ( SDB__RTNTRACERESUME_DOIT, rc ) ;
@@ -2661,6 +2389,7 @@ namespace engine
                        "Exception when initialize trace stop command: %s",
                        e.what() ) ;
       }
+
    done :
       PD_TRACE_EXITRC ( SDB__RTNTRACESTOP_INIT, rc ) ;
       return rc ;
@@ -2676,17 +2405,74 @@ namespace engine
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__RTNTRACESTOP_DOIT ) ;
       pdTraceCB *traceCB = sdbGetPDTraceCB() ;
-      if ( _pDumpFileName )
+      OSSFILE outFile ;
+      BOOLEAN isOpen = FALSE ;
+      CHAR filePath[ OSS_MAX_PATHSIZE + 1 ] = { 0 } ;
+      CHAR path[ OSS_MAX_PATHSIZE + 1 ] = { 0 } ;
+      CHAR *ptr = NULL ;
+
+      if ( _pDumpFileName && ossStrlen( _pDumpFileName ) > 0 &&
+           traceCB->getSize() > 0 )
       {
          traceCB->stop() ;
-         rc = traceCB->dump ( _pDumpFileName ) ;
+
+#ifdef _LINUX
+         if ( OSS_FILE_SEP_CHAR != _pDumpFileName[ 0 ] )
+#else
+         if ( NULL == ossStrchr( _pDumpFileName, ':' ) )
+#endif // _LINUX
+         {
+            pmdOptionsCB *pOptCB = pmdGetKRCB()->getOptionCB() ;
+            utilBuildFullPath( pOptCB->getDiagLogPath(),
+                               _pDumpFileName,
+                               OSS_MAX_PATHSIZE,
+                               filePath ) ;
+         }
+         else
+         {
+            ossStrncpy( filePath, _pDumpFileName, OSS_MAX_PATHSIZE ) ;
+         }
+
+
+         ossStrncpy( path, filePath, OSS_MAX_PATHSIZE ) ;
+         ptr = ossStrrchr( path, OSS_FILE_SEP_CHAR ) ;
+         if ( ptr != &path[0] )
+         {
+            *ptr = 0 ;
+            if ( ossAccess( path ) )
+            {
+               ossMkdir( path ) ;
+            }
+         }
+
+
+
+         rc = ossOpen( filePath, OSS_REPLACE|OSS_READWRITE,
+                       OSS_DEFAULTFILE, outFile ) ;
+         if ( rc )
+         {
+            PD_LOG( PDERROR, "Open file[%s] failed, rc: %d",
+                    filePath, rc ) ;
+            goto error ;
+         }
+         isOpen = TRUE ;
+
+         PD_LOG( PDEVENT, "Begin to dump trace to %s ...", filePath ) ;
+         rc = traceCB->dump( &outFile ) ;
          PD_RC_CHECK ( rc, PDWARNING, "Failed to stop trace, rc = %d", rc ) ;
+
+         ossClose( outFile ) ;
       }
    done :
       traceCB->destroy() ;
       PD_TRACE_EXITRC ( SDB__RTNTRACESTOP_DOIT, rc ) ;
       return rc ;
    error :
+      if ( isOpen )
+      {
+         ossClose( outFile ) ;
+         ossDelete( filePath ) ;
+      }
       goto done ;
    }
 
@@ -2737,7 +2523,6 @@ namespace engine
       PD_TRACE_ENTRY ( SDB__RTNTRACESTATUS_DOIT ) ;
       rtnContextDump *context = NULL ;
       *pContextID = -1 ;
-      // create cursors
       rc = rtnCB->contextNew ( RTN_CONTEXT_DUMP, (rtnContext**)&context,
                                *pContextID, cb ) ;
       PD_RC_CHECK ( rc, PDERROR, "Failed to create new context, rc = %d", rc ) ;
@@ -2810,7 +2595,7 @@ namespace engine
       return CMD_JSON_LOAD ;
    }
 
-   PD_TRACE_DECLARE_FUNCTION ( SDB__RTNLOAD_INIT, "_rtnLoad::init" )
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__RTNLOAD_INIT, "_rtnLoad::init" )
    INT32 _rtnLoad::init ( INT32 flags, INT64 numToSkip, INT64 numToReturn,
                           const CHAR * pMatcherBuff, const CHAR * pSelectBuff,
                           const CHAR * pOrderByBuff, const CHAR * pHintBuff )
@@ -2839,7 +2624,6 @@ namespace engine
       try
       {
          BSONObj obj( pMatcherBuff ) ;
-         //file name
          tempEle = obj.getField ( FIELD_NAME_FILENAME ) ;
          if ( tempEle.eoo() )
          {
@@ -2856,7 +2640,6 @@ namespace engine
          tempValue = tempEle.valuestr() ;
          ossStrncpy ( _fileName, tempValue, tempEle.valuestrsize() ) ;
 
-         //cs name
          tempEle = obj.getField ( FIELD_NAME_COLLECTIONSPACE ) ;
          if ( tempEle.eoo() )
          {
@@ -2873,7 +2656,6 @@ namespace engine
          tempValue = tempEle.valuestr() ;
          ossStrncpy ( _csName, tempValue, tempEle.valuestrsize() ) ;
 
-         //cl name
          tempEle = obj.getField ( FIELD_NAME_COLLECTION ) ;
          if ( tempEle.eoo() )
          {
@@ -2890,7 +2672,6 @@ namespace engine
          tempValue = tempEle.valuestr() ;
          ossStrncpy ( _clName, tempValue, tempEle.valuestrsize() ) ;
 
-         //fields
          tempEle = obj.getField ( FIELD_NAME_FIELDS ) ;
          if ( !tempEle.eoo() )
          {
@@ -2915,7 +2696,6 @@ namespace engine
                          tempValue, fieldsSize ) ;
          }
 
-         //character
          tempEle = obj.getField ( FIELD_NAME_CHARACTER ) ;
          if ( !tempEle.eoo() )
          {
@@ -2941,7 +2721,6 @@ namespace engine
             }
          }
 
-         // asynchronous
          tempEle = obj.getField ( FIELD_NAME_ASYNCHRONOUS ) ;
          if ( !tempEle.eoo() )
          {
@@ -2954,7 +2733,6 @@ namespace engine
             isAsynchronous = tempEle.boolean() ;
          }
 
-         // headerline
          tempEle = obj.getField ( FIELD_NAME_HEADERLINE ) ;
          if ( !tempEle.eoo() )
          {
@@ -2967,7 +2745,6 @@ namespace engine
             headerline = tempEle.boolean() ;
          }
 
-         // thread number
          tempEle = obj.getField ( FIELD_NAME_THREADNUM ) ;
          if ( !tempEle.eoo() )
          {
@@ -2980,7 +2757,6 @@ namespace engine
             threadNum = (UINT32)tempEle.Int() ;
          }
 
-         // bucket number
          tempEle = obj.getField ( FIELD_NAME_BUCKETNUM ) ;
          if ( !tempEle.eoo() )
          {
@@ -2993,7 +2769,6 @@ namespace engine
             bucketNum = (UINT32)tempEle.Int() ;
          }
 
-         // buffer size
          tempEle = obj.getField ( FIELD_NAME_PARSEBUFFERSIZE ) ;
          if ( !tempEle.eoo() )
          {
@@ -3006,7 +2781,6 @@ namespace engine
             bufferSize = (UINT32)tempEle.Int() ;
          }
 
-         // type
          tempEle = obj.getField ( FIELD_NAME_LTYPE ) ;
          if ( tempEle.eoo() )
          {
@@ -3053,7 +2827,7 @@ namespace engine
       goto done ;
    }
 
-   PD_TRACE_DECLARE_FUNCTION ( SDB__RTNLOAD_DOIT, "_rtnLoad::doit" )
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__RTNLOAD_DOIT, "_rtnLoad::doit" )
    INT32 _rtnLoad::doit ( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
                           _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
                           INT16 w, INT64 *pContextID )
@@ -3072,7 +2846,7 @@ namespace engine
          goto error ;
       }
 
-      rc = master.run() ;
+      rc = master.run( cb ) ;
       if ( rc )
       {
          PD_LOG ( PDERROR, "Failed to run migMaster, rc=%d", rc ) ;
@@ -3086,6 +2860,69 @@ namespace engine
    }
 
    IMPLEMENT_CMD_AUTO_REGISTER(_rtnExportConf)
+
+   _rtnExportConf::_rtnExportConf()
+   {
+      _mask = 0 ;
+   }
+
+   INT32 _rtnExportConf::init( INT32 flags, INT64 numToSkip,
+                               INT64 numToReturn,
+                               const CHAR *pMatcherBuff,
+                               const CHAR *pSelectBuff,
+                               const CHAR *pOrderByBuff,
+                               const CHAR *pHintBuff )
+   {
+      INT32 rc = SDB_OK ;
+
+      try
+      {
+         BSONObj matcher( pMatcherBuff ) ;
+         BSONElement e = matcher.getField( FIELD_NAME_TYPE ) ;
+         if ( e.eoo() )
+         {
+            _mask = PMD_CFG_MASK_SKIP_UNFIELD ;
+         }
+         else if ( e.isNumber() )
+         {
+            INT32 type = e.numberInt() ;
+            switch( type )
+            {
+               case 0 :
+                  _mask = 0 ;
+                  break ;
+               case 1 :
+                  _mask = PMD_CFG_MASK_SKIP_HIDEDFT ;
+                  break ;
+               case 2 :
+                  _mask = PMD_CFG_MASK_SKIP_HIDEDFT | PMD_CFG_MASK_SKIP_NORMALDFT ;
+                  break ;
+               default :
+                  _mask = PMD_CFG_MASK_SKIP_UNFIELD ;
+                  break ;
+            }
+         }
+         else
+         {
+            PD_LOG( PDERROR, "Field[%s] should be numberInt",
+                    e.toString( TRUE, TRUE ).c_str() ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+      }
+      catch( std::exception &e )
+      {
+         PD_LOG( PDERROR, "Occur exception: %s", e.what() ) ;
+         rc = SDB_INVALIDARG ;
+         goto error ;
+      }
+
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
    // PD_TRACE_DECLARE_FUNCTION( SDB__RTNEXPCONF, "_rtnExportConf::doit" )
    INT32 _rtnExportConf::doit ( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
                               _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
@@ -3093,7 +2930,7 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__RTNEXPCONF ) ;
-      rc = pmdGetKRCB()->getOptionCB()->reflush2File() ;
+      rc = pmdGetKRCB()->getOptionCB()->reflush2File( _mask ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "failed to export configration:%d",rc ) ;
@@ -3203,7 +3040,7 @@ namespace engine
             goto error ;
          }
 
-         _sessionID = sessionID.Long() ;
+         _sessionID = sessionID.numberLong() ;
       }
       catch ( std::exception &e )
       {
@@ -3224,12 +3061,23 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
       pmdEDUMgr *mgr = pmdGetKRCB()->getEDUMgr() ;
+
+      if ( _sessionID == cb->getID() )
+      {
+         PD_LOG( PDDEBUG, "Force self[%lld], ignored", _sessionID ) ;
+         goto done ;
+      }
+
       rc = mgr->forceUserEDU( _sessionID ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "Failed to force edu:%lld, rc:%d",
                  _sessionID, rc ) ;
          goto error ;
+      }
+      else
+      {
+         PD_LOG( PDEVENT, "Force session[%lld] succeed", _sessionID ) ;
       }
    done:
       return rc ;
@@ -3333,6 +3181,8 @@ namespace engine
    }
 
    IMPLEMENT_CMD_AUTO_REGISTER( _rtnSetSessionAttr )
+
+   // PD_TRACE_DECLARE_FUNCTION( SDB__RTNSETSESSATTR_INIT, "_rtnSetSessionAttr::init" )
    INT32 _rtnSetSessionAttr::init( INT32 flags, INT64 numToSkip,
                                    INT64 numToReturn,
                                    const CHAR *pMatcherBuff,
@@ -3341,45 +3191,65 @@ namespace engine
                                    const CHAR *pHintBuff )
    {
       INT32 rc = SDB_OK ;
+
+      PD_TRACE_ENTRY( SDB__RTNSETSESSATTR_INIT ) ;
+
       try
       {
-         INT32 prefType = PREFER_REPL_TYPE_MIN ;
-         BSONObj obj( pMatcherBuff ) ;
-         BSONElement e =  obj.getField( FIELD_NAME_PREFERED_INSTANCE ) ;
-         if ( e.type() != NumberInt )
-         {
-            PD_LOG( PDERROR, "Feild[%s] is not numberInt in obj[%s]",
-                    FIELD_NAME_PREFERED_INSTANCE, obj.toString().c_str() ) ;
-            rc = SDB_INVALIDARG ;
-            goto error ;
-         }
-         prefType = e.numberInt() ;
-         if ( prefType <= PREFER_REPL_TYPE_MIN ||
-              prefType >=  PREFER_REPL_TYPE_MAX )
-         {
-            PD_LOG( PDERROR, "Prefer instance value[%d] invalid, must in "
-                    "rang(%d, %d)", prefType, PREFER_REPL_TYPE_MIN,
-                    PREFER_REPL_TYPE_MAX ) ;
-            rc = SDB_INVALIDARG ;
-            goto error ;
-         }
+         BSONObj property( pMatcherBuff ) ;
+         rtnSessionProperty sessProperty ;
+
+         rc = sessProperty.parseProperty( property ) ;
+         PD_RC_CHECK( rc, PDERROR, "Failed to parse session property, "
+                      "rc: %d", rc ) ;
       }
-      catch( std::exception &e )
+      catch ( std::exception &e )
       {
-         PD_LOG( PDERROR, "Ocurr exception: %s", e.what() ) ;
          rc = SDB_INVALIDARG ;
+         PD_LOG( PDERROR, "Failed to set sessionAttr, received unexpected "
+                 "error:%s", e.what() ) ;
          goto error ;
       }
 
-   done:
+   done :
+      PD_TRACE_EXITRC( SDB__RTNSETSESSATTR_INIT, rc ) ;
       return rc ;
-   error:
+
+   error :
       goto done ;
    }
 
    INT32 _rtnSetSessionAttr::doit( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
                                    _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
                                    INT16 w, INT64 *pContextID )
+   {
+      return SDB_OK ;
+   }
+
+   IMPLEMENT_CMD_AUTO_REGISTER( _rtnGetSessionAttr )
+
+   _rtnGetSessionAttr::_rtnGetSessionAttr ()
+   {
+   }
+
+   _rtnGetSessionAttr::~_rtnGetSessionAttr ()
+   {
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION( SDB__RTNGETSESSATTR_INIT, "_rtnGetSessionAttr::init" )
+   INT32 _rtnGetSessionAttr::init ( INT32 flags, INT64 numToSkip,
+                                    INT64 numToReturn,
+                                    const CHAR * pMatcherBuff,
+                                    const CHAR * pSelectBuff,
+                                    const CHAR * pOrderByBuff,
+                                    const CHAR * pHintBuff )
+   {
+      return SDB_OK ;
+   }
+
+   INT32 _rtnGetSessionAttr::doit ( _pmdEDUCB * cb, _SDB_DMSCB * dmsCB,
+                                    _SDB_RTNCB * rtnCB, _dpsLogWrapper * dpsCB,
+                                    INT16 w, INT64 * pContextID )
    {
       return SDB_OK ;
    }
@@ -3441,6 +3311,102 @@ namespace engine
       }
    done:
       PD_TRACE_EXITRC( SDB__RTNTRUNCATE_DOIT, rc ) ;
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   IMPLEMENT_CMD_AUTO_REGISTER( _rtnPop )
+   // PD_TRACE_DECLARE_FUNCTION( SDB__RTNPOP_INIT, "_rtnPop::init" )
+   INT32 _rtnPop::init ( INT32 flags, INT64 numToSkip, INT64 numToReturn,
+                         const CHAR *pMatcherBuff,
+                         const CHAR *pSelectBuff,
+                         const CHAR *pOrderByBuff,
+                         const CHAR *pHintBuff )
+   {
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY( SDB__RTNPOP_INIT ) ;
+      try
+      {
+         BSONObj query( pMatcherBuff ) ;
+         BSONElement eleName, eleLID, eleDirection ;
+         eleName = query.getField( FIELD_NAME_COLLECTION ) ;
+         if ( String != eleName.type() )
+         {
+            PD_LOG( PDERROR, "Invalid collection name in command: %s",
+                    query.toString( FALSE, TRUE ).c_str() ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+         _fullName = eleName.valuestr() ;
+
+         eleLID = query.getField( FIELD_NAME_LOGICAL_ID ) ;
+         if ( EOO == eleLID.type() )
+         {
+            PD_LOG( PDERROR, "Logical id for pop operation is not provided: %s",
+                    query.toString( FALSE, TRUE ).c_str() ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+         if ( NumberLong != eleLID.type()
+              && NumberInt != eleLID.type()
+              && NumberDouble != eleLID.type() )
+         {
+            PD_LOG( PDERROR, "Type for LogicalID is invalid:%s",
+                    query.toString( FALSE, TRUE ).c_str() ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+         _logicalID = eleLID.numberLong() ;
+
+         eleDirection = query.getField( FIELD_NAME_DIRECTION ) ;
+         if ( EOO == eleDirection.type() )
+         {
+            _direction = 1 ;
+         }
+         else
+         {
+            if ( NumberInt != eleDirection.type() )
+            {
+               PD_LOG( PDERROR, "Type for Direction is invalid: %s",
+                       query.toString( FALSE, TRUE ).c_str() ) ;
+               rc = SDB_INVALIDARG ;
+               goto error ;
+            }
+            else
+            {
+               _direction = eleDirection.numberInt() ;
+            }
+         }
+      }
+      catch( std::exception &e )
+      {
+         PD_LOG( PDERROR, "unexpected err happened:%s", e.what() ) ;
+         rc = SDB_SYS ;
+         goto error ;
+      }
+
+   done:
+      PD_TRACE_EXITRC( SDB__RTNPOP_INIT, rc ) ;
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION( SDB__RTNPOP_DOIT, ""_rtnPop::doit" )
+   INT32 _rtnPop::doit ( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
+                         _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
+                         INT16 w, INT64 *pContextID )
+   {
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY( SDB__RTNPOP_DOIT ) ;
+
+      rc = rtnPopCommand( _fullName, _logicalID, cb,
+                          dmsCB, dpsCB, w, _direction ) ;
+      PD_RC_CHECK( rc, PDERROR, "Failed to pop record from collection[%s], "
+                   "rc: %d", _fullName, rc ) ;
+   done:
+      PD_TRACE_EXITRC( SDB__RTNPOP_DOIT, rc ) ;
       return rc ;
    error:
       goto done ;
@@ -3543,7 +3509,6 @@ namespace engine
 
          if ( CMD_SPACE_SERVICE_LOCAL == getFromService() )
          {
-            /// AUDIT
             PD_AUDIT_COMMAND( AUDIT_DDL, name(), AUDIT_OBJ_CL,
                               _runner.getJob().getName(), rc,
                               "Option:%s",
@@ -3592,8 +3557,6 @@ namespace engine
       options = _alterObj.getField( FIELD_NAME_OPTIONS ).embeddedObject() ;
       shardingKey = options.getField( FIELD_NAME_SHARDINGKEY ) ;
 
-      /// should get catalog info to do some more judgements.
-      /// coord send the message with the newest catalog version
       if ( Object != shardingKey.type() )
       {
          PD_LOG( PDDEBUG, "no sharding key in the alter object, do noting." ) ;
@@ -3617,7 +3580,6 @@ namespace engine
                                   cb, dmsCB, dpsCB, TRUE ) ;
       if ( SDB_IXM_REDEF == rc || SDB_IXM_EXIST_COVERD_ONE == rc )
       {
-         /// sharding key index already exists.
          rc = SDB_OK ;
          goto done ;
       }
@@ -3654,12 +3616,13 @@ namespace engine
    IMPLEMENT_CMD_AUTO_REGISTER( _rtnSyncDB )
    _rtnSyncDB::_rtnSyncDB()
    {
-
+      _syncType = 1 ;
+      _csName = NULL ;
+      _block = FALSE ;
    }
 
    _rtnSyncDB::~_rtnSyncDB()
    {
-
    }
 
    // PD_TRACE_DECLARE_FUNCTION( SDB__RTNSYNCDB_INIT, "_rtnSyncDB::init" )
@@ -3671,10 +3634,68 @@ namespace engine
                             const CHAR *pHintBuff )
    {
       INT32 rc = SDB_OK ;
-      PD_TRACE_ENTRY( SDB__RTNSYNCDB_INIT ) ;
+
+      try
+      {
+         BSONObj matcher( pMatcherBuff ) ;
+         BSONElement e = matcher.getField( FIELD_NAME_DEEP ) ;
+         if ( e.isNumber() )
+         {
+            _syncType = (INT32)e.numberInt() ;
+         }
+         else if ( e.isBoolean() )
+         {
+            _syncType = e.boolean() ? 1 : 0 ;
+         }
+         else if ( !e.eoo() )
+         {
+            PD_LOG( PDERROR, "Param[%s] is invalid in obj[%s]",
+                    FIELD_NAME_DEEP, matcher.toString().c_str() ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+
+         e = matcher.getField( FIELD_NAME_COLLECTIONSPACE ) ;
+         if ( String == e.type() )
+         {
+            _csName = e.valuestr() ;
+         }
+         else if ( !e.eoo() )
+         {
+            PD_LOG( PDERROR, "Param[%s] is invalid in obj[%s]",
+                    FIELD_NAME_COLLECTIONSPACE, matcher.toString().c_str() ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+
+         e = matcher.getField( FIELD_NAME_BLOCK ) ;
+         if ( Bool == e.type() )
+         {
+            _block = e.Bool() ? TRUE : FALSE ;
+         }
+         else if ( e.isNumber() )
+         {
+            _block = ( 0 == e.numberInt() ) ? FALSE : TRUE ;
+         }
+         else if ( !e.eoo() )
+         {
+            PD_LOG( PDERROR, "Param[%s] is invalid in obj[%s]",
+                    FIELD_NAME_BLOCK, matcher.toString().c_str() ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+      }
+      catch( std::exception &e )
+      {
+         PD_LOG( PDERROR, "Occur exception: %s", e.what() ) ;
+         rc = SDB_SYS ;
+         goto error ;
+      }
+
    done:
-      PD_TRACE_EXITRC( SDB__RTNSYNCDB_INIT, rc ) ;
       return rc ;
+   error:
+      goto done ;
    }
 
    // PD_TRACE_DECLARE_FUNCTION( SDB__RTNSYNCDB_DOIT, "_rtnSyncDB::doit" )
@@ -3685,18 +3706,313 @@ namespace engine
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY( SDB__RTNSYNCDB_DOIT ) ;
 
-      rc = rtnSyncDB( cb, TRUE ) ;
+      rc = rtnSyncDB( cb, _syncType, _csName, _block ) ;
       if ( SDB_OK != rc )
       {
-         PD_LOG( PDERROR, "failed to sync db:%d", rc ) ;
+         PD_LOG( PDERROR, "Failed to sync db: %d", rc ) ;
          goto error ;
       }
+
    done:
       PD_TRACE_EXITRC( SDB__RTNSYNCDB_DOIT, rc ) ;
       return rc ;
    error:
       goto done ;
    }
-}
 
+   IMPLEMENT_CMD_AUTO_REGISTER( _rtnLoadCollectionSpace )
+   _rtnLoadCollectionSpace::_rtnLoadCollectionSpace()
+   {
+      _csName = NULL ;
+   }
+   _rtnLoadCollectionSpace::~_rtnLoadCollectionSpace()
+   {
+   }
+
+   INT32 _rtnLoadCollectionSpace::init( INT32 flags, INT64 numToSkip,
+                                        INT64 numToReturn,
+                                        const CHAR * pMatcherBuff,
+                                        const CHAR * pSelectBuff,
+                                        const CHAR * pOrderByBuff,
+                                        const CHAR * pHintBuff )
+   {
+      INT32 rc = SDB_OK ;
+
+      try
+      {
+         BSONObj matcher( pMatcherBuff ) ;
+         BSONElement e = matcher.getField( FIELD_NAME_NAME ) ;
+         if ( String == e.type() )
+         {
+            _csName = e.valuestr() ;
+         }
+         else
+         {
+            PD_LOG( PDERROR, "Param[%s] is invalid in obj[%s]",
+                    FIELD_NAME_NAME, matcher.toString().c_str() ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+      }
+      catch( std::exception &e )
+      {
+         PD_LOG( PDERROR, "Occur exception: %s", e.what() ) ;
+         rc = SDB_SYS ;
+         goto error ;
+      }
+
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _rtnLoadCollectionSpace::doit( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
+                                        _SDB_RTNCB * rtnCB,
+                                        _dpsLogWrapper *dpsCB,
+                                        INT16 w , INT64 *pContextID )
+   {
+      return rtnLoadCollectionSpace( _csName,
+                                     pmdGetOptionCB()->getDbPath(),
+                                     pmdGetOptionCB()->getIndexPath(),
+                                     pmdGetOptionCB()->getLobPath(),
+                                     pmdGetOptionCB()->getLobMetaPath(),
+                                     cb, dmsCB, FALSE ) ;
+   }
+
+   IMPLEMENT_CMD_AUTO_REGISTER( _rtnUnloadCollectionSpace )
+   _rtnUnloadCollectionSpace::_rtnUnloadCollectionSpace()
+   {
+   }
+   _rtnUnloadCollectionSpace::~_rtnUnloadCollectionSpace()
+   {
+   }
+
+   INT32 _rtnUnloadCollectionSpace::doit( _pmdEDUCB * cb, _SDB_DMSCB * dmsCB,
+                                          _SDB_RTNCB * rtnCB,
+                                          _dpsLogWrapper * dpsCB,
+                                          INT16 w, INT64 * pContextID )
+   {
+      return rtnUnloadCollectionSpace( _csName, cb, dmsCB ) ;
+   }
+
+   IMPLEMENT_CMD_AUTO_REGISTER( _rtnAnalyze )
+   _rtnAnalyze::_rtnAnalyze()
+   {
+      _csname = NULL ;
+      _clname = NULL ;
+      _ixname = NULL ;
+   }
+
+   _rtnAnalyze::~_rtnAnalyze()
+   {
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION( SDB__RTNANALYZE_INIT, "_rtnAnalyze::init" )
+   INT32 _rtnAnalyze::init ( INT32 flags, INT64 numToSkip,
+                             INT64 numToReturn,
+                             const CHAR *pMatcherBuff,
+                             const CHAR *pSelectBuff,
+                             const CHAR *pOrderByBuff,
+                             const CHAR *pHintBuff )
+   {
+      INT32 rc = SDB_OK ;
+
+      PD_TRACE_ENTRY( SDB__RTNANALYZE_INIT ) ;
+
+      BOOLEAN sampleByNum = FALSE, sampleByPercent = FALSE ;
+
+      try
+      {
+         BSONObj matcher( pMatcherBuff ) ;
+         BSONElement e ;
+
+         e = matcher.getField( FIELD_NAME_COLLECTIONSPACE ) ;
+         if ( String == e.type() )
+         {
+            _csname = e.valuestr() ;
+         }
+         else if ( !e.eoo() )
+         {
+            PD_LOG( PDERROR, "Field[%s] is invalid in obj[%s]",
+                    FIELD_NAME_COLLECTION, matcher.toString().c_str() ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+
+         e = matcher.getField( FIELD_NAME_COLLECTION ) ;
+         if ( String == e.type() )
+         {
+            _clname = e.valuestr() ;
+         }
+         else if ( !e.eoo() )
+         {
+            PD_LOG( PDERROR, "Field[%s] is invalid in obj[%s]",
+                    FIELD_NAME_COLLECTIONSPACE, matcher.toString().c_str() ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+
+         e = matcher.getField( FIELD_NAME_INDEX ) ;
+         if ( String == e.type() )
+         {
+            _ixname = e.valuestr() ;
+         }
+         else if ( !e.eoo() )
+         {
+            PD_LOG( PDERROR, "Field[%s] is invalid in obj[%s]",
+                    FIELD_NAME_INDEX, matcher.toString().c_str() ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+
+         e = matcher.getField( FIELD_NAME_ANALYZE_MODE ) ;
+         if ( NumberInt == e.type() )
+         {
+            _param._mode = e.numberInt() ;
+            if ( SDB_ANALYZE_MODE_SAMPLE == _param._mode ||
+                 SDB_ANALYZE_MODE_FULL == _param._mode ||
+                 SDB_ANALYZE_MODE_GENDFT == _param._mode ||
+                 SDB_ANALYZE_MODE_RELOAD == _param._mode ||
+                 SDB_ANALYZE_MODE_CLEAR == _param._mode )
+            {
+            }
+            else
+            {
+               PD_LOG( PDERROR, "Value of field[%s] is invalid",
+                       FIELD_NAME_ANALYZE_MODE ) ;
+               rc = SDB_INVALIDARG ;
+               goto error ;
+            }
+         }
+         else if ( !e.eoo() )
+         {
+            PD_LOG( PDERROR, "Field[%s] is invalid in obj[%s]",
+                    FIELD_NAME_ANALYZE_MODE, matcher.toString().c_str() ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+
+         e = matcher.getField( FIELD_NAME_ANALYZE_NUM ) ;
+         if ( NumberInt == e.type() )
+         {
+            _param._sampleRecords = (UINT32) e.numberInt() ;
+            if ( _param._sampleRecords > SDB_ANALYZE_SAMPLE_MAX ||
+                 _param._sampleRecords < SDB_ANALYZE_SAMPLE_MIN )
+            {
+               PD_LOG( PDERROR, "Field[%s] %u is out of range [ %d - %d ]",
+                       FIELD_NAME_ANALYZE_NUM, _param._sampleRecords,
+                       SDB_ANALYZE_SAMPLE_MIN, SDB_ANALYZE_SAMPLE_MAX ) ;
+               rc = SDB_INVALIDARG ;
+               goto error ;
+            }
+            sampleByNum = TRUE ;
+         }
+
+         e = matcher.getField( FIELD_NAME_ANALYZE_PERCENT ) ;
+         if ( NumberInt == e.type() )
+         {
+            _param._samplePercent = e.numberInt() ;
+            if ( _param._samplePercent > 100.0 ||
+                 _param._samplePercent <= 0.0 )
+            {
+               PD_LOG( PDERROR, "Field[%s] %.2f is out of range ( %.2f - %.2f ]",
+                       FIELD_NAME_ANALYZE_PERCENT, _param._samplePercent,
+                       0.0, 100.0 ) ;
+               rc = SDB_INVALIDARG ;
+               goto error ;
+            }
+            sampleByPercent = TRUE ;
+         }
+      }
+      catch( std::exception &e )
+      {
+         PD_LOG( PDERROR, "Occur exception: %s", e.what() ) ;
+         rc = SDB_SYS ;
+         goto error ;
+      }
+
+      if ( NULL != _csname )
+      {
+         if ( NULL != _clname )
+         {
+            PD_LOG( PDERROR, "Field[%s] and Field[%s] conflict",
+                    FIELD_NAME_COLLECTIONSPACE, FIELD_NAME_COLLECTION ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+         else if ( NULL != _ixname )
+         {
+            PD_LOG( PDERROR, "Field[%s] and Field[%s] conflict",
+                    FIELD_NAME_COLLECTIONSPACE, FIELD_NAME_INDEX ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+      }
+
+      if ( NULL != _ixname && NULL == _clname )
+      {
+         PD_LOG( PDERROR, "Field[%s] requires Field[%s]",
+                 FIELD_NAME_INDEX, FIELD_NAME_COLLECTION ) ;
+         rc = SDB_INVALIDARG ;
+         goto error ;
+      }
+
+      if ( SDB_ANALYZE_MODE_GENDFT == _param._mode )
+      {
+         PD_CHECK( NULL != _clname, SDB_INVALIDARG, error, PDERROR,
+                   "Only support generating default statistics on specified "
+                   "collection or index" ) ;
+      }
+
+      if ( sampleByNum && sampleByPercent )
+      {
+         PD_LOG( PDERROR, "Field[%s] and Field[%s] conflict",
+                 FIELD_NAME_ANALYZE_NUM, FIELD_NAME_ANALYZE_PERCENT ) ;
+         rc = SDB_INVALIDARG ;
+         goto error ;
+      }
+
+      if ( sampleByPercent )
+      {
+         _param._sampleByNum = FALSE ;
+      }
+
+   done :
+      PD_TRACE_EXITRC( SDB__RTNANALYZE_INIT, rc ) ;
+      return rc ;
+
+   error :
+      goto done ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION( SDB__RTNANALYZE_DOIT, "_rtnAnalyze::doit" )
+   INT32 _rtnAnalyze::doit ( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
+                             _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
+                             INT16 w, INT64 *pContextID )
+   {
+      INT32 rc = SDB_OK ;
+
+      PD_TRACE_ENTRY( SDB__RTNANALYZE_DOIT ) ;
+
+      rc = rtnAnalyze( _csname, _clname, _ixname, _param,
+                       cb, dmsCB, rtnCB, dpsCB ) ;
+
+      if ( ( SDB_DMS_CS_NOTEXIST == rc && NULL == _csname && NULL == _clname ) ||
+           ( SDB_DMS_NOTEXIST == rc && NULL == _clname ) )
+      {
+         rc = SDB_OK ;
+      }
+
+      PD_RC_CHECK( rc, PDERROR, "Failed to run analyze command, rc: %d", rc ) ;
+
+   done :
+      PD_TRACE_EXITRC( SDB__RTNANALYZE_DOIT, rc ) ;
+      return rc ;
+
+   error :
+      goto done ;
+   }
+
+}
 

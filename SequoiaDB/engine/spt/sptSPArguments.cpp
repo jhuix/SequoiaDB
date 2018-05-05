@@ -34,11 +34,9 @@
 #include "sptSPDef.hpp"
 #include "pd.hpp"
 #include "sptConvertor2.hpp"
+#include "sptObjDesc.hpp"
 
 using namespace bson ;
-
-const UINT32 MAX_SKIP_LEN  = 15 ;
-const UINT32 MAX_RULE_LEN = MAX_SKIP_LEN + 2 ;
 
 namespace engine
 {
@@ -56,9 +54,9 @@ namespace engine
       _vp = NULL ;
    }
 
-
    INT32 _sptSPArguments::getString( UINT32 pos,
-                                     std::string &value ) const
+                                     std::string &value,
+                                     BOOLEAN strict ) const
    {
       INT32 rc = SDB_OK ;
       JSString *jsStr = NULL ;
@@ -79,20 +77,26 @@ namespace engine
          goto error ;
       }
 
-      if ( !JSVAL_IS_STRING( *val ) )
+      if ( strict )
       {
-         PD_LOG( PDERROR, "jsval is not a string." ) ;
-         rc = SDB_INVALIDARG ;
-         goto error ;
+         if ( !JSVAL_IS_STRING( *val ) )
+         {
+            PD_LOG( PDERROR, "jsval is not a string." ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+         jsStr = JSVAL_TO_STRING( *val ) ;
       }
-
-      jsStr = JSVAL_TO_STRING( *val ) ;
+      else
+      {
+         jsStr = JS_ValueToString( _context, *val ) ;
+      }
       if ( NULL == jsStr )
       {
          PD_LOG( PDERROR, "failed to convert jsval to jsstr" ) ;
          rc = SDB_SYS ;
          goto error ;
-      } 
+      }
 
       str = JS_EncodeString ( _context , jsStr ) ;
       if ( NULL == str )
@@ -103,14 +107,14 @@ namespace engine
       }
 
       value.assign( str ) ;
-      
+
    done:
       SAFE_JS_FREE( _context, str ) ;
       return rc ;
    error:
       goto done ;
    }
-   
+
 
    jsval *_sptSPArguments::_getValAtPos( UINT32 pos ) const
    {
@@ -166,6 +170,190 @@ namespace engine
       goto done ;
    }
 
+   INT32 _sptSPArguments::getUserObj( UINT32 pos, const _sptObjDesc &objDesc,
+                                      const void** value ) const
+   {
+      INT32 rc = SDB_OK ;
+      JSObject *jsObj = NULL ;
+      jsval *val = NULL ;
+
+      if ( _argc <= pos )
+      {
+         rc = SDB_OUT_OF_BOUND ;
+         goto error ;
+      }
+
+      val = _getValAtPos( pos ) ;
+      if ( NULL == val )
+      {
+         PD_LOG( PDERROR, "failed to get val at pos" ) ;
+         rc = SDB_SYS ;
+         goto error ;
+      }
+
+      if ( !JSVAL_IS_OBJECT( *val ) )
+      {
+         PD_LOG( PDERROR, "jsval is not a object" ) ;
+         rc = SDB_INVALIDARG ;
+         goto error ;
+      }
+
+      jsObj = JSVAL_TO_OBJECT( *val ) ;
+      if ( NULL == jsObj )
+      {
+         PD_LOG( PDERROR, "failed to convert jsval to object" ) ;
+         rc = SDB_SYS ;
+         goto error ;
+      }
+
+      if( string( objDesc.getJSClassName() ) !=
+            sptGetObjFactory()->getClassName( _context, jsObj ) )
+      {
+         rc = SDB_INVALIDARG ;
+         PD_LOG( PDERROR, "jsObj className must be: %s", objDesc.getJSClassName() ) ;
+         goto error ;
+      }
+
+      *value = JS_GetPrivate( _context, jsObj ) ;
+      if( *value == NULL )
+      {
+         rc = SDB_SYS ;
+         PD_LOG( PDERROR, "failed to convert jsobj to user obj:%d", rc ) ;
+         goto error ;
+      }
+
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   sptPrivateData* _sptSPArguments::getPrivateData( ) const
+   {
+      return ( sptPrivateData* )JS_GetContextPrivate( _context ) ;
+   }
+
+   BOOLEAN _sptSPArguments::isString( UINT32 pos ) const
+   {
+      jsval *val = NULL ;
+      if ( _argc > pos && NULL != ( val = _getValAtPos( pos ) ) &&
+           JSVAL_IS_STRING( *val ) )
+      {
+         return TRUE ;
+      }
+      return FALSE ;
+   }
+
+   BOOLEAN _sptSPArguments::isNull( UINT32 pos ) const
+   {
+      jsval *val = NULL ;
+      if ( _argc > pos && NULL != ( val = _getValAtPos( pos ) ) &&
+           JSVAL_IS_NULL( *val ) )
+      {
+         return TRUE ;
+      }
+      return FALSE ;
+   }
+
+   BOOLEAN _sptSPArguments::isVoid( UINT32 pos ) const
+   {
+      jsval *val = NULL ;
+      if ( _argc > pos && NULL != ( val = _getValAtPos( pos ) ) &&
+           JSVAL_IS_VOID( *val ) )
+      {
+         return TRUE ;
+      }
+      return FALSE ;
+   }
+
+   BOOLEAN _sptSPArguments::isInt( UINT32 pos ) const
+   {
+      jsval *val = NULL ;
+      if ( _argc > pos && NULL != ( val = _getValAtPos( pos ) ) &&
+           JSVAL_IS_INT( *val ) )
+      {
+         return TRUE ;
+      }
+      return FALSE ;
+   }
+
+   BOOLEAN _sptSPArguments::isDouble( UINT32 pos ) const
+   {
+      jsval *val = NULL ;
+      if ( _argc > pos && NULL != ( val = _getValAtPos( pos ) ) &&
+           JSVAL_TO_DOUBLE( *val ) )
+      {
+         return TRUE ;
+      }
+      return FALSE ;
+   }
+
+   BOOLEAN _sptSPArguments::isNumber( UINT32 pos ) const
+   {
+      jsval *val = NULL ;
+      if ( _argc > pos && NULL != ( val = _getValAtPos( pos ) ) &&
+           JSVAL_IS_NUMBER( *val ) )
+      {
+         return TRUE ;
+      }
+      return FALSE ;
+   }
+
+   BOOLEAN _sptSPArguments::isObject( UINT32 pos ) const
+   {
+      jsval *val = NULL ;
+      if ( _argc > pos && NULL != ( val = _getValAtPos( pos ) ) &&
+           JSVAL_IS_OBJECT( *val ) )
+      {
+         return TRUE ;
+      }
+      return FALSE ;
+   }
+
+   BOOLEAN _sptSPArguments::isBoolean( UINT32 pos ) const
+   {
+      jsval *val = NULL ;
+      if ( _argc > pos && NULL != ( val = _getValAtPos( pos ) ) &&
+           JSVAL_IS_BOOLEAN( *val ) )
+      {
+         return TRUE ;
+      }
+      return FALSE ;
+   }
+
+   BOOLEAN _sptSPArguments::isUserObj( UINT32 pos,
+                                       const _sptObjDesc &objDesc ) const
+   {
+      jsval *val = NULL ;
+      JSObject *jsObj = NULL ;
+
+      if ( _argc > pos &&
+           NULL != ( val = _getValAtPos( pos ) ) &&
+           JSVAL_IS_OBJECT( *val ) &&
+           NULL != ( jsObj = JSVAL_TO_OBJECT( *val ) ) &&
+           string( objDesc.getJSClassName() ) ==
+           sptGetObjFactory()->getClassName( _context, jsObj ) )
+      {
+         return TRUE ;
+      }
+      return FALSE ;
+   }
+
+   string _sptSPArguments::getUserObjClassName( UINT32 pos ) const
+   {
+      jsval *val = NULL ;
+      JSObject *jsObj = NULL ;
+
+      if( _argc > pos &&
+           NULL != ( val = _getValAtPos( pos ) ) &&
+           JSVAL_IS_OBJECT( *val ) &&
+           NULL != ( jsObj = JSVAL_TO_OBJECT( *val ) ) )
+      {
+         return sptGetObjFactory()->getClassName( _context, jsObj ) ;
+      }
+      return "" ;
+   }
+
    #define NATIVE_VALUE_EQ( pData, type, value ) \
       do \
       { \
@@ -191,6 +379,7 @@ namespace engine
                break ; \
             default : \
                PD_LOG( PDERROR, "type[%d] is error", type ) ; \
+               rc = SDB_INVALIDARG ; \
                goto error ; \
          } \
       } while ( 0 )

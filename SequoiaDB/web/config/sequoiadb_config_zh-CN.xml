@@ -15,7 +15,7 @@
 	<FILLER>
 		<Name>svcname</Name>
 		<WebName>服务名</WebName>
-		<Type>port</Type>
+		<Type>string</Type>
 		<Default>11810</Default>
 		<Valid></Valid>
 		<Display>edit box</Display>
@@ -94,37 +94,11 @@
 		<Name>preferedinstance</Name>
 		<WebName>实例模式</WebName>
 		<Type>string</Type>
-		<Default>A</Default>
+		<Default>M</Default>
 		<Valid>M,S,A,1,2,3,4,5,6,7</Valid>
 		<Display>select box</Display>
 		<Edit>true</Edit>
 		<Desc>指定执行读请求时优先选择的实例。 M -- 可读写实例； S -- 只读实例； A -- 任意实例； 1~7 -- 第 n 个实例</Desc>
-		<Level>0</Level>
-		<DynamicEdit>false</DynamicEdit>
-		<BatchEdit>true</BatchEdit>
-	</FILLER>
-	<FILLER>
-		<Name>numpagecleaners</Name>
-		<WebName>脏页清除器数量</WebName>
-		<Type>int</Type>
-		<Default>1</Default>
-		<Valid>0-50</Valid>
-		<Display>edit box</Display>
-		<Edit>true</Edit>
-		<Desc>数据库启动时需要开启的脏页清除器数量，0：不启动任何脏页清除器，取值范围：[0,50]</Desc>
-		<Level>0</Level>
-		<DynamicEdit>false</DynamicEdit>
-		<BatchEdit>true</BatchEdit>
-	</FILLER>
-	<FILLER>
-		<Name>pagecleaninterval</Name>
-		<WebName>脏页清除最小间隔</WebName>
-		<Type>int</Type>
-		<Default>10000</Default>
-		<Valid>1000-</Valid>
-		<Display>edit box</Display>
-		<Edit>true</Edit>
-		<Desc>对每个集合空间的进行脏页清除的最小时间间隔。单位：毫秒，默认：10000，最小：1000</Desc>
 		<Level>0</Level>
 		<DynamicEdit>false</DynamicEdit>
 		<BatchEdit>true</BatchEdit>
@@ -185,11 +159,11 @@
 		<Name>sortbuf</Name>
 		<WebName>排序缓存大小</WebName>
 		<Type>int</Type>
-		<Default>512</Default>
+		<Default>256</Default>
 		<Valid>128-</Valid>
 		<Display>edit box</Display>
 		<Edit>true</Edit>
-		<Desc>排序缓存大小（MB），默认值512，最小值128</Desc>
+		<Desc>排序缓存大小（MB），默认值256，最小值128</Desc>
 		<Level>1</Level>
 		<DynamicEdit>false</DynamicEdit>
 		<BatchEdit>true</BatchEdit>
@@ -232,5 +206,187 @@
 		<Level>1</Level>
 		<DynamicEdit>false</DynamicEdit>
 		<BatchEdit>true</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>maxsyncjob</Name>
+		<WebName>数据同步最大任务数</WebName>
+		<Type>int</Type>
+		<Default>10</Default>
+		<Valid>2-200</Valid>
+		<Display>edit box</Display>
+		<Edit>true</Edit>
+		<Desc>后台数据同步任务线程的最大数量，默认值为10，取值范围为[2, 200]</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>true</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>syncinterval</Name>
+		<WebName>数据同步周期</WebName>
+		<Type>int</Type>
+		<Default>10000</Default>
+		<Valid>0-</Valid>
+		<Display>edit box</Display>
+		<Edit>true</Edit>
+		<Desc>后台数据同步周期，单位毫秒，默认值为10000，0表示不按周期触发数据同步</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>true</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>syncrecordnum</Name>
+		<WebName>数据同步触发记录数</WebName>
+		<Type>int</Type>
+		<Default>0</Default>
+		<Valid>0-</Valid>
+		<Display>edit box</Display>
+		<Edit>true</Edit>
+		<Desc>后台数据同步触发记录数，默认值为0，0表示不按记录数触发数据同步</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>true</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>syncdeep</Name>
+		<WebName>数据同步是否深度刷盘</WebName>
+		<Type>bool</Type>
+		<Default>false</Default>
+		<Valid>true,false</Valid>
+		<Display>select box</Display>
+		<Edit>true</Edit>
+		<Desc>数据同步是否开启深度刷盘,默认为:FALSE</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>true</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>archiveon</Name>
+		<WebName>开启复制日志归档</WebName>
+		<Type>bool</Type>
+		<Default>false</Default>
+		<Valid>true,false</Valid>
+		<Display>select box</Display>
+		<Edit>true</Edit>
+		<Desc>开启复制日志归档功能，默认值为false</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>true</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>archivecompresson</Name>
+		<WebName>开启复制日志归档压缩</WebName>
+		<Type>bool</Type>
+		<Default>true</Default>
+		<Valid>true,false</Valid>
+		<Display>select box</Display>
+		<Edit>true</Edit>
+		<Desc>开启复制日志归档压缩功能，默认值为true</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>true</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>archivepath</Name>
+		<WebName>归档日志文件路径</WebName>
+		<Type>string</Type>
+		<Default></Default>
+		<Valid></Valid>
+		<Display>text box</Display>
+		<Edit>true</Edit>
+		<Desc>归档日志文件路径</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>false</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>archivetimeout</Name>
+		<WebName>未归档超时时间</WebName>
+		<Type>int</Type>
+		<Default>600</Default>
+		<Valid>0-</Valid>
+		<Display>edit box</Display>
+		<Edit>true</Edit>
+		<Desc>判定未归档的超时时间(秒)，默认值：600，0表示不超时</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>true</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>archiveexpired</Name>
+		<WebName>归档日志文件的过期时间</WebName>
+		<Type>int</Type>
+		<Default>240</Default>
+		<Valid>0-</Valid>
+		<Display>edit box</Display>
+		<Edit>true</Edit>
+		<Desc>归档日志文件的过期时间(小时)，默认值:240，0表示不过期</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>true</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>archivequota</Name>
+		<WebName>归档日志目录磁盘配额</WebName>
+		<Type>int</Type>
+		<Default>10</Default>
+		<Valid>0-</Valid>
+		<Display>edit box</Display>
+		<Edit>true</Edit>
+		<Desc>归档日志目录的磁盘配额(GB)，默认值：10，0表示没有限制</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>true</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>indexpath</Name>
+		<WebName>索引路径</WebName>
+		<Type>string</Type>
+		<Default></Default>
+		<Valid></Valid>
+		<Display>text box</Display>
+		<Edit>true</Edit>
+		<Desc>索引文件存放路径，缺省为"dbpath"</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>false</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>bkuppath</Name>
+		<WebName>备份路径</WebName>
+		<Type>string</Type>
+		<Default></Default>
+		<Valid></Valid>
+		<Display>text box</Display>
+		<Edit>true</Edit>
+		<Desc>备份数据文件存放路径，缺省为"dbpath/bakfile"</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>false</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>lobpath</Name>
+		<WebName>大对象数据路径</WebName>
+		<Type>string</Type>
+		<Default></Default>
+		<Valid></Valid>
+		<Display>text box</Display>
+		<Edit>true</Edit>
+		<Desc>大数象数据文件存放路径，缺省为"dbpath"</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>false</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>lobmetapath</Name>
+		<WebName>大对象元数据路径</WebName>
+		<Type>string</Type>
+		<Default></Default>
+		<Valid></Valid>
+		<Display>text box</Display>
+		<Edit>true</Edit>
+		<Desc>大数象元数据文件存放路径，缺省为"dbpath"</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>false</BatchEdit>
 	</FILLER>
 </Property>

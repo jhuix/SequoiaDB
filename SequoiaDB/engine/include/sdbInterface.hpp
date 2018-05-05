@@ -69,7 +69,7 @@ namespace engine
 
       SDB_CB_PMDCTRL,
       SDB_CB_OMPROXY,
-      // THE MAX CB TYPE
+      SDB_CB_SEADAPTER,
       SDB_CB_MAX
    } ;
 
@@ -83,7 +83,8 @@ namespace engine
       SDB_IF_EVT_HANDLER,
       SDB_IF_EVT_HOLDER,
 
-      // THD MAX IF TYPE
+      SDB_IF_CTXMGR,
+
       SDB_IF_MAX
    } ;
 
@@ -103,8 +104,8 @@ namespace engine
       SDB_SESSION_SPLIT_DST,
       SDB_SESSION_OMAGENT,
       SDB_SESSION_PROTOCOL,
-
-      // Reserved
+      SDB_SESSION_SE_INDEX,
+      SDB_SESSION_SE_AGENT,
       SDB_SESSION_MAX
    } ;
 
@@ -116,7 +117,6 @@ namespace engine
       SDB_CLIENT_EXTERN    = 1,  // external client,ex: local service
       SDB_CLIENT_INNER,          // inner client, ex: shard service
 
-      // Reserved
       SDB_CLIENT_MAX
    } ;
 
@@ -162,6 +162,8 @@ namespace engine
    #define EVENT_MASK_ON_REGISTERED          0x00000001
    #define EVENT_MASK_ON_PRIMARYCHG          0x00000002
 
+   #define EVENT_MASK_ON_ALL                 0xFFFFFFFF
+
    enum SDB_EVENT_OCCUR_TYPE
    {
       SDB_EVT_OCCUR_BEFORE   = 1,
@@ -176,8 +178,6 @@ namespace engine
       public :
          _IEventHander () {}
          virtual ~_IEventHander () {}
-
-         virtual UINT32 getMask() const = 0 ;
 
          virtual void   onRegistered( const MsgRouteID &nodeID )
          {}
@@ -197,7 +197,8 @@ namespace engine
          _IEventHolder () {}
          virtual ~_IEventHolder () {}
 
-         virtual INT32  regEventHandler( IEventHander *pHandler ) = 0 ;
+         virtual INT32  regEventHandler( IEventHander *pHandler,
+                                         UINT32 mask = EVENT_MASK_ON_ALL ) = 0 ;
          virtual void   unregEventHandler( IEventHander *pHandler ) = 0 ;
    } ;
    typedef _IEventHolder IEventHolder ;
@@ -304,6 +305,207 @@ namespace engine
    typedef _ISession ISession ;
 
    /*
+      SDB_LOCK_TYPE define
+   */
+   enum SDB_LOCK_TYPE
+   {
+      SDB_LOCK_DMS      = 0,
+
+      SDB_LOCK_MAX
+   } ;
+
+   /*
+      sdbLockItem define
+   */
+   struct sdbLockItem
+   {
+      UINT32   _lockMode ;
+      UINT32   _lockCount ;
+
+      sdbLockItem() { reset() ; }
+      void     reset() { _lockMode = 0 ; _lockCount = 0 ; }
+      void     setMode( UINT32 mode ) { _lockMode = mode ; }
+      UINT32   getMode() const { return _lockMode ; }
+      UINT32   incCount() { return ++_lockCount ; }
+      UINT32   decCount() { return --_lockCount ; }
+      UINT32   lockCount() const { return _lockCount ; }
+   } ;
+
+   /*
+      _IRemoteSite define
+   */
+   class _IRemoteSite : public SDBObject
+   {
+      public:
+         _IRemoteSite() {}
+         virtual ~_IRemoteSite() {}
+
+      public:
+         virtual  UINT64   getUserData() const = 0 ;
+
+   } ;
+   typedef _IRemoteSite IRemoteSite ;
+
+   /*
+      _IExecutor define
+   */
+   class _IExecutor : public SDBObject
+   {
+      public:
+         _IExecutor() {}
+         virtual ~_IExecutor() {}
+
+      public:
+
+         /*
+            Base Function
+         */
+         virtual EDUID     getID() const = 0 ;
+         virtual UINT32    getTID() const = 0 ;
+
+         /*
+            Session Related
+         */
+         virtual ISession* getSession() = 0 ;
+         virtual IRemoteSite* getRemoteSite() = 0 ;
+
+         /*
+            Status and Control
+         */
+         virtual BOOLEAN   isInterrupted ( BOOLEAN onlyFlag = FALSE ) = 0 ;
+         virtual BOOLEAN   isDisconnected () = 0 ;
+         virtual BOOLEAN   isForced () = 0 ;
+
+         virtual BOOLEAN   isWritingDB() const = 0 ;
+         virtual UINT64    getWritingID() const = 0 ;
+         virtual void      writingDB( BOOLEAN writing ) = 0 ;
+
+         virtual UINT32    getProcessedNum() const = 0 ;
+         virtual void      incEventCount( UINT32 step = 1 ) = 0 ;
+
+         virtual UINT32    getQueSize() = 0 ;
+
+         /*
+            Resource Info
+         */
+         virtual sdbLockItem* getLockItem( SDB_LOCK_TYPE lockType ) = 0 ;
+
+         /*
+            Buffer Manager
+         */
+         virtual INT32     allocBuff( UINT32 len,
+                                      CHAR **ppBuff,
+                                      UINT32 *pRealSize = NULL ) = 0 ;
+
+         virtual INT32     reallocBuff( UINT32 len,
+                                        CHAR **ppBuff,
+                                        UINT32 *pRealSize = NULL ) = 0 ;
+
+         virtual void      releaseBuff( CHAR *pBuff ) = 0 ;
+
+         virtual void*     getAlignedBuff( UINT32 size,
+                                           UINT32 *pRealSize = NULL,
+                                           UINT32 alignment =
+                                           OSS_FILE_DIRECT_IO_ALIGNMENT ) = 0 ;
+
+         virtual void      releaseAlignedBuff() = 0 ;
+
+         /*
+            Operation Related
+         */
+         virtual UINT64    getBeginLsn () const = 0 ;
+         virtual UINT64    getEndLsn() const = 0 ;
+         virtual UINT32    getLsnCount () const = 0 ;
+         virtual BOOLEAN   isDoRollback () const = 0 ;
+
+         virtual UINT64    getTransID () const = 0 ;
+         virtual UINT64    getCurTransLsn () const = 0 ;
+         virtual void      resetLsn() = 0 ;
+         virtual void      insertLsn( UINT64 lsn,
+                                      BOOLEAN isRollback = FALSE ) = 0 ;
+
+         virtual void      setTransID( UINT64 transID ) = 0 ;
+         virtual void      setCurTransLsn( UINT64 lsn ) = 0 ;
+
+         /*
+            Context Related
+         */
+         virtual void      contextInsert( INT64 contextID ) = 0 ;
+         virtual void      contextDelete( INT64 contextID ) = 0 ;
+         virtual INT64     contextPeek() = 0 ;
+         virtual BOOLEAN   contextFind( INT64 contextID ) = 0 ;
+         virtual UINT32    contextNum() = 0 ;
+
+   } ;
+   typedef _IExecutor IExecutor ;
+
+   /*
+      _IIOService define
+   */
+   class _IIOService : public SDBObject
+   {
+      public:
+         _IIOService() {}
+         virtual ~_IIOService() {}
+
+      public:
+         virtual void      stop() = 0 ;
+         virtual void      resetMon() = 0 ;
+   } ;
+   typedef _IIOService IIOService ;
+
+   /*
+      _IExecutorMgr define
+   */
+   class _IExecutorMgr : public SDBObject
+   {
+      public:
+         _IExecutorMgr() {}
+         virtual ~_IExecutorMgr() {}
+
+      public:
+         virtual INT32     startEDU( INT32 type,
+                                     void *args,
+                                     EDUID *pEDUID = NULL,
+                                     const CHAR *pInitName = "" ) = 0 ;
+
+         virtual void      addIOService( IIOService *pIOService ) = 0 ;
+         virtual void      delIOSerivce( IIOService *pIOService ) = 0 ;
+
+   } ;
+   typedef _IExecutorMgr IExecutorMgr ;
+
+   /*
+      _IContext define
+   */
+   class _IContext : public SDBObject
+   {
+      public:
+         _IContext() {}
+         virtual ~_IContext() {}
+
+      public:
+         virtual INT32 pause() = 0 ;
+         virtual INT32 resume() = 0 ;
+
+   } ;
+   typedef _IContext IContext ;
+
+   /*
+      _IContextMgr define
+   */
+   class _IContextMgr : public SDBObject
+   {
+      public:
+         _IContextMgr() {}
+         virtual ~_IContextMgr() {}
+
+      public:
+         virtual void contextDelete( INT64 contextID, IExecutor *pExe ) = 0 ;
+   } ;
+   typedef _IContextMgr IContextMgr ;
+
+   /*
       _IControlBlock define
    */
    class _IControlBlock : public SDBObject, public _ISDBRoot
@@ -339,12 +541,15 @@ namespace engine
          virtual IControlBlock*     getCBByType( SDB_CB_TYPE type ) = 0 ;
          virtual BOOLEAN            isCBValue( SDB_CB_TYPE type ) const = 0 ;
          virtual void*              getOrgPointByType( SDB_CB_TYPE type ) = 0 ;
+         virtual IExecutorMgr*      getExecutorMgr() = 0 ;
+         virtual IContextMgr*       getContextMgr() = 0 ;
 
          virtual SDB_DB_STATUS      getDBStatus() const = 0 ;
          virtual const CHAR*        getDBStatusDesp() const = 0 ;
          virtual BOOLEAN            isShutdown() const = 0 ;
          virtual BOOLEAN            isNormal() const = 0 ;
          virtual BOOLEAN            isAvailable( INT32 *pCode = NULL ) const = 0 ;
+         virtual BOOLEAN            isActive() const = 0 ;
          virtual INT32              getShutdownCode() const = 0 ;
 
          virtual UINT32             getDBMode() const = 0 ;

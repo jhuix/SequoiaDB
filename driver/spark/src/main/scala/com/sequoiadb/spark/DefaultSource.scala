@@ -1,124 +1,168 @@
 /*
- *  Licensed to SequoiaDB (C) under one or more contributor license agreements.
- *  See the NOTICE file distributed with this work for additional information
- *  regarding copyright ownership. The SequoiaDB (C) licenses this file
- *  to you under the Apache License, Version 2.0 (the
- *  "License"); you may not use this file except in compliance
- *  with the License. You may obtain a copy of the License at
+ * Copyright 2017 SequoiaDB Inc.
  *
- *  http://www.apache.org/licenses/LICENSE-2.0
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- *  Unless required by applicable law or agreed to in writing,
- *  software distributed under the License is distributed on an
- *  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- *  KIND, either express or implied. See the License for the
- *  specific language governing permissions and limitations
- *  under the License.
- */
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+*/
+
 package com.sequoiadb.spark
 
-/**
- * Source File Name = DefaultSource.scala
- * Description      = DefaultSource for com.sequoiadb.spark package
- * When/how to use  = Default source is loaded by Spark
- * Restrictions     = N/A
- * Change Activity:
- * Date     Who                Description
- * ======== ================== ================================================
- * 20150305 Tao Wang           Initial Draft
- */
-
+import com.sequoiadb.base.{DBCollection, Sequoiadb}
 import org.apache.spark.sql.sources._
-import org.apache.spark.sql.SQLContext
-import org.apache.spark.sql.SaveMode
-import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.types.StructType
-import SequoiadbConfig._
-import com.sequoiadb.exception._
-import com.sequoiadb.spark.io.SequoiadbWriter
-import com.sequoiadb.spark.util.CollectionUtil
+import org.apache.spark.sql.{DataFrame, SQLContext, SaveMode}
+import org.bson.{BSONObject, BasicBSONObject}
+import org.bson.util.JSON
+
+import scala.collection.JavaConversions._
 
 /**
- * Allows creation of SequoiaDB based tables using
- * the syntax CREATE TEMPORARY TABLE ... USING com.sequoiadb.spark
- * Required options are detailed in [[com.sequoiadb.spark.SequoiadbConfig]]
- */
-class DefaultSource extends RelationProvider with SchemaRelationProvider with CreatableRelationProvider {
-  /**
-   * Create relation without providing schema
-   */
-  override def createRelation(
-    sqlContext: SQLContext,
-    parameters: Map[String, String]): BaseRelation = {
-    createRelation(sqlContext, parameters, null)
-  }
-  
-  /**
-   * Create SequoiadbConfig based on input parameters
-   */
-  private def createConfig ( parameters: Map[String, String] ): SequoiadbConfig = {
-    /** We will assume hosts are provided like 'host:port,host2:port2,...'*/
-    val host = parameters
-      .getOrElse(Host, notFound[String](Host))
-      .split(",").toList
+  * Default source is loaded by Spark.
+  * Allows creation of SequoiaDB based tables using
+  * the syntax CREATE [TEMPORARY] TABLE ... USING com.sequoiadb.spark OPTIONS(...)
+  * Required options are detailed in [[com.sequoiadb.spark.SdbConfig]]
+  */
+class DefaultSource extends DataSourceRegister
+    with RelationProvider
+    with SchemaRelationProvider
+    with CreatableRelationProvider
+    with Logging {
 
-    val collectionspace = parameters.getOrElse(CollectionSpace, notFound(CollectionSpace))
+    override def shortName(): String = "sequoiadb"
 
-    val collection = parameters.getOrElse(Collection, notFound(Collection))
-
-    val samplingRatio = parameters
-      .get(SamplingRatio)
-      .map(_.toDouble).getOrElse(DefaultSamplingRatio)
-      
-    val username = parameters.getOrElse(Username, DefaultUsername)
-    
-    val password = parameters.getOrElse(Password, DefaultPassword)
-    
-    val preference = parameters.getOrElse(Preference, DefaultPreference)
-
-    SequoiadbConfigBuilder()
-        .set(Host,host)
-        .set(CollectionSpace,collectionspace)
-        .set(Collection,collection)
-        .set(SamplingRatio,samplingRatio)
-        .set(Username,username)
-        .set(Password,password)
-        .set(Preference,preference).build()
-  }
-  
-  /**
-   * Create relation and providing schema
-   */
-  override def createRelation(
-    sqlContext: SQLContext,
-    parameters: Map[String, String],
-    schema: StructType ): BaseRelation = {
-    SequoiadbRelation(createConfig(parameters),Option(schema))(sqlContext)
-
-  }
-
-  override def createRelation(
-      sqlContext: SQLContext,
-      mode: SaveMode,
-      parameters: Map[String, String],
-      data: DataFrame): BaseRelation = {
-    val config: SequoiadbConfig = createConfig ( parameters )
-    try {
-      // check if the collection exist or writable
-      if ( CollectionUtil.checkCollectionWritable ( mode, config) ) {
-        // if it return true, that means we should write the data into collection
-        data.foreachPartition(it => {
-          // always write through coord node which specified in config
-          new SequoiadbWriter(config).save(it, data.schema)
-            //it.map(row =>SequoiadbRowConverter.rowAsDBObject(row, data.schema)))
-        })
-      }
-      // create relation either returns true or false
-      createRelation(sqlContext, parameters, data.schema)
-    } catch {
-      // convert sequoiadb exception to runtime exception
-      case ex: BaseException => sys.error(s"Error:" + ex.getErrorCode + "(" + ex.getMessage + ")")
-      case ex: Exception => sys.error(s"Error:" + ex.getMessage )
+    /**
+      * Create relation without providing schema
+      */
+    override def createRelation(sqlContext: SQLContext,
+                                parameters: Map[String, String]): BaseRelation = {
+        SdbRelation(sqlContext, SdbConfig(parameters))
     }
-  }
+
+    /**
+      * Create relation with providing schema
+      */
+    override def createRelation(sqlContext: SQLContext,
+                                parameters: Map[String, String],
+                                schema: StructType): BaseRelation = {
+        SdbRelation(sqlContext, SdbConfig(parameters), Option(schema))
+    }
+
+    /**
+      * Creatable relation
+      */
+    override def createRelation(sqlContext: SQLContext,
+                                mode: SaveMode,
+                                parameters: Map[String, String],
+                                data: DataFrame): BaseRelation = {
+        val config = SdbConfig(parameters)
+
+        // if it return true, that means we should write the data into collection
+        if (isCollectionWritable(config, mode)) {
+            // get schema for execution
+            val schema = data.schema
+            data.foreachPartition(it => {
+                // always write through coord node which specified in config
+                new SdbWriter(config).write(it, schema)
+            })
+        }
+
+        SdbRelation(sqlContext, config, Option(data.schema))
+    }
+
+    // Check whether a collection is writable for the given mode
+    // Return true for writable, return false for non-writable, throw exception for error
+    private def isCollectionWritable(config: SdbConfig, mode: SaveMode): Boolean = {
+        val sdb = new Sequoiadb(config.host, config.username, config.password, null)
+
+        try {
+            mode match {
+                case SaveMode.Append =>
+                    ensureCollection(sdb, config.collectionSpace, config.collection, Option(config))
+                    true
+                case SaveMode.Overwrite =>
+                    val cl = ensureCollection(sdb, config.collectionSpace, config.collection, Option(config))
+                    cl.truncate()
+                    true
+                case SaveMode.ErrorIfExists =>
+                    if (isCollectionExist(sdb, config.collectionSpace, config.collection)) {
+                        throw new SdbException(
+                            String.format("Collection [%s.%s] is exist",
+                                config.collectionSpace, config.collection)
+                        )
+                    }
+                    ensureCollection(sdb, config.collectionSpace, config.collection, Option(config))
+                    true
+                case SaveMode.Ignore => false
+                case _ => false
+            }
+        } finally {
+            sdb.disconnect()
+        }
+    }
+
+    private def isCollectionExist(sdb: Sequoiadb, csName: String, clName: String): Boolean = {
+        if (sdb.isCollectionSpaceExist(csName)) {
+            val cs = sdb.getCollectionSpace(csName)
+            if (cs.isCollectionExist(clName)) {
+                return true
+            }
+        }
+
+        false
+    }
+
+    // create CollectionSpace & Collection if they are not existing
+    private def ensureCollection(sdb: Sequoiadb, csName: String, clName: String, config: Option[SdbConfig] = None): DBCollection = {
+        if (!sdb.isCollectionSpaceExist(csName)) {
+            val options = new BasicBSONObject()
+            if (config.nonEmpty) {
+                options.put("PageSize", config.get.pageSize)
+                options.put("LobPageSize", config.get.lobPageSize)
+                val domain = config.get.domain
+                if (domain != "") {
+                    options.put("Domain", domain)
+                }
+                logInfo(s"Using $options to create collection space[$csName]")
+            }
+            sdb.createCollectionSpace(csName, options)
+        }
+        val cs = sdb.getCollectionSpace(csName)
+        if (!cs.isCollectionExist(clName)) {
+            val options = new BasicBSONObject()
+            if (config.nonEmpty) {
+                if (config.get.shardingKey != "") {
+                    val shardingKey = JSON.parse(config.get.shardingKey)
+                        .asInstanceOf[BSONObject]
+                    options.put("ShardingKey", shardingKey)
+                    options.put("ShardingType", config.get.shardingType)
+                    if (config.get.shardingType == SdbConfig.SHARDING_TYPE_HASH) {
+                        options.put("Partition", config.get.clPartition)
+                        if (config.get.autoSplit) {
+                            options.put("AutoSplit", config.get.autoSplit)
+                        }
+                    }
+                }
+                options.put("ReplSize", config.get.replicaSize)
+                if (config.get.compressionType != SdbConfig.COMPRESSION_TYPE_NONE) {
+                    options.put("Compressed", true)
+                    options.put("CompressionType", config.get.compressionType)
+                }
+                if (config.get.group != "") {
+                    options.put("Group", config.get.group)
+                }
+                logInfo(s"Using $options to create collection[$csName.$clName]")
+            }
+            cs.createCollection(clName, options)
+        }
+        cs.getCollection(clName)
+    }
 }

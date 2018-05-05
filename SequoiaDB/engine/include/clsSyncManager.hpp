@@ -55,6 +55,9 @@ namespace engine
 
    typedef multiset<DPS_LSN_OFFSET> CLS_WAKE_PLAN ;
 
+   /*
+      _clsSyncManager define
+   */
    class _clsSyncManager : public SDBObject
    {
    public:
@@ -88,21 +91,27 @@ namespace engine
 
       OSS_INLINE BOOLEAN isReadyToReplay()
       {
-         _info->mtx.lock_r() ;
-         BOOLEAN rc = _info->primary.value ==
-                      _info->local.value &&
-                      _info->primary.value !=
-                      MSG_INVALID_ROUTEID ?
-                      FALSE : TRUE ;
-         _info->mtx.release_r() ;
+         BOOLEAN rc = _enableSync ;
+         if ( rc )
+         {
+            _info->mtx.lock_r() ;
+            rc = ( _info->primary.value == _info->local.value &&
+                   _info->primary.value != MSG_INVALID_ROUTEID ) ?
+                 FALSE : TRUE ;
+            _info->mtx.release_r() ;
+         }
          return rc ;
+      }
+
+      void  enableSync( BOOLEAN enable )
+      {
+         _enableSync = enable ;
       }
 
       void cut( UINT32 alives ) ;
 
       DPS_LSN_OFFSET getSyncCtrlArbitLSN() ;
 
-      /// offset is current offset.
       BOOLEAN atLeastOne( const DPS_LSN_OFFSET &offset ) ;
 
    private:
@@ -121,8 +130,6 @@ namespace engine
                            _clsSyncStatus *left ) ;
 
    private:
-      /// sub between <0, CLS_REPLSET_MAX_NODE_SIZE - 2>.
-      /// means ( w = 2 ) to ( w = CLS_REPLSET_MAX_NODE_SIZE ).
       _clsSyncMinHeap _syncList[CLS_REPLSET_MAX_NODE_SIZE - 1] ;
       DPS_LSN_OFFSET  _checkList[CLS_REPLSET_MAX_NODE_SIZE -1] ;
       _ossSpinXLatch _mtxs[CLS_REPLSET_MAX_NODE_SIZE - 1] ;
@@ -132,12 +139,12 @@ namespace engine
       _clsGroupInfo *_info ;
       MsgRouteID _syncSrc ;
 
-      /// valid _notifyList size
       UINT32 _validSync ;
       UINT32 _timeout ;
       UINT32 _aliveCount ;
 
-      UINT32 _wakeTimeout ;
+      UINT32   _wakeTimeout ;
+      BOOLEAN  _enableSync ;
 
    } ;
 }

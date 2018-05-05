@@ -39,6 +39,8 @@
 #ifndef DPSDEF_HPP_
 #define DPSDEF_HPP_
 
+#include "ossTypes.h"
+
 #if defined (_WINDOWS)
 #define DPS_INVALID_LSN_OFFSET   0xFFFFFFFFFFFFFFFFLL
 #elif defined (_LINUX)
@@ -60,6 +62,11 @@
 #define DPS_TAG            UINT8
 
 #define DPS_LOG_FILE_SIZE_UNIT         (1024 * 1024)
+
+#define DPS_LOG_INVALIDCATA_TYPE_ALL   ( 0xff )
+#define DPS_LOG_INVALIDCATA_TYPE_CATA  ( 0x01 )
+#define DPS_LOG_INVALIDCATA_TYPE_STAT  ( 0x02 )
+#define DPS_LOG_INVALIDCATA_TYPE_PLAN  ( 0x04 )
 
 typedef UINT64 DPS_TRANS_ID;
 typedef UINT64 DPS_LSN_OFFSET ;
@@ -87,6 +94,14 @@ enum DPS_LOG_TYPE
    LOG_TYPE_LOB_REMOVE   = 0x10,
    LOG_TYPE_LOB_UPDATE   = 0x11,
    LOG_TYPE_LOB_TRUNCATE = 0x12,
+   LOG_TYPE_CS_RENAME    = 0x13,
+   LOG_TYPE_DATA_POP     = 0x14,
+} ;
+
+enum DPS_MOMENT
+{
+   DPS_BEFORE = 0,
+   DPS_AFTER  = 1,
 } ;
 
 namespace engine
@@ -103,13 +118,24 @@ namespace engine
 
          virtual INT32 canAssignLogPage( UINT32 reqLen, _pmdEDUCB *cb ) = 0 ;
 
-         virtual void onPrepareLog( UINT32 csLID, UINT32 clLID,
-                                    INT32 extLID, DPS_LSN_OFFSET offset ) = 0 ;
+         virtual void  onPrepareLog( UINT32 csLID, UINT32 clLID,
+                                     INT32 extLID, DPS_LSN_OFFSET offset ) = 0 ;
 
-         virtual void onWriteLog( DPS_LSN_OFFSET offset ) = 0 ;
+         virtual void  onWriteLog( DPS_LSN_OFFSET offset ) = 0 ;
 
          virtual INT32 onCompleteOpr( _pmdEDUCB *cb, INT32 w ) = 0 ;
 
+         virtual void  onSwitchLogFile( UINT32 preLogicalFileId,
+                                        UINT32 preFileId,
+                                        UINT32 curLogicalFileId,
+                                        UINT32 curFileId ) = 0 ;
+
+         virtual void  onMoveLog( DPS_LSN_OFFSET moveToOffset,
+                                  DPS_LSN_VER moveToVersion,
+                                  DPS_LSN_OFFSET expectOffset,
+                                  DPS_LSN_VER expectVersion,
+                                  DPS_MOMENT moment,
+                                  INT32 errcode ) = 0 ;
    } ;
    typedef _dpsEventHandler dpsEventHandler ;
 

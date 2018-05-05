@@ -20,15 +20,15 @@
  *    Win:
  *       cl /Fosampledb.obj /c sampledb.c /I..\..\include /wd4047
  *       cl /Focommon.obj /c common.c /I..\..\include /wd4047
- *       link /OUT:sampledb.exe /LIBPATH:..\..\lib sdbc.lib sampledb.obj common.obj
- *       copy ..\..\lib\sdbc.dll .
+ *       link /OUT:sampledb.exe /LIBPATH:..\..\lib\c\debug\dll sdbcd.lib sampledb.obj common.obj
+ *       copy ..\..\lib\c\debug\dll\sdbcd.dll .
  *    Static Linking:
  *    Linux: cc sampledb.c common.c -o sampledb.static -I../../include -O0
  *           -ggdb ../../lib/libstaticsdbc.a -lm -ldl -lpthread
  *    Win:
  *       cl /Fosampledbstatic.obj /c sampledb.c /I..\..\include /wd4047 /DSDB_STATIC_BUILD
  *       cl /Focommonstatic.obj /c common.c /I..\..\include /wd4047 /DSDB_STATIC_BUILD
- *       link /OUT:sampledbstaic.exe /LIBPATH:..\..\lib staticsdbc.lib sampledbstatic.obj commonstatic.obj
+ *       link /OUT:sampledbstaic.exe /LIBPATH:..\..\lib\c\debug\static staticsdbcd.lib sampledbstatic.obj commonstatic.obj
  * Run:
  *    Linux: LD_LIBRARY_PATH=<path for libsdbc.so> ./sampledb <hostname> <servicename> \
  *           <Username> <Username>
@@ -77,6 +77,8 @@ INT32 loadFromFile ( const CHAR *pFileName,
          bson_init ( &obj ) ;
       }
    }
+   bson_destroy ( &obj ) ;
+   fclose( pFile ) ;
    return SDB_OK ;
 }
 
@@ -94,7 +96,8 @@ INT32 main ( INT32 argc, CHAR **argv )
    if ( 5 != argc )
    {
       displaySyntax ( (CHAR*)argv[0] ) ;
-      exit ( 0 ) ;
+      rc = SDB_INVALIDARG ;
+      goto error ;
    }
 
    /* read argument */
@@ -109,7 +112,7 @@ INT32 main ( INT32 argc, CHAR **argv )
    {
       printf ( "Failed to connect to database at %s:%s, rc = %d\n",
                pHostName, pServiceName, rc ) ;
-      exit ( 0 ) ;
+      goto error ;
    }
 
    rc = loadFromFile ( SAMPLE_DATA_FILE_NAME, connection ) ;
@@ -117,10 +120,15 @@ INT32 main ( INT32 argc, CHAR **argv )
    {
       printf ( "Failed to load from file %s, rc = %d\n",
                SAMPLE_DATA_FILE_NAME, rc ) ;
-      exit ( 0 ) ;
+      goto error ;
    }
 
+   sdbDisconnect( connection ) ;
+
+done:
    /* dispose connection */
    sdbReleaseConnection ( connection ) ;
-   return 0 ;
+   return rc ;
+error:
+   goto done ;
 }

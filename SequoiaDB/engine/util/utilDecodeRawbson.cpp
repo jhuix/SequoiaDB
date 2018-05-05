@@ -124,47 +124,102 @@ void _utilPrintLog( const CHAR *pFunc,
    pdLog( PDERROR, pFunc, pFile, line, userInfo ) ;
 }
 
-INT32 utilDecodeBson::init( CHAR delChar, CHAR delField,
-                            BOOLEAN includeBinary,
-                            BOOLEAN includeRegex )
+INT32 utilDecodeBson::_checkFormat( const CHAR *pFloatFmt )
 {
    INT32 rc = SDB_OK ;
-   if ( delChar == delField )
+
+   if( pFloatFmt == NULL )
    {
-      rc = SDB_INVALIDARG ;
-      PD_LOG ( PDERROR, "delchar does not like delfield" ) ;
-      goto error ;
+      goto done ;
    }
-   else if ( UTIL_DE_STR_SPACE == delChar )
+
+   if( pFloatFmt[0] != '%' )
    {
       rc = SDB_INVALIDARG ;
-      PD_LOG ( PDERROR, "delchar can not be a space" ) ;
-      goto error ;
-   }
-   else if ( UTIL_DE_STR_TABLE == delChar )
-   {
-      rc = SDB_INVALIDARG ;
-      PD_LOG ( PDERROR, "delchar can not be a tab" ) ;
+      PD_LOG ( PDERROR, "floatfmt is invalid, format is %[+][.Precision]Type" ) ;
       goto error ;
    }
 
-   if ( UTIL_DE_STR_SPACE == delField )
+   ++pFloatFmt ;
+
+   if( pFloatFmt[0] == '+' )
+   {
+      ++pFloatFmt ;
+   }
+
+   if( pFloatFmt[0] == '.' )
+   {
+      ++pFloatFmt ;
+      for( ; pFloatFmt[0] >= '0' && pFloatFmt[0] <= '9'; ++pFloatFmt )
+      {
+      }
+   }
+
+   if( pFloatFmt[0] != 'f' && pFloatFmt[0] != 'e' && pFloatFmt[0] != 'E' &&
+       pFloatFmt[0] != 'g' && pFloatFmt[0] != 'G' )
    {
       rc = SDB_INVALIDARG ;
-      PD_LOG ( PDERROR, "delfield can not be a space" ) ;
+      PD_LOG ( PDERROR, "floatfmt is invalid, type is f|e|E|g|G" ) ;
       goto error ;
    }
-   else if ( UTIL_DE_STR_TABLE == delField )
+
+   ++pFloatFmt ;
+
+   if( pFloatFmt[0] != 0 )
    {
       rc = SDB_INVALIDARG ;
-      PD_LOG ( PDERROR, "delfield can not be a tab" ) ;
+      PD_LOG ( PDERROR, "floatfmt is invalid, format is %[+][.Precision]Type" ) ;
       goto error ;
+   }
+
+done:
+   return rc ;
+error:
+   goto done ;
+}
+
+INT32 utilDecodeBson::init( std::string delChar, std::string delField,
+                            BOOLEAN includeBinary,
+                            BOOLEAN includeRegex,
+                            BOOLEAN kickNull,
+                            BOOLEAN isStrict,
+                            const CHAR *pFloatFmt )
+{
+   INT32 rc = SDB_OK ;
+
+   if ( _delChar.size() > 0 && std::string::npos != delField.find( delChar ) )
+   {
+      rc = SDB_INVALIDARG ;
+      PD_LOG ( PDERROR, "delfield can not contain delchar" ) ;
+      goto error ;
+   }
+
+   if( pFloatFmt != NULL )
+   {
+      if( ossStrncmp( pFloatFmt, "db2", 3 ) == 0 )
+      {
+         setCsvPrecision( "%+.14E" ) ;
+         setJsonPrecision( "%+.14E" ) ;
+      }
+      else
+      {
+         rc = _checkFormat( pFloatFmt ) ;
+         if( rc )
+         {
+            PD_LOG ( PDERROR, "failed to parse format" ) ;
+            goto error ;
+         }
+         setCsvPrecision( pFloatFmt ) ;
+         setJsonPrecision( pFloatFmt ) ;
+      }
    }
 
    _delChar = delChar ;
    _delField = delField ;
    _includeBinary = includeBinary ;
    _includeRegex = includeRegex ;
+   _kickNull = kickNull ;
+   _isStrict = isStrict ;
    setPrintfLog( _utilPrintLog ) ;
 done:
    return rc ;
@@ -172,10 +227,12 @@ error:
    goto done ;
 }
 
-utilDecodeBson::utilDecodeBson() : _delChar(0),
-                                   _delField(0),
+utilDecodeBson::utilDecodeBson() : _delChar(),
+                                   _delField(),
                                    _includeBinary(FALSE),
-                                   _includeRegex(FALSE)
+                                   _includeRegex(FALSE),
+                                   _kickNull(FALSE),
+                                   _isStrict(FALSE)
 {
 }
 
@@ -241,7 +298,6 @@ INT32 utilDecodeBson::_parseSubField( CHAR *pField, fieldResolve *pParent )
          PD_LOG ( PDERROR, "Field does not has the\".\" symbol", rc ) ;
          goto error ;
       }
-      //off export a.b
       *pSubField = 0 ;
       ++pSubField ;
       pFieldRe->pField = pField ;
@@ -375,8 +431,8 @@ error:
 INT32 utilDecodeBson::parseCSVSize( CHAR *pbson, INT32 *pCSVSize )
 {
    INT32 rc = SDB_OK ;
-   rc = getCSVSize( _delChar, _delField, pbson, pCSVSize,
-                    _includeBinary, _includeRegex ) ;
+   rc = getCSVSize( _delChar.c_str(), _delField.c_str(), _delField.size(),
+                    pbson, pCSVSize, _includeBinary, _includeRegex, _kickNull ) ;
    if ( rc )
    {
       PD_LOG ( PDERROR, "Failed to get csv size, rc = %d", rc ) ;
@@ -406,6 +462,7 @@ INT32 utilDecodeBson::parseJSONSize( CHAR *pbson, INT32 *pJSONSize )
       PD_LOG ( PDERROR, "Failed to get json size, rc = %d", rc ) ;
       goto error ;
    }
+   *pJSONSize = (*pJSONSize) * 2 ;
 done:
    return rc ;
 error:
@@ -495,8 +552,9 @@ INT32 utilDecodeBson::bsonCovertCSV( CHAR *pbson,
       }
    }
    bson_finish ( &obj ) ;
-   rc = bson2csv( _delChar, _delField, obj.data, ppBuffer, pCSVSize,
-                  _includeBinary, _includeRegex ) ;
+   rc = bson2csv( _delChar.c_str(), _delField.c_str(), _delField.size(),
+                  obj.data, ppBuffer, pCSVSize,
+                  _includeBinary, _includeRegex, _kickNull ) ;
    if ( rc )
    {
       PD_LOG ( PDERROR, "Failed to bson convert csv, rc = %d", rc ) ;
@@ -543,7 +601,7 @@ INT32 utilDecodeBson::bsonCovertJson( CHAR *pbson,
       }
    }
    bson_finish ( &obj ) ;
-   if ( !bsonToJson ( *ppBuffer, *pJSONSize, &obj, FALSE, TRUE ) )
+   if ( !bsonToJson2 ( *ppBuffer, *pJSONSize, &obj, _isStrict ) )
    {
       rc = SDB_OOM ;
       PD_LOG ( PDERROR, "Failed to convert bson to json, rc=%d", rc ) ;

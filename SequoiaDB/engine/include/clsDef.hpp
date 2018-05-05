@@ -68,7 +68,6 @@ namespace engine
    #define CLS_BEATID_BEGIN                     ( 1 )
    #define CLS_BEATID_INVALID                   ( 0 )
 
-   //full sync node timeout
    #define CLS_FS_NORES_TIMEOUT                 (10000)  // 10 secs
    #define CLS_DST_SESSION_NO_MSG_TIME          (300000) // 5 mins
    #define CLS_SRC_SESSION_NO_MSG_TIME          (10000)  // 10 secs
@@ -119,7 +118,8 @@ namespace engine
       DPS_LSN                 endLsn ;
       _MsgRouteID             identity ;
       UINT8                   weight ;
-      CHAR                    pad[7] ;
+      CHAR                    pad[3] ;
+      CHAR                    hashCode[4] ;
       CLS_GROUP_VERSION       version ;
       CLS_GROUP_ROLE          role ;         // self role
       CLS_SYNC_STATUS         syncStatus ;
@@ -194,8 +194,13 @@ namespace engine
       _MsgRouteID local ;
       UINT32 localBeatID ;
       CLS_GROUP_VERSION version ;
+
+   private:
+      UINT32 _hashCode ;
+
+   public:
       _clsGroupInfo():localBeatID( CLS_BEATID_BEGIN ),
-                      version( 0 )
+                      version( 0 ), _hashCode( 0 )
       {
          local.value = 0 ;
          primary.value = 0 ;
@@ -214,6 +219,9 @@ namespace engine
          }
          return localBeatID ;
       }
+
+      void     setHashCode( UINT32 hashCode ) { _hashCode = hashCode ; }
+      UINT32   getHashCode() const { return _hashCode ; }
 
       UINT32 groupSize ()
       {
@@ -305,8 +313,6 @@ namespace engine
       DPS_LSN_OFFSET endLsn ;
       _pmdEDUCB *eduCB ;
 
-      /// local write has been completed.
-      /// synced starts from one.
       _clsSyncSession():endLsn(DPS_INVALID_LSN_OFFSET), eduCB( NULL)
       {}
 
@@ -354,9 +360,6 @@ namespace engine
 
       BOOLEAN isValid() const
       {
-         // 1. already full sync
-         // 2. sharing-break
-         // 3. same sync req more than 20 times
          if ( DPS_INVALID_LSN_OFFSET == offset ||
               !valid ||
               sameReqTimes > CLS_SAME_SYNC_LSN_MAX_TIMES )

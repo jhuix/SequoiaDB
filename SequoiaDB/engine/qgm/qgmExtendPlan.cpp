@@ -46,7 +46,7 @@ namespace engine
         do\
         {\
            QGM_EXTEND_TABLE::iterator itr = _table.begin() ;\
-           for ( ; itr != _table.end(); itr++ )\
+           for ( ; itr != _table.end(); ++itr )\
            {\
               if ( _local != itr->second )\
               {\
@@ -67,7 +67,6 @@ namespace engine
    {
       _local = NULL ;
       _table.clear() ;
-      /// warning: node in _table will not be released here!
    }
 
    PD_TRACE_DECLARE_FUNCTION( SDB__QGMEXTENDPLAN_EXTEND, "_qgmExtendPlan::extend" )
@@ -85,7 +84,7 @@ namespace engine
       }
       {
       QGM_EXTEND_TABLE::iterator itr = _table.begin() ;
-      for ( ; itr != _table.end(); itr++ )
+      for ( ; itr != _table.end(); ++itr )
       {
          if ( NULL == itr->second )
          {

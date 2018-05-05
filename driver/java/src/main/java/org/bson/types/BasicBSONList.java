@@ -1,4 +1,3 @@
-// BasicBSONList.java
 
 /**
  *      Copyright (C) 2008 10gen Inc.
@@ -21,14 +20,12 @@ package org.bson.types;
 import org.bson.*;
 import org.bson.util.StringRangeSet;
 
-import java.lang.reflect.Constructor;
-import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.*;
 
 /**
- * Utility class to allow array <code>DBObject</code>s to be created.
+ * Utility class to allow array <code>BSONObject</code>s to be created.
  * <p>
  * Note: MongoDB will also create arrays from <code>java.util.List</code>s.
  * </p>
@@ -36,14 +33,14 @@ import java.util.*;
  * <blockquote>
  * 
  * <pre>
- * DBObject obj = new BasicBSONList();
+ * BSONObject obj = new BasicBSONList();
  * obj.put(&quot;0&quot;, value1);
  * obj.put(&quot;4&quot;, value2);
  * obj.put(2, value3);
  * </pre>
  * 
  * </blockquote> This simulates the array [ value1, null, value3, null, value2 ]
- * by creating the <code>DBObject</code>
+ * by creating the <code>BSONObject</code>
  * <code>{ "0" : value1, "1" : null, "2" : value3, "3" : null, "4" : value2 }</code>
  * .
  * </p>
@@ -100,6 +97,12 @@ public class BasicBSONList extends ArrayList<Object> implements BSONObject {
 		return v;
 	}
 
+	/**
+	 * Sets all key/value pairs from a map into this object
+	 * 
+	 * @param m
+	 *            the map
+	 */
 	@SuppressWarnings("unchecked")
 	public void putAll(Map m) {
 		for (Map.Entry entry : (Set<Map.Entry>) m.entrySet()) {
@@ -107,6 +110,12 @@ public class BasicBSONList extends ArrayList<Object> implements BSONObject {
 		}
 	}
 
+	/**
+	 * Sets all key/value pairs from an object into this object
+	 * 
+	 * @param o
+	 *            the object
+	 */
 	public void putAll(BSONObject o) {
 		for (String k : o.keySet()) {
 			put(k, o.get(k));
@@ -132,6 +141,13 @@ public class BasicBSONList extends ArrayList<Object> implements BSONObject {
 		return get(i);
 	}
 
+	/**
+	 * Deletes a field from this object.
+	 * 
+	 * @param key
+	 *            the field name to remove
+	 * @return the object removed
+	 */
 	public Object removeField(String key) {
 		int i = _getInt(key);
 		if (i < 0)
@@ -149,6 +165,13 @@ public class BasicBSONList extends ArrayList<Object> implements BSONObject {
 		return containsField(key);
 	}
 
+	/**
+	 * Checks if this object contains a given field
+	 * 
+	 * @param key
+	 *            field name
+	 * @return if the field exists
+	 */
 	public boolean containsField(String key) {
 		int i = _getInt(key, false);
 		if (i < 0)
@@ -156,10 +179,20 @@ public class BasicBSONList extends ArrayList<Object> implements BSONObject {
 		return i >= 0 && i < size();
 	}
 
+	/**
+	 * Returns this object's fields' names
+	 * 
+	 * @return The names of the fields in this object
+	 */
 	public Set<String> keySet() {
 		return new StringRangeSet(size());
 	}
 
+	/**
+	 * Converts a BSONObject to a map.
+	 * 
+	 * @return the Map Object
+	 */
 	@SuppressWarnings("unchecked")
 	public Map toMap() {
 		Map m = new HashMap();
@@ -188,40 +221,34 @@ public class BasicBSONList extends ArrayList<Object> implements BSONObject {
 	}
 
 	/**
-	 * Returns an instance of the class "type" only for BasicBsonObject
-	 * 
-	 * @param type
+	 * Returns an instance of the class "cls" only for BasicBsonObject.
+	 * @param cls target class object
 	 * @return the instance of the class
-	 * @throws Exception
+	 * @throws Exception UnsupportedOperationException
 	 */
-	//@Override
-	public <T> T as(Class<T> type) throws Exception {
+	public <T> T as(Class<T> cls) throws Exception {
 		throw new UnsupportedOperationException();
 	}
 
-	/**
-     * 
-     */
 	@SuppressWarnings({ "rawtypes", "unchecked" })
-	//@Override
-	public <T> T as(Class<T> type, Type eleType) throws Exception {
+	public <T> T as(Class<T> cls, Type eleType) throws Exception {
 
-		if (!Collection.class.isAssignableFrom(type)) {
+		if (!Collection.class.isAssignableFrom(cls)) {
 			throw new IllegalArgumentException(
 					"Current version only support as to subclass of java.util.Collection.");
 		}
 
 		Collection colletion = null;
 
-		if (List.class.isAssignableFrom(type)) {
+		if (List.class.isAssignableFrom(cls)) {
 			colletion = new LinkedList();
-		} else if (Set.class.isAssignableFrom(type)) {
+		} else if (Set.class.isAssignableFrom(cls)) {
 			colletion = new TreeSet();
-		} else if (Queue.class.isAssignableFrom(type)) {
+		} else if (Queue.class.isAssignableFrom(cls)) {
 			colletion = new LinkedList();
 		} else {
 			throw new IllegalArgumentException(
-					"Current version not support type:" + type.getName());
+					"Current version not support type:" + cls.getName());
 		}
 
 		Object eleObj = null;
@@ -249,7 +276,9 @@ public class BasicBSONList extends ArrayList<Object> implements BSONObject {
 				}
 
 				BSONObject comlexObj = (BSONObject) eleObj;
-				colletion.add(comlexObj.as((Class<?>)(((ParameterizedType) eleType).getRawType()), nestedEleType));
+				colletion.add(comlexObj.as(
+								(Class<?>) (((ParameterizedType) eleType)
+										.getRawType()), nestedEleType));
 			} else {
 				throw new IllegalArgumentException(
 						"Current version not support type:"
@@ -260,28 +289,24 @@ public class BasicBSONList extends ArrayList<Object> implements BSONObject {
 		return (T) colletion;
 	}
 
-    public Object asList() {
-        Collection<Object> colletion = new LinkedList<Object>();
-        for (String key : this.keySet()) {
-            Object v = this.get(key);
-            if (v == null) {
-                continue;
-            }
-            else if (BSON.IsBasicType(v)){
-                colletion.add(v);
-            }
-            else if ( v instanceof BasicBSONList ){
-                colletion.add(((BasicBSONList)v).asList());
-            }
-            else if ( v instanceof BasicBSONObject ){
-                colletion.add(((BasicBSONObject)v).asMap());
-            }
-            else{
-                throw new IllegalArgumentException(
-                        "can't support in list. value_type=" + v.getClass());
-            }
-        }
-        
-        return colletion;
-    }
+	public Object asList() {
+		Collection<Object> colletion = new LinkedList<Object>();
+		for (String key : this.keySet()) {
+			Object v = this.get(key);
+			if (v == null) {
+				continue;
+			} else if (BSON.IsBasicType(v)) {
+				colletion.add(v);
+			} else if (v instanceof BasicBSONList) {
+				colletion.add(((BasicBSONList) v).asList());
+			} else if (v instanceof BasicBSONObject) {
+				colletion.add(((BasicBSONObject) v).asMap());
+			} else {
+				throw new IllegalArgumentException(
+						"can't support in list. value_type=" + v.getClass());
+			}
+		}
+
+		return colletion;
+	}
 }

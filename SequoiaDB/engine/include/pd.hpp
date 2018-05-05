@@ -36,10 +36,7 @@
 #ifndef PD_HPP_
 #define PD_HPP_
 
-#include "core.h"
-#include "oss.h"
-#include <string>
-#include <stdlib.h>
+#include "pdErr.hpp"
 
 #define PD_DFT_FILE_NUM             (20)
 #define PD_DFT_FILE_SZ              (100)
@@ -48,14 +45,23 @@
 
 #define PD_LOG_STRINGMAX            ( 4096 )
 
-#ifdef _DEBUG
-#define SDB_ASSERT(cond,str)  \
-   do { \
-      if( !(cond) ) { pdassert(str,__FUNC__,__FILE__,__LINE__) ; } \
-      } while ( 0 )
+#ifdef SDB_CLIENT
+   #ifdef _DEBUG
+      #include <assert.h>
+      #define SDB_ASSERT(cond,str)  assert(cond)
+   #else
+      #define SDB_ASSERT(cond,str)  do{ if( !(cond)) {} } while ( 0 )
+   #endif // _DEBUG
 #else
-#define SDB_ASSERT(cond,str)  do{ if( !(cond)) {} } while ( 0 )
-#endif // _DEBUG
+   #ifdef _DEBUG
+      #define SDB_ASSERT(cond,str)  \
+      do { \
+         if( !(cond) ) { pdassert(str,__FUNC__,__FILE__,__LINE__) ; } \
+      } while ( 0 )
+   #else
+      #define SDB_ASSERT(cond,str)  do{ if( !(cond)) {} } while ( 0 )
+   #endif // _DEBUG
+#endif // SDB_CLIENT
 
 #define SDB_VALIDATE_GOTOERROR(cond, ret, str) \
    do { \
@@ -132,6 +138,9 @@ const CHAR* getDialogName() ;
 const CHAR* getDialogPath() ;
 const CHAR* getPDLevelDesp ( PDLEVEL level ) ;
 
+void setDiagFileNum( INT32 fileMaxNum ) ;
+void setAuditFileNum( INT32 fileMaxNum ) ;
+
 void sdbEnablePD( const CHAR *pdPathOrFile,
                   INT32 fileMaxNum = PD_DFT_FILE_NUM,
                   UINT32 fileMaxSize = PD_DFT_FILE_SZ ) ;
@@ -149,21 +158,6 @@ void pdcheck( const CHAR* string, const CHAR* func,
 #define pdassert(str1,str2,str3,str4)
 #define pdcheck(str1,str2,str3,str4)
 #endif
-
-/*
-   _pdGeneralException define
-*/
-struct _pdGeneralException : public std::exception
-{
-   std::string s ;
-   _pdGeneralException ( std::string ss ) : s (ss) {}
-   ~_pdGeneralException() throw() {}
-   const CHAR *what() const throw()
-   {
-      return s.c_str() ;
-   }
-} ;
-typedef struct _pdGeneralException pdGeneralException ;
 
 /*
    pdLog function define
@@ -186,8 +180,6 @@ enum AUDIT_TYPE
    AUDIT_SYSTEM         = 3,     /// System Info
 
    AUDIT_DML            = 8,     /// Insert, Update, Delete operation, but
-                                 /// not include detail records. If you need
-                                 /// to audit detail info, use AUDIT_INSERT...
    AUDIT_DDL            = 9,     /// Create/Drop Collection, and so on
    AUDIT_DCL            = 10,    /// Create User, Drop User and so on
    AUDIT_DQL            = 11,    /// Query, Explain
@@ -211,7 +203,7 @@ enum AUDIT_TYPE
 #define AUDIT_MASK_INSERT     0x00000400
 #define AUDIT_MASK_OTHER      0x00001000
 
-#define AUDIT_MASK_DEFAULT    ( AUDIT_SYSTEM | AUDIT_MASK_DDL | AUDIT_MASK_DCL )
+#define AUDIT_MASK_DEFAULT    ( AUDIT_MASK_SYSTEM | AUDIT_MASK_DDL | AUDIT_MASK_DCL )
 #define AUDIT_MASK_DFT_STR    "SYSTEM|DDL|DCL"
 #define AUDIT_MASK_ALL        0xFFFFFFFF
 

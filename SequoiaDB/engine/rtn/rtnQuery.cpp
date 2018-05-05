@@ -37,19 +37,27 @@
 *******************************************************************************/
 #include "rtn.hpp"
 #include "dmsStorageUnit.hpp"
-#include "mthMatcher.hpp"
 #include "mthSelector.hpp"
-#include "rtnAPM.hpp"
+#include "optAPM.hpp"
 #include "rtnIXScanner.hpp"
 #include "pdTrace.hpp"
 #include "rtnTrace.hpp"
+#include "rtnContextData.hpp"
 #include "rtnContextSort.hpp"
+#include "rtnContextExplain.hpp"
+#include "rtnContextTS.hpp"
 #include "rtnQueryModifier.hpp"
 
 using namespace bson ;
 
 namespace engine
 {
+   enum _rtnQueryType
+   {
+      RTN_QUERY_NORMAL = 1,
+      RTN_QUERY_TEXT
+   } ;
+   typedef _rtnQueryType rtnQueryType ;
 
    // PD_TRACE_DECLARE_FUNCTION ( SDB_RTNGETMORE, "rtnGetMore" )
    INT32 rtnGetMore ( SINT64 contextID,         // input, context id
@@ -67,19 +75,10 @@ namespace engine
 
       rtnContext *context = NULL ;
 
-      // retrieve the context pointer
-      context = rtnCB->contextFind ( contextID ) ;
+      context = rtnCB->contextFind ( contextID, cb ) ;
       if ( !context )
       {
          PD_LOG ( PDERROR, "Context %lld does not exist", contextID ) ;
-         rc = SDB_RTN_CONTEXT_NOTEXIST ;
-         goto error ;
-      }
-      // make sure the context belongs to the current session
-      if ( !cb->contextFind ( contextID ) )
-      {
-         PD_LOG ( PDERROR, "Context %lld does not owned by current session",
-                  contextID ) ;
          rc = SDB_RTN_CONTEXT_NOTEXIST ;
          goto error ;
       }
@@ -89,15 +88,15 @@ namespace engine
       {
          if ( SDB_DMS_EOC == rc )
          {
-            PD_LOG( PDINFO, "Hit end of collection" ) ;
+            PD_LOG( PDDEBUG, "Hit end of context" ) ;
             goto error ;
          }
          PD_LOG( PDERROR, "Failed to get more from context[%lld], rc: %d",
                  context->contextID(), rc ) ;
+         context->getErrorInfo( rc, cb, buffObj ) ;
          goto error ;
       }
 
-      /// wait for sync
       if ( context->isWrite() && context->getDPSCB() && context->getW() > 1 )
       {
          context->getDPSCB()->completeOpr( cb, context->getW() ) ;
@@ -107,7 +106,10 @@ namespace engine
       PD_TRACE_EXITRC ( SDB_RTNGETMORE, rc ) ;
       return rc ;
    error :
-      rtnCB->contextDelete ( contextID, cb ) ;
+      if ( context )
+      {
+         rtnCB->contextDelete ( contextID, cb ) ;
+      }
       goto done ;
    }
 
@@ -130,7 +132,6 @@ namespace engine
 
          if ( 0 == ossStrcmp( elem.fieldName(), FIELD_NAME_MODIFY ) )
          {
-            // $Modify
             BSONObj modify = elem.Obj() ;
             const CHAR* op = NULL ;
 
@@ -273,6 +274,129 @@ namespace engine
       goto done ;
    }
 
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__FINDFIELDINOBJ, "_findFieldInObj" )
+   static INT32 _findFieldInObj( const BSONObj &object, const CHAR *fieldName,
+                                 BOOLEAN &found )
+   {
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY( SDB__FINDFIELDINOBJ ) ;
+
+      try
+      {
+         if ( object.hasField( fieldName ) )
+         {
+            found = TRUE ;
+            goto done ;
+         }
+         else
+         {
+            BSONObjIterator itr( object ) ;
+            while ( itr.more() )
+            {
+               BSONElement ele = itr.next() ;
+               if ( Object == ele.type() )
+               {
+                  rc = _findFieldInObj( ele.Obj(), fieldName, found ) ;
+                  if ( rc )
+                  {
+                     goto error ;
+                  }
+                  if ( found )
+                  {
+                     goto done ;
+                  }
+               }
+            }
+         }
+      }
+      catch ( std::exception &e )
+      {
+         rc = SDB_SYS ;
+         PD_LOG( PDERROR, "Unexpected exception happened: %s", e.what() ) ;
+         goto error ;
+      }
+
+   done:
+      PD_TRACE_EXITRC( SDB__FINDFIELDINOBJ, rc ) ;
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__GETQUERYTYPE, "_getQueryType" )
+   static INT32 _getQueryType( const BSONObj &query, rtnQueryType &qType )
+   {
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY( SDB__GETQUERYTYPE ) ;
+      BOOLEAN textFound = FALSE ;
+
+      rc = _findFieldInObj( query, FIELD_NAME_TEXT, textFound ) ;
+      PD_RC_CHECK( rc, PDERROR, "Find field[ %s ] in query[ %s ]failed[ %d ]",
+                   FIELD_NAME_TEXT, query.toString().c_str(), rc ) ;
+      qType = textFound ? RTN_QUERY_TEXT : RTN_QUERY_NORMAL ;
+
+   done:
+      PD_TRACE_EXITRC( SDB__GETQUERYTYPE, rc ) ;
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB_RTNQUERYWITHTS, "rtnQueryWithTS" )
+   static INT32 rtnQueryWithTS( const rtnQueryOptions &options, pmdEDUCB *cb,
+                                SDB_RTNCB *rtnCB, SINT64 &contextID,
+                                rtnContextBase **ppContext, BOOLEAN enablePrefetch )
+   {
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY( SDB_RTNQUERYWITHTS ) ;
+      INT64 tmpContextID = -1 ;
+      rtnContextTS *contextTS = NULL ;
+
+      if ( options.testFlag( FLG_QUERY_EXPLAIN ) )
+      {
+         rc = SDB_OPTION_NOT_SUPPORT ;
+         PD_LOG( PDERROR, "Explain query with text search condition is not "
+                 "support yet" ) ;
+         goto error ;
+      }
+      else
+      {
+         rc = rtnCB->contextNew( RTN_CONTEXT_TS, (rtnContext **)&contextTS,
+                                 tmpContextID, cb ) ;
+         PD_RC_CHECK( rc, PDERROR, "Failed to create new text search context, "
+                      "rc: %d", rc ) ;
+         if ( options.canPrepareMore() )
+         {
+            contextTS->setPrepareMoreData( TRUE ) ;
+         }
+
+         rc = contextTS->open( options, cb ) ;
+         PD_RC_CHECK( rc, PDERROR, "Failed to open text search context, "
+                      "rc: %d", rc ) ;
+      }
+
+      if ( cb->getMonConfigCB()->timestampON )
+      {
+         contextTS->getMonCB()->recordStartTimestamp() ;
+      }
+
+      contextID = tmpContextID ;
+      if ( ppContext )
+      {
+         *ppContext = contextTS ;
+      }
+
+   done:
+      PD_TRACE_EXITRC( SDB_RTNQUERYWITHTS, rc ) ;
+      return rc ;
+   error:
+      if ( -1 != tmpContextID )
+      {
+         rtnCB->contextDelete( tmpContextID, cb ) ;
+      }
+      goto done ;
+   }
+
    INT32 rtnSort ( rtnContext **ppContext,
                    const BSONObj &orderBy,
                    _pmdEDUCB *cb,
@@ -281,7 +405,7 @@ namespace engine
                    SINT64 &contextID )
    {
       INT32 rc = SDB_OK ;
-      SDB_RTNCB *rtnCB = sdbGetRTNCB() ; 
+      SDB_RTNCB *rtnCB = sdbGetRTNCB() ;
       rtnContext *context = NULL ;
       rtnContext *bkContext = NULL ;
       SINT64 old = contextID ;
@@ -353,11 +477,33 @@ namespace engine
                     BOOLEAN enablePrefetch )
    {
       INT32 rc = SDB_OK ;
-      PD_TRACE_ENTRY ( SDB_RTNQUERY ) ;
+      PD_TRACE_ENTRY( SDB_RTNQUERY ) ;
+
+      rtnQueryOptions options( matcher, selector, orderBy, hint,
+                               pCollectionName, numToSkip, numToReturn, flags ) ;
+      rc = rtnQuery( options, cb, dmsCB, rtnCB, contextID, ppContext,
+                     enablePrefetch, FALSE ) ;
+
+      PD_TRACE_EXITRC( SDB_RTNQUERY, rc ) ;
+      return rc ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB_RTNQUERY_OPTIONS, "rtnQuery" )
+   INT32 rtnQuery ( rtnQueryOptions &options,
+                    pmdEDUCB *cb,
+                    SDB_DMSCB *dmsCB,
+                    SDB_RTNCB *rtnCB,
+                    SINT64 &contextID,
+                    rtnContextBase **ppContext,
+                    BOOLEAN enablePrefetch,
+                    BOOLEAN keepSearchPaths )
+   {
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY ( SDB_RTNQUERY_OPTIONS ) ;
       dmsStorageUnitID suID = DMS_INVALID_CS ;
       contextID             = -1 ;
 
-      SDB_ASSERT ( pCollectionName, "collection name can't be NULL" ) ;
+      SDB_ASSERT ( options.getCLFullName(), "collection name can't be NULL" ) ;
       SDB_ASSERT ( cb, "educb can't be NULL" ) ;
       SDB_ASSERT ( dmsCB, "dmsCB can't be NULL" ) ;
       SDB_ASSERT ( rtnCB, "rtnCB can't be NULL" ) ;
@@ -366,31 +512,38 @@ namespace engine
       dmsMBContext *mbContext = NULL ;
       rtnContextData *dataContext = NULL ;
       const CHAR *pCollectionShortName = NULL ;
-      rtnAccessPlanManager *apm = NULL ;
-      optAccessPlan *plan = NULL ;
+      optAccessPlanManager *apm = NULL ;
+      optAccessPlanRuntime *planRuntime = NULL ;
       rtnQueryModifier *queryModifier = NULL ;
       BOOLEAN writable = FALSE ;
 
-      BSONObj hintTmp = hint ;
-      BSONObj blockObj ;
+      BSONObj hintTmp = options.getHint() ;
+      BSONObj blockObj, emptyObj ;
       BSONObj *pBlockObj = NULL ;
       const CHAR *indexName = NULL ;
       const CHAR *scanType  = NULL ;
       INT32 indexLID = DMS_INVALID_EXTENT ;
       INT32 direction = 0 ;
+      rtnQueryType queryType = RTN_QUERY_NORMAL ;
+      rtnRemoteMessenger* messenger = rtnCB->getRemoteMessenger() ;
 
-      if ( FLG_QUERY_EXPLAIN & flags )
+      if ( messenger && messenger->isReady() )
       {
-         rc = rtnExplain( pCollectionName,
-                          selector,
-                          matcher,
-                          orderBy,
-                          hint,
-                          flags, numToSkip,
-                          numToReturn,
-                          cb, dmsCB, rtnCB,
-                          contextID,
-                          ppContext ) ;
+         rc = _getQueryType( options.getQuery(), queryType ) ;
+         PD_RC_CHECK( rc, PDERROR, "Failed to get query type, rc: %d", rc ) ;
+         if ( RTN_QUERY_TEXT == queryType )
+         {
+            rc = rtnQueryWithTS( options, cb, rtnCB, contextID,
+                                 ppContext, enablePrefetch ) ;
+            PD_RC_CHECK( rc, PDERROR, "Query with text search condition "
+                         "failed[ %d ]", rc ) ;
+            goto done ;
+         }
+      }
+
+      if ( options.testFlag( FLG_QUERY_EXPLAIN ) )
+      {
+         rc = rtnExplain( options, cb, dmsCB, rtnCB, contextID, ppContext ) ;
          if ( SDB_OK != rc )
          {
             PD_LOG( PDERROR, "failed to explain query:%d", rc ) ;
@@ -402,7 +555,7 @@ namespace engine
          }
       }
 
-      if ( FLG_QUERY_MODIFY & flags )
+      if ( options.testFlag( FLG_QUERY_MODIFY ) )
       {
          rc = _rtnParseQueryModify( hintTmp, &queryModifier ) ;
          if ( SDB_OK != rc )
@@ -411,10 +564,8 @@ namespace engine
             goto error ;
          }
 
-         // disallow parallel query
-         OSS_BIT_CLEAR( flags, FLG_QUERY_PARALLED ) ;
+         options.clearFlag( FLG_QUERY_PARALLED ) ;
 
-         // writeable judge
          rc = dmsCB->writable( cb ) ;
          if ( rc )
          {
@@ -424,17 +575,16 @@ namespace engine
          writable = TRUE ;
       }
 
-      // This prevents other sessions drop the collectionspace during accessing
-      rc = rtnResolveCollectionNameAndLock ( pCollectionName, dmsCB, &su,
-                                             &pCollectionShortName, suID ) ;
+      rc = rtnResolveCollectionNameAndLock ( options.getCLFullName(), dmsCB,
+                                             &su, &pCollectionShortName,
+                                             suID ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to resolve collection name %s",
-                   pCollectionName ) ;
+                   options.getCLFullName() ) ;
 
       rc = su->data()->getMBContext( &mbContext, pCollectionShortName, -1 ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to get dms mb context, rc: %d", rc ) ;
 
-      /// if collection don't have $id index, can't modify( update or remove )
-      if ( OSS_BIT_TEST( flags, FLG_QUERY_MODIFY ) &&
+      if ( options.testFlag( FLG_QUERY_MODIFY ) &&
            OSS_BIT_TEST( mbContext->mb()->_attributes, DMS_MB_ATTR_NOIDINDEX ) )
       {
          PD_LOG( PDERROR, "Can not modify data when autoIndexId is false" ) ;
@@ -442,21 +592,25 @@ namespace engine
          goto error ;
       }
 
-      // create a new context
-      rc = rtnCB->contextNew ( ( flags & FLG_QUERY_PARALLED ) ?
+      rc = rtnCB->contextNew ( options.testFlag( FLG_QUERY_PARALLED ) ?
                                RTN_CONTEXT_PARADATA : RTN_CONTEXT_DATA,
                                (rtnContext**)&dataContext,
                                contextID, cb ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to create new data context" ) ;
 
-      if ( Object == hint.getField( FIELD_NAME_META ).type() )
+      if ( options.canPrepareMore() )
+      {
+         dataContext->setPrepareMoreData( TRUE ) ;
+      }
+
+      if ( Object == options.getHint().getField( FIELD_NAME_META ).type() )
       {
          BSONObjBuilder build ;
-         rc = _rtnParseQueryMeta( hint.getField( FIELD_NAME_META ).embeddedObject(),
-                                  scanType, indexName, indexLID, direction,
-                                  blockObj ) ;
-         PD_RC_CHECK( rc, PDERROR, "Failed to parase query meta[%s], rc: %d",
-                      hint.toString().c_str(), rc ) ;
+         rc = _rtnParseQueryMeta(
+               options.getHint().getField( FIELD_NAME_META ).embeddedObject(),
+               scanType, indexName, indexLID, direction, blockObj ) ;
+         PD_RC_CHECK( rc, PDERROR, "Failed to parse query meta[%s], rc: %d",
+                      options.getHint().toString().c_str(), rc ) ;
 
          pBlockObj = &blockObj ;
 
@@ -471,116 +625,107 @@ namespace engine
          hintTmp = build.obj () ;
       }
 
-      apm = su->getAPM() ;
-      SDB_ASSERT ( apm, "apm shouldn't be NULL" ) ;
+      options.setHint( hintTmp ) ;
 
-      // plan is released in context destructor
-      rc = apm->getPlan ( matcher,
-                          orderBy, // orderBy
-                          hintTmp, // hint
-                          pCollectionShortName,
-                          &plan ) ;
-      if ( rc )
-      {
-         PD_LOG ( PDERROR, "Failed to get access plan for %s, context %lld, "
-                  "rc: %d", pCollectionName, contextID, rc ) ;
-         goto error ;
-      }
-      // used force hint, but hint failed
-      else if ( ( flags & FLG_QUERY_FORCE_HINT ) && !hintTmp.isEmpty() &&
-                plan->isHintFailed() )
+      planRuntime = dataContext->getPlanRuntime() ;
+      SDB_ASSERT( planRuntime, "plan runtime shouldn't be NULL" ) ;
+
+      apm = rtnCB->getAPM() ;
+      SDB_ASSERT( apm, "apm shouldn't be NULL" ) ;
+
+      rc = apm->getAccessPlan( options, keepSearchPaths, su, mbContext,
+                               (*planRuntime) ) ;
+      PD_RC_CHECK( rc, PDERROR, "Failed to get access plan for %s, "
+                   "context %lld, rc: %d", options.getCLFullName(), contextID,
+                   rc ) ;
+
+      if ( options.testFlag( FLG_QUERY_FORCE_HINT ) &&
+           !options.isHintEmpty() &&
+           planRuntime->isHintFailed() )
       {
          PD_LOG( PDERROR, "Query used force hint[%s] failed",
-                 hintTmp.toString().c_str() ) ;
+                 options.getHint().toString().c_str() ) ;
          rc = SDB_RTN_INVALID_HINT ;
          goto error ;
       }
 
-      // check
       if ( pBlockObj )
       {
-         if ( !indexName && TBSCAN != plan->getScanType() )
+         if ( !indexName && TBSCAN != planRuntime->getScanType() )
          {
             PD_LOG( PDERROR, "Scan type[%d] must be TBSCAN",
-                    plan->getScanType() ) ;
+                    planRuntime->getScanType() ) ;
             rc = SDB_SYS ;
             goto error ;
          }
-         else if ( indexName && ( IXSCAN != plan->getScanType() ||
-                   indexLID != plan->getIndexLID() ) )
+         else if ( indexName && ( IXSCAN != planRuntime->getScanType() ||
+                   indexLID != planRuntime->getIndexLID() ) )
          {
             PD_LOG( PDERROR, "Scan type[%d] error or indexLID[%d] is the "
-                    "same with [%d]", plan->getScanType(),
-                    plan->getIndexLID(), indexLID ) ;
+                    "same with [%d]", planRuntime->getScanType(),
+                    planRuntime->getIndexLID(), indexLID ) ;
             rc = SDB_IXM_NOTEXIST ;
             goto error ;
          }
       }
 
-      if ( !plan->sortRequired() )
+      if ( !planRuntime->sortRequired() )
       {
-         // open context
-         rc = dataContext->open( su, mbContext, plan, cb,
-                                 selector,
-                                 numToReturn,
-                                 numToSkip,
-                                 pBlockObj, direction ) ;
+         rc = dataContext->open( su, mbContext, cb, options, pBlockObj,
+                                 direction ) ;
          PD_RC_CHECK( rc, PDERROR, "Open data context failed, rc: %d", rc ) ;
 
-         /// when open succeed, plan and mbcontext and su is take over
-         /// by context
          suID = DMS_INVALID_CS ;
-         plan = NULL ;
          mbContext = NULL ;
 
-         if ( FLG_QUERY_MODIFY & flags )
+         if ( options.testFlag( FLG_QUERY_MODIFY ) )
          {
             dataContext->setQueryModifier( queryModifier ) ;
-            // queryModifier will be released by dataContext
             queryModifier = NULL ;
-            // dmsCB will be writedown by dataContext
             writable = FALSE ;
+         }
+
+         if ( options.testFlag( FLG_QUERY_STRINGOUT ) )
+         {
+            dataContext->getSelector().setStringOutput( TRUE ) ;
          }
       }
       else
       {
-         if ( FLG_QUERY_MODIFY & flags )
+         rtnReturnOptions returnOptions( options ) ;
+
+         returnOptions.setSkip( 0 ) ;
+         returnOptions.setLimit( -1 ) ;
+
+         if ( options.testFlag( FLG_QUERY_MODIFY ) )
          {
             PD_LOG( PDERROR, "when query and modify, sorting must use index");
             rc = SDB_RTN_QUERYMODIFY_SORT_NO_IDX ;
             goto error ;
          }
 
-         rc = dataContext->open( su, mbContext, plan, cb,
-                                 selector,
-                                 -1,
-                                 0,
-                                 pBlockObj, direction ) ;
+         rc = dataContext->open( su, mbContext, cb, returnOptions, pBlockObj,
+                                 direction ) ;
          PD_RC_CHECK( rc, PDERROR, "Open data context failed, rc: %d", rc ) ;
 
-         /// when open succeed, plan and mbcontext and su is take over
-         /// by context
          suID = DMS_INVALID_CS ;
-         plan = NULL ;
          mbContext = NULL ;
 
-         rc = rtnSort ( (rtnContext**)&dataContext,
-                        orderBy,
-                        cb, numToSkip,
-                        numToReturn,
-                        contextID ) ;
+         if ( options.testFlag( FLG_QUERY_STRINGOUT ) )
+         {
+            dataContext->getSelector().setStringOutput( TRUE ) ;
+         }
+
+         dataContext->setEnableQueryActivity( FALSE ) ;
+
+         rc = rtnSort ( (rtnContext**)&dataContext, options.getOrderBy(), cb,
+                        options.getSkip(), options.getLimit(), contextID ) ;
          PD_RC_CHECK( rc, PDERROR, "Failed to sort, rc: %d", rc ) ;
       }
 
-      // sample timetamp
       if ( cb->getMonConfigCB()->timestampON )
       {
          dataContext->getMonCB()->recordStartTimestamp() ;
-      }
-
-      if ( flags & FLG_QUERY_STRINGOUT )
-      {
-         dataContext->getSelector().setStringOutput( TRUE ) ;
       }
 
       if ( ppContext )
@@ -593,16 +738,12 @@ namespace engine
       }
 
    done :
-      PD_TRACE_EXITRC ( SDB_RTNQUERY, rc ) ;
+      PD_TRACE_EXITRC ( SDB_RTNQUERY_OPTIONS, rc ) ;
       return rc ;
    error :
       if ( su && mbContext )
       {
          su->data()->releaseMBContext( mbContext ) ;
-      }
-      if ( plan )
-      {
-         plan->release() ;
       }
       if ( DMS_INVALID_CS != suID )
       {
@@ -624,9 +765,6 @@ namespace engine
       goto done ;
    }
 
-   // given a collection name, a key ( without field name ), an index name, and
-   // a direction, this function will create a context and build an index
-   // scanner
    // PD_TRACE_DECLARE_FUNCTION ( SDB_RTNTRAVERSALQUERY, "rtnTraversalQuery" )
    INT32 rtnTraversalQuery ( const CHAR *pCollectionName,
                              const BSONObj &key,
@@ -652,7 +790,7 @@ namespace engine
       dmsStorageUnit       *su                   = NULL ;
       rtnContextData       *context              = NULL ;
       const CHAR           *pCollectionShortName = NULL ;
-      optAccessPlan        *plan                 = NULL ;
+      optAccessPlanRuntime *planRuntime          = NULL ;
       dmsMBContext         *mbContext            = NULL ;
       rtnPredicateList     *predList             = NULL ;
       rtnIXScanner         *scanner              = NULL ;
@@ -660,8 +798,6 @@ namespace engine
       BSONObj hint ;
       BSONObj dummy ;
 
-      // collection in dmsCB lock is released when context is freed
-      // This prevents other sessions drop the collectionspace during accessing
       rc = rtnResolveCollectionNameAndLock ( pCollectionName, dmsCB, &su,
                                              &pCollectionShortName, suID ) ;
       PD_RC_CHECK ( rc, PDERROR, "Failed to resolve collection name %s",
@@ -670,15 +806,15 @@ namespace engine
       rc = su->data()->getMBContext( &mbContext, pCollectionShortName, -1 ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to get dms mb context, rc: %d", rc ) ;
 
-      // create a new context
       rc = rtnCB->contextNew ( RTN_CONTEXT_DATA, (rtnContext**)&context,
                                contextID, cb ) ;
       PD_RC_CHECK ( rc, PDERROR, "Failed to create new context, %d", rc ) ;
       SDB_ASSERT ( context, "context can't be NULL" ) ;
 
+      planRuntime = context->getPlanRuntime() ;
+
       try
       {
-         // build hint
          hint = BSON( "" << pIndexName ) ;
       }
       catch ( std::exception &e )
@@ -687,25 +823,23 @@ namespace engine
                        e.what() ) ;
       }
 
-      plan = SDB_OSS_NEW optAccessPlan( su, pCollectionShortName, dummy,
-                                        dummy, hint ) ;
-      if ( !plan )
       {
-         rc = SDB_OOM ;
-         goto error ;
-      }
-      rc = plan->optimize() ;
-      PD_RC_CHECK( rc, PDERROR, "Plan optimize failed, rc: %d", rc ) ;
-      PD_CHECK ( plan->getScanType() == IXSCAN && !plan->isAutoGen(),
-                 SDB_INVALIDARG, error, PDERROR,
-                 "Unable to generate access plan by index %s",
-                 pIndexName ) ;
+         rtnQueryOptions options( dummy, dummy, dummy, hint, pCollectionName,
+                                  0, -1, 0 ) ;
 
-      // lock
+         rc = rtnCB->getAPM()->getTempAccessPlan( options, su, mbContext,
+                                                  *planRuntime ) ;
+         PD_RC_CHECK( rc, PDERROR, "Failed to get access plan, rc: %d", rc ) ;
+
+         PD_CHECK ( planRuntime->getScanType() == IXSCAN &&
+                    !planRuntime->isAutoGen(),
+                    SDB_INVALIDARG, error, PDERROR,
+                    "Unable to generate access plan by index %s", pIndexName ) ;
+      }
+
       rc = mbContext->mbLock( SHARED ) ;
       PD_RC_CHECK( rc, PDERROR, "dms mb context lock failed, rc: %d", rc ) ;
 
-      // start building scanner
       {
          dmsRecordID rid ;
          if ( -1 == dir )
@@ -716,30 +850,25 @@ namespace engine
          {
             rid.resetMin () ;
          }
-         // get the index control block we want
-         ixmIndexCB indexCB ( plan->getIndexCBExtent(), su->index(), NULL ) ;
+         ixmIndexCB indexCB ( planRuntime->getIndexCBExtent(), su->index(), NULL ) ;
          PD_CHECK ( indexCB.isInitialized(), SDB_SYS, error, PDERROR,
                     "unable to get proper index control block" ) ;
-         if ( indexCB.getLogicalID() != plan->getIndexLID() )
+         if ( indexCB.getLogicalID() != planRuntime->getIndexLID() )
          {
             PD_LOG( PDERROR, "Index[extent id: %d] logical id[%d] is not "
-                    "expected[%d]", plan->getIndexCBExtent(),
-                    indexCB.getLogicalID(), plan->getIndexLID() ) ;
+                    "expected[%d]", planRuntime->getIndexCBExtent(),
+                    indexCB.getLogicalID(), planRuntime->getIndexLID() ) ;
             rc = SDB_IXM_NOTEXIST ;
             goto error ;
          }
-         // get the predicate list
-         predList = plan->getPredList() ;
+         predList = planRuntime->getPredList() ;
          SDB_ASSERT ( predList, "predList can't be NULL" ) ;
-         // set the traversal direction
          predList->setDirection ( dir ) ;
 
-         // scanner should be deleted in context destructor
          scanner = SDB_OSS_NEW rtnIXScanner ( &indexCB, predList, su, cb ) ;
          PD_CHECK ( scanner, SDB_OOM, error, PDERROR,
                     "Unable to allocate memory for scanner" ) ;
 
-         // reloate RID to the key that we want
          rc = scanner->relocateRID ( key, rid ) ;
          PD_CHECK ( SDB_OK == rc, rc, error, PDERROR,
                     "Failed to relocate key to the specified location: %s, "
@@ -747,18 +876,14 @@ namespace engine
       }
       mbContext->mbUnlock() ;
 
-      // open context
-      rc = context->openTraversal( su, mbContext, plan, scanner, cb,
-                                   dummy, -1, 0 ) ;
+      rc = context->openTraversal( su, mbContext, scanner, cb, dummy, -1, 0 ) ;
       PD_RC_CHECK( rc, PDERROR, "Open context traversal faield, rc: %d", rc ) ;
 
       mbContext = NULL ;
-      plan = NULL ;
       suID = DMS_INVALID_CS ;
       scanner = NULL ;
       su = NULL ;
 
-      // sample timestamp
       if ( cb->getMonConfigCB()->timestampON )
       {
          context->getMonCB()->recordStartTimestamp() ;
@@ -781,9 +906,9 @@ namespace engine
       {
          su->data()->releaseMBContext( mbContext ) ;
       }
-      if ( plan )
+      if ( planRuntime->hasPlan() )
       {
-         plan->release() ;
+         planRuntime->releasePlan() ;
       }
       if ( scanner )
       {
@@ -802,46 +927,20 @@ namespace engine
    }
 
    // PD_TRACE_DECLARE_FUNCTION ( SDB_RTNEXPLAIN, "rtnExplain" )
-   INT32 rtnExplain( const CHAR *pCollectionName,
-                     const BSONObj &selector,
-                     const BSONObj &matcher,
-                     const BSONObj &orderBy,
-                     const BSONObj &hint,
-                     SINT32 flags,
-                     SINT64 numToSkip,
-                     SINT64 numToReturn,
+   INT32 rtnExplain( rtnQueryOptions &options,
                      pmdEDUCB *cb, SDB_DMSCB *dmsCB,
                      SDB_RTNCB *rtnCB, INT64 &contextID,
                      rtnContextBase **ppContext )
    {
       INT32 rc = SDB_OK ;
+
       PD_TRACE_ENTRY ( SDB_RTNEXPLAIN ) ;
+
       SDB_ASSERT ( cb, "educb can't be NULL" ) ;
       SDB_ASSERT ( dmsCB, "dmsCB can't be NULL" ) ;
       SDB_ASSERT ( rtnCB, "rtnCB can't be NULL" ) ;
-      BSONObj explainOptions ;
-      BSONObj realHint ;
-      BSONElement ele = hint.getField( FIELD_NAME_OPTIONS ) ;
-      if ( Object == ele.type() )
-      {
-         explainOptions = ele.embeddedObject() ;
-      }
 
-      ele = hint.getField( FIELD_NAME_HINT ) ;
-      if ( Object == ele.type() )
-      {
-         realHint = ele.embeddedObject() ;
-      }
-
-      /// clear explain flag.
-      rtnQueryOptions options( matcher, selector,
-                               orderBy, realHint,
-                               pCollectionName,
-                               numToSkip, numToReturn,
-                               OSS_BIT_CLEAR( flags, FLG_QUERY_EXPLAIN | FLG_QUERY_MODIFY ),
-                               FALSE ) ;
-
-      rtnContextExplain *context = NULL ;
+      rtnContextExplain * context = NULL ;
       rc = rtnCB->contextNew( RTN_CONTEXT_EXPLAIN,
                               ( rtnContext **)( &context ),
                               contextID, cb ) ;
@@ -851,7 +950,7 @@ namespace engine
          goto error ;
       }
 
-      rc = context->open( options, explainOptions ) ;
+      rc = context->open( options, cb ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "failed to open explain context:%d", rc ) ;
@@ -862,10 +961,12 @@ namespace engine
       {
          *ppContext = context ;
       }
-   done:
+
+   done :
       PD_TRACE_EXITRC( SDB_RTNEXPLAIN, rc ) ;
       return rc ;
-   error:
+
+   error :
       if ( -1 != contextID )
       {
          rtnCB->contextDelete( contextID, cb ) ;
@@ -873,6 +974,5 @@ namespace engine
       }
       goto done ;
    }
-
 }
 

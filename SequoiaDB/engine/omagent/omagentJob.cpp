@@ -32,6 +32,7 @@
 #include "omagentUtil.hpp"
 #include "omagentJob.hpp"
 #include "omagentBackgroundCmd.hpp"
+#include "omagentAsyncTask.hpp"
 #include "pmdEDU.hpp"
 
 namespace engine
@@ -54,9 +55,6 @@ namespace engine
 
    _omagentJob::~_omagentJob()
    {
-      // free pTask malloc int getTaskByType()
-      //free _taskPtr
-      //SAFE_OSS_FREE( _taskPtr ) ;
    }
 
    RTN_JOB_TYPE _omagentJob::type () const
@@ -78,7 +76,9 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
       _omaTask *pTask = _taskPtr.get() ;
-      
+
+      pmdSetEDUHook( (PMD_ON_EDU_EXIT_FUNC)sdbHookFuncOnThreadExit ) ;
+
       if ( NULL == pTask )
       {
          rc = SDB_INVALIDARG ;
@@ -109,7 +109,6 @@ namespace engine
 
 
 
-   // start job
 
    INT32 startOmagentJob ( OMA_TASK_TYPE taskType, INT64 taskID,
                            const BSONObj &info, omaTaskPtr &taskPtr, void *ptr )
@@ -120,7 +119,6 @@ namespace engine
       _omagentJob *pJob      = NULL ;
       _omaTask *pTask        = NULL ;
 
-      // get task
       pTask = getTaskByType( taskType, taskID ) ;
       if ( NULL == pTask )
       {
@@ -130,7 +128,6 @@ namespace engine
       }
 
       {
-         // new job
          omaTaskPtr myTaskPtr( pTask ) ;
          pJob = SDB_OSS_NEW _omagentJob( myTaskPtr, info, ptr ) ;
          if ( !pJob )
@@ -141,7 +138,6 @@ namespace engine
             goto error ;
          }
 
-         // start job
          rc = rtnGetJobMgr()->startJob( pJob, RTN_JOB_MUTEX_NONE, &eduID,
                                         returnResult ) ;
          if ( rc )
@@ -162,51 +158,92 @@ namespace engine
       goto done ;
    }
 
+   string getCmdByType( OMA_TASK_TYPE taskType )
+   {
+      string command ;
+      switch( taskType )
+      {
+      case OMA_TASK_ADD_BUS:
+         command = OMA_CMD_ADD_BUSINESS ;
+         break ;
+      case OMA_TASK_REMOVE_BUS:
+         command = OMA_CMD_REMOVE_BUSINESS ;
+         break ;
+      case OMA_TASK_EXTEND_DB:
+         command = OMA_CMD_EXTEND_SEQUOIADB ;
+         break ;
+      case OMA_TASK_SHRINK_BUSINESS:
+         command = OMA_CMD_SHRINK_BUSINESS ;
+         break ;
+      case OMA_TASK_DEPLOY_PACKAGE:
+         command = OMA_CMD_DEOLOY_PACKAGE ;
+         break ;
+      default:
+         command = "" ;
+         break ;
+      }
+      return command ;
+   }
+
    _omaTask* getTaskByType( OMA_TASK_TYPE taskType, INT64 taskID )
    {
       _omaTask *pTask = NULL ;
       
       switch ( taskType )
       {
-         // pTask will be free in _omagentJob::~_omagentJob()
-         // when job is destroy
-         // add host
          case OMA_TASK_ADD_HOST :
             pTask = SDB_OSS_NEW _omaAddHostTask( taskID ) ;
             break ;
          case OMA_TASK_ADD_HOST_SUB :
             pTask = SDB_OSS_NEW _omaAddHostSubTask( taskID ) ;
             break ;
-         // remove host
          case OMA_TASK_REMOVE_HOST :
             pTask = SDB_OSS_NEW _omaRemoveHostTask( taskID ) ;
             break ;
-         // install db business
          case OMA_TASK_INSTALL_DB :
             pTask = SDB_OSS_NEW _omaInstDBBusTask( taskID ) ;
             break ;
          case OMA_TASK_INSTALL_DB_SUB :
             pTask = SDB_OSS_NEW _omaInstDBBusSubTask( taskID ) ;
             break ;
-         // remove db business
          case OMA_TASK_REMOVE_DB :
             pTask = SDB_OSS_NEW _omaRemoveDBBusTask( taskID ) ;
             break ;
-         // add znode business
          case OMA_TASK_INSTALL_ZN :
             pTask = SDB_OSS_NEW _omaInstZNBusTask( taskID ) ;
             break ;
          case OMA_TASK_INSTALL_ZN_SUB :
             pTask = SDB_OSS_NEW _omaInstZNBusSubTask( taskID ) ;
             break ;
-         // remove znode business
          case OMA_TASK_REMOVE_ZN :
             pTask = SDB_OSS_NEW _omaRemoveZNBusTask( taskID ) ;
             break ;
-         // ssql exec
+         case OMA_TASK_INSTALL_SSQL_OLAP :
+            pTask = SDB_OSS_NEW _omaInstallSsqlOlapBusTask( taskID ) ;
+            break ;
+         case OMA_TASK_REMOVE_SSQL_OLAP :
+            pTask = SDB_OSS_NEW _omaRemoveSsqlOlapBusTask( taskID ) ;
+            break ;
+         case OMA_TASK_INSTALL_SSQL_OLAP_SUB :
+            pTask = SDB_OSS_NEW _omaInstallSsqlOlapBusSubTask( taskID ) ;
+            break ;
          case OMA_TASK_SSQL_EXEC :
             pTask = SDB_OSS_NEW _omaSsqlExecTask( taskID ) ;
-            break;
+            break ;
+         case OMA_TASK_ASYNC_SUB:
+            pTask = SDB_OSS_NEW _omaAsyncSubTask( taskID ) ;
+            break ;
+         case OMA_TASK_EXTEND_DB:
+         case OMA_TASK_ADD_BUS:
+         case OMA_TASK_REMOVE_BUS:
+         case OMA_TASK_SHRINK_BUSINESS:
+         case OMA_TASK_DEPLOY_PACKAGE:
+            {
+               string command = getCmdByType( taskType ) ;
+
+               pTask = SDB_OSS_NEW _omaAsyncTask( taskID, command.c_str() ) ;
+            }
+            break ;
          default :
             PD_LOG_MSG( PDERROR, "Unknow task type[%d]", taskType ) ;
             break ;

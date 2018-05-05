@@ -45,10 +45,12 @@ namespace DriverTest
         {
             sdb = new Sequoiadb(config.conf.Coord.Address);
             sdb.Connect(config.conf.UserName, config.conf.Password);
+            BsonDocument options = new BsonDocument();
+            options.Add("ReplSize", 0);
             if (sdb.IsCollectionSpaceExist(csName))
                 sdb.DropCollectionSpace(csName);
             cs = sdb.CreateCollectionSpace(csName);
-            coll = cs.CreateCollection(cName);
+            coll = cs.CreateCollection(cName, options);
         }
 
         [TestCleanup()]
@@ -130,6 +132,7 @@ namespace DriverTest
             list.Add("192.168.20.35:12340");
             list.Add("192.168.20.165:11810");
             list.Add("192.168.20.35:12340");
+            list.Add("192.168.20.42:50000");
             list.Add("192.168.20.42:11810");
 
             ConfigOptions options = new ConfigOptions();
@@ -382,6 +385,72 @@ namespace DriverTest
                 Assert.IsNotNull(obj);
             }
             sdb2.Disconnect();
+            // snapshot transation
+            sdb.TransactionBegin();
+            try
+            {
+                BsonDocument o = null;
+                coll.Insert(new BsonDocument());
+                cursor = sdb.GetSnapshot(SDBConst.SDB_SNAP_TRANSACTIONS, dummy, dummy, dummy);
+                Console.WriteLine("the result of SDB_SNAP_TRANSACTIONS is: ");
+                while (null != (o = cursor.Next()))
+                {
+                    Console.WriteLine(o);
+                }
+                cursor = sdb.GetSnapshot(SDBConst.SDB_SNAP_TRANSACTIONS_CURRENT, dummy, dummy, dummy);
+                Console.WriteLine("the result of SDB_SNAP_TRANSACTIONS_CURRENT is: ");
+                while (null != (o = cursor.Next()))
+                {
+                    Console.WriteLine(o);
+                }
+            }
+            catch (BaseException e)
+            {
+                Console.WriteLine("The error info is: " + e.ErrorType + ", " + e.ErrorCode + ", " + e.Message);
+                Assert.IsTrue(e.ErrorType == "SDB_DPS_TRANS_DIABLED");             
+            }
+            finally
+            {
+                sdb.TransactionCommit();
+            }
+
+            // snapshot accessplans
+            {
+                BsonDocument o = null;
+                cursor = sdb.GetSnapshot(SDBConst.SDB_SNAP_ACCESSPLANS, dummy, dummy, dummy);
+                Console.WriteLine("the result of SDB_SNAP_TRANSACTIONS is: ");
+                while (null != (o = cursor.Next()))
+                {
+                    Console.WriteLine(o);
+                }
+            }
+
+            // node health 
+            {
+                cursor = sdb.GetSnapshot(SDBConst.SDB_SNAP_HEALTH, dummy, dummy, dummy);
+                Console.WriteLine("the result of SDB_SNAP_HEALTH is: ");
+                BsonDocument rec = null;
+                while (null != (rec = cursor.Next()))
+                {
+                    Console.WriteLine(rec);
+                }
+            }
+            
+        }
+
+        [TestMethod()]
+        public void RestSnapshot()
+        {
+            Sequoiadb db = new Sequoiadb(config.conf.Coord.Address);
+            db.Connect();
+
+            sdb.ResetSnapshot(null);
+
+            BsonDocument options = new BsonDocument();
+            sdb.ResetSnapshot(options);
+
+            options.Add("Type", "database");
+            sdb.ResetSnapshot(options);
         }
 
         [TestMethod()]
@@ -390,14 +459,41 @@ namespace DriverTest
             BsonDocument dummy = new BsonDocument();
             BsonDocument bson = null;
             DBCursor cursor = null;
+            Sequoiadb db = new Sequoiadb(config.conf.Coord.Address);
+            db.Connect();
+
+            // list transation
+            sdb.TransactionBegin();
+            try
+            {
+                BsonDocument o = null;
+                coll.Insert(new BsonDocument());
+                cursor = sdb.GetList(SDBConst.SDB_LIST_TRANSACTIONS, dummy, dummy, dummy);
+                Console.WriteLine("the result of SDB_LIST_TRANSACTIONS is: ");
+                while (null != (o = cursor.Next()))
+                {
+                    Console.WriteLine(o);
+                }
+                cursor = sdb.GetList(SDBConst.SDB_LIST_TRANSACTIONS_CURRENT, dummy, dummy, dummy);
+                Console.WriteLine("the result of SDB_LIST_TRANSACTIONS_CURRENT is: ");
+                while (null != (o = cursor.Next()))
+                {
+                    Console.WriteLine(o);
+                }
+            }
+            finally
+            {
+                sdb.TransactionCommit();
+            }
+
             // list cs
-            cursor = sdb.GetList(SDBConst.SDB_LIST_COLLECTIONSPACES, dummy, dummy, dummy);
+            cursor = db.GetList(SDBConst.SDB_LIST_COLLECTIONSPACES, dummy, dummy, dummy);
             Assert.IsNotNull(cursor);
             bson = cursor.Next();
             Assert.IsNotNull(bson);
 
             // list cl
-            cursor = sdb.GetList(SDBConst.SDB_LIST_COLLECTIONS, dummy, dummy, dummy);
+            cursor = db.GetList(SDBConst.SDB_LIST_COLLECTIONS, dummy, dummy, dummy);
             Assert.IsNotNull(cursor);
             bson = cursor.Next();
             Assert.IsNotNull(bson);
@@ -407,69 +503,70 @@ namespace DriverTest
 
             // list groups
             // check whether it is in the cluster environment or not
-            if (Constants.isClusterEnv(sdb))
+            if (Constants.isClusterEnv(db))
             {
-                cursor = sdb.GetList(SDBConst.SDB_LIST_GROUPS, dummy, dummy, dummy);
+                cursor = db.GetList(SDBConst.SDB_LIST_GROUPS, dummy, dummy, dummy);
                 Assert.IsNotNull(cursor);
                 bson = cursor.Next();
                 Assert.IsNotNull(bson);
             }
 
             // list task
-            cursor = sdb.GetList(SDBConst.SDB_LIST_TASKS, dummy, dummy, dummy);
+            cursor = db.GetList(SDBConst.SDB_LIST_TASKS, dummy, dummy, dummy);
             Assert.IsNotNull(cursor);
 
             // list domains
-            if (Constants.isClusterEnv(sdb))
+            if (Constants.isClusterEnv(db))
             {
                 string dmName = "testListDomain";
-                Domain dm = sdb.CreateDomain(dmName, null);
+                Domain dm = db.CreateDomain(dmName, null);
                 cursor = null;
-                cursor = sdb.ListDomains(null, null, null, null);
+                cursor = db.ListDomains(null, null, null, null);
                 Assert.IsNotNull(cursor);
                 Assert.IsNotNull(cursor.Next());
-                sdb.DropDomain(dmName);
+                db.DropDomain(dmName);
             }
 
             // list stored procedure
-            cursor = sdb.GetList(SDBConst.SDB_LIST_STOREPROCEDURES, dummy, dummy, dummy);
+            cursor = db.GetList(SDBConst.SDB_LIST_STOREPROCEDURES, dummy, dummy, dummy);
             Assert.IsNotNull(cursor);
 
             // list all the contexts
-            if (Constants.isClusterEnv(sdb))
+            if (Constants.isClusterEnv(db))
             {
-                sdb.Disconnect();
-                sdb = new Sequoiadb(config.conf.Data.Address);
-                sdb.Connect(config.conf.UserName, config.conf.Password);
+                db.Disconnect();
+                db = new Sequoiadb(config.conf.Data.Address);
+                db.Connect(config.conf.UserName, config.conf.Password);
             }
-            cursor = sdb.GetList(SDBConst.SDB_LIST_CONTEXTS, dummy, dummy, dummy);
+            cursor = db.GetList(SDBConst.SDB_LIST_CONTEXTS, dummy, dummy, dummy);
             Assert.IsNotNull(cursor);
             bson = cursor.Next();
             Assert.IsNotNull(bson);
 
             // list current context
-            cursor = sdb.GetList(SDBConst.SDB_LIST_CONTEXTS_CURRENT, dummy, dummy, dummy);
+            cursor = db.GetList(SDBConst.SDB_LIST_CONTEXTS_CURRENT, dummy, dummy, dummy);
             Assert.IsNotNull(cursor);
             bson = cursor.Next();
             Assert.IsNotNull(bson);
 
             // list all the sessions 
-            cursor = sdb.GetList(SDBConst.SDB_LIST_SESSIONS, dummy, dummy, dummy);
+            cursor = db.GetList(SDBConst.SDB_LIST_SESSIONS, dummy, dummy, dummy);
             Assert.IsNotNull(cursor);
             bson = cursor.Next();
             Assert.IsNotNull(bson);
 
             // list current session
-            cursor = sdb.GetList(SDBConst.SDB_LIST_SESSIONS_CURRENT, dummy, dummy, dummy);
+            cursor = db.GetList(SDBConst.SDB_LIST_SESSIONS_CURRENT, dummy, dummy, dummy);
             Assert.IsNotNull(cursor);
             bson = cursor.Next();
             Assert.IsNotNull(bson);
 
             // list storge units
-            cursor = sdb.GetList(SDBConst.SDB_LIST_STORAGEUNITS, dummy, dummy, dummy);
+            cursor = db.GetList(SDBConst.SDB_LIST_STORAGEUNITS, dummy, dummy, dummy);
             Assert.IsNotNull(cursor);
             bson = cursor.Next();
             Assert.IsNotNull(bson);
+            db.Disconnect();
 
         }
 
@@ -942,6 +1039,37 @@ namespace DriverTest
         }
 
         [TestMethod()]
+        public void getSessionAttr_Test()
+        {
+            BsonDocument attribute = sdb.GetSessionAttr();
+            Console.WriteLine(attribute.ToString());
+        }
+
+        [TestMethod()]
+        public void getSessionAttr_data_Test()
+        {
+            Sequoiadb data = new Sequoiadb(config.conf.Data.Address);
+            data.Connect(config.conf.UserName, config.conf.Password);
+            Assert.IsNotNull(data.Connection);
+            BsonDocument attribute = data.GetSessionAttr();
+            Assert.IsNull(attribute);
+            data.Disconnect();
+        }
+
+        [TestMethod()]
+        public void Sync_DB_Test()
+        {
+            BsonDocument options = new BsonDocument();
+            options.Add("Deep", 1);
+            options.Add("Block", true);
+            coll.Insert(new BsonDocument("a", 1));
+            sdb.Sync(options);
+            coll.Insert(new BsonDocument("b", 1));
+            sdb.Sync();
+        }
+
+        [TestMethod()]
+        [Ignore]
         public void KeepAlive_Test()
         {
             Sequoiadb db = null;
@@ -955,5 +1083,18 @@ namespace DriverTest
             node.Start();
         }
 
+        [TestMethod()]
+        public void Analyze_Test()
+        {
+            sdb.Analyze();
+        }
+
+        [TestMethod()]
+        public void Analyze_CL_Test()
+        {
+            BsonDocument options = new BsonDocument();
+            options.Add("Collection", csName + "." + cName);
+            sdb.Analyze(options);
+        }
     }
 }

@@ -174,7 +174,6 @@ namespace engine
          goto error ;
       }
 
-      /// '\0' is contained.
       for ( UINT32 i = 0; i < size ; i++ )
       {
          tmp[i] = ( src[i] >= 'a' && src[i] <= 'z' ) ?
@@ -192,25 +191,90 @@ namespace engine
       goto done ;
    }
 
-   INT32 utilStrJoin( const CHAR **src,
-                      UINT32 cnt,
-                      CHAR *join,
-                      UINT32 &joinSize )
+   BOOLEAN utilStrIsDigit( const string& str )
    {
-      SDB_ASSERT( NULL != join, "impossible" ) ;
-      INT32 rc = SDB_OK ;
-      UINT32 len = 0 ;
-      for ( UINT32 i = 0; i < cnt; i++ )
+      for ( UINT32 i = 0 ; i < str.size() ; i++ )
       {
-         if ( NULL != src[i] )
+         if ( !isdigit( str.at( i ) ) )
          {
-            UINT32 sLen = ossStrlen(src[i]) ;
-            ossMemcpy( join + len, src[i], sLen ) ;
-            len += sLen ;
+            return FALSE ;
          }
       }
-      joinSize = len ;
-      return rc ;
+
+      return TRUE ;
+   }
+
+   BOOLEAN utilStrIsDigit( const char *str )
+   {
+
+      UINT32 len = ossStrlen( str ) ;
+      for ( UINT32 i = 0 ; i < len ; i++ )
+      {
+         if ( !isdigit( str[ i ] ) )
+         {
+            return FALSE ;
+         }
+      }
+
+      return TRUE ;
+   }
+
+   BOOLEAN utilStrIsODigit( const char *str )
+   {
+
+      UINT32 len = ossStrlen( str ) ;
+      for ( UINT32 i = 0 ; i < len ; i++ )
+      {
+         if ( str[ i ] < '0' || str[ i ] > '7' )
+         {
+            return FALSE ;
+         }
+      }
+
+      return TRUE ;
+   }
+
+   BOOLEAN utilStrIsXDigit( const char *str )
+   {
+
+      UINT32 len = ossStrlen( str ) ;
+      for ( UINT32 i = 0 ; i < len ; i++ )
+      {
+         if ( !isxdigit( str[ i ] ) )
+         {
+            return FALSE ;
+         }
+      }
+
+      return TRUE ;
+   }
+
+   vector<string> utilStrSplit( const string& str, const string& sep )
+   {
+      vector<string> elems ;
+      size_t pos = 0 ;
+      size_t len = str.length() ;
+      size_t sepLen = sep.length() ;
+
+      if ( sepLen == 0 )
+      {
+        return elems ;
+      }
+
+      while ( pos < len )
+      {
+        int findPos = str.find( sep, pos ) ;
+        if ( findPos < 0 )
+        {
+            elems.push_back( str.substr( pos, len - pos ) ) ;
+            break ;
+        }
+
+        elems.push_back( str.substr( pos, findPos - pos ) ) ;
+        pos = findPos + sepLen ;
+      }
+
+      return elems ;
    }
 
    INT32 utilSplitStr( const string & input,
@@ -252,6 +316,70 @@ namespace engine
       goto done ;
    }
 
+   INT32 utilStr2Num( const CHAR *str, INT32 &num )
+   {
+      INT32 rc = SDB_OK ;
+      INT32 scanRc = SDB_OK ;
+      INT32 tmpNum = 0 ;
+
+      if ( 0 == ossStrncmp( str, HEX_PRE, HEX_PRE_SIZE ) )
+      {
+         str = str + 2 ;
+         if ( '\0' == *str )
+         {
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+         if ( ! utilStrIsXDigit( str ) )
+         {
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+         scanRc = ossSscanf( str, "%x", &tmpNum ) ;
+         if ( -1 == scanRc )
+         {
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+      }
+      else if ( 0 == ossStrncmp( str, OCT_PRE, OCT_PRE_SIZE ) )
+      {
+         if ( ! utilStrIsODigit( str ) )
+         {
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+         scanRc = ossSscanf( str, "%o", &tmpNum ) ;
+         if ( -1 == scanRc )
+         {
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+      }
+      else
+      {
+         if ( ! utilStrIsDigit( str ) )
+         {
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+         scanRc = ossSscanf( str, "%d", &tmpNum ) ;
+         if ( -1 == scanRc )
+         {
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+      }
+
+      num = tmpNum ;
+
+   done:
+      return rc ;
+   error:
+      goto done ;
+
+   }
+
    INT32 utilStr2TimeT( const CHAR *str,
                         time_t &tm,
                         UINT64 *usec )
@@ -266,11 +394,10 @@ namespace engine
       INT32 minute = 0 ;
       INT32 second = 0 ;
       INT32 micros = 0 ;
+      BOOLEAN hasColon = FALSE ;
 
       if( ossStrchr( str, 'T' ) || ossStrchr( str, 't' ) )
       {
-         // the format {$date:"2000-01-01T(t)01:30:24:999999Z(z)"} or
-         // {$date:"2000-01-01T(t)01:30:24:000000+0800"}
          /* for mongo date type, iso8601 */
          sdbTimestamp sdbTime ;
          if( timestampParse( str, ossStrlen( str ), &sdbTime ) )
@@ -283,10 +410,6 @@ namespace engine
       }
       else
       {
-         // the format is {$date:"2000-01-01-13.14.26.123456"}
-         // the bound is
-         // timestamp min 1901-12-13-20.45.52.000000 +/- TZ
-         // timestamp max 2038-01-19-03.14.07.999999 +/- TZ
          static cregex reg = cregex::compile("^((((19|[2-9]\\d)\\d{2})-(0?[13578]|1[02])-(0?[1-9]|[12]\\d|3[01]))|(((19|[2-9]\\d)\\d{2})-(0?[13456789]|1[012])-(0?[1-9]|[12]\\d|30))|(((19|[2-9]\\d)\\d{2})-0?2-(0?[1-9]|1\\d|2[0-8]))|(((19|[2-9]\\d)(0[48]|[2468][048]|[13579][26])|(([2468][048]|[3579][26])00))-0?2-29))-(20|21|22|23|[0-1]?\\d).[0-5]?\\d.[0-5]?\\d(.[0-9]{6})?$") ;
          if ( !( regex_match( str, reg ) ) )
          {
@@ -294,8 +417,13 @@ namespace engine
             goto error ;
          }
 
+         if( ossStrchr( str, ':' ) )
+         {
+            hasColon = TRUE ;
+         }
+
          if ( !sscanf ( str,
-                        "%d-%d-%d-%d.%d.%d.%d",
+                        hasColon ? "%d-%d-%d-%d:%d:%d.%d" : "%d-%d-%d-%d.%d.%d.%d",
                         &year   ,
                         &month  ,
                         &day    ,
@@ -322,6 +450,12 @@ namespace engine
          *usec = micros ;
       }
 
+      if ( !ossIsTimestampValid( ( INT64 ) tm ) )
+      {
+         rc = SDB_INVALIDARG ;
+         goto error ;
+      }
+
    done:
       return rc ;
    error:
@@ -340,8 +474,6 @@ namespace engine
 
       if( ossStrchr( str, 'T' ) || ossStrchr( str, 't' ) )
       {
-         // the format {$date:"2000-01-01T(t)01:30:24:999999Z(z)"} or
-         // {$date:"2000-01-01T(t)01:30:24:000000+0800"}
          /* for mongo date type, iso8601 */
          INT32 micros = 0 ;
          sdbTimestamp sdbTime ;
@@ -356,9 +488,7 @@ namespace engine
       }
       else
       {
-         // the format is {$date:"2000-01-01"}
-         // the bound is {$date:"1900-01-01"} - {$date:"9999-12-31"}
-         static cregex reg = cregex::compile("^((((19|[2-9]\\d)\\d{2})-(0?[13578]|1[02])-(0?[1-9]|[12]\\d|3[01]))|(((19|[2-9]\\d)\\d{2})-(0?[13456789]|1[012])-(0?[1-9]|[12]\\d|30))|(((19|[2-9]\\d)\\d{2})-0?2-(0?[1-9]|1\\d|2[0-8]))|(((19|[2-9]\\d)(0[48]|[2468][048]|[13579][26])|(([2468][048]|[3579][26])00))-0?2-29))$") ;
+         static cregex reg = cregex::compile("^(((\\d{4})-(0?[13578]|1[02])-(0?[1-9]|[12]\\d|3[01]))|((\\d{4})-(0?[13456789]|1[012])-(0?[1-9]|[12]\\d|30))|((\\d{4})-0?2-(0?[1-9]|1\\d|2[0-8]))|(((\\d{2})(0[48]|[2468][048]|[13579][26])|((0[048]|1[26]|[2468][048]|[3579][26])00))-0?2-29))$") ;
          if ( !( regex_match( str, reg ) ) )
          {
             rc = SDB_INVALIDARG ;
@@ -382,13 +512,13 @@ namespace engine
          timep = mktime( &t ) ;
          millis = timep * 1000 ;
       }
-      
+
    done:
       return rc ;
    error:
       goto done ;
    }
-   
+
    INT32 utilBuildFullPath( const CHAR *path, const CHAR *name,
                             UINT32 fullSize, CHAR *full )
    {
@@ -466,7 +596,25 @@ namespace engine
                                             "(25[0-4]|2[0-4][0-9]|1[0-9][0-9]"\
                                             "|[1-9][0-9]|[1-9])" ) ;
       return regex_match( ip, reg ) ;
-      
+
+   }
+
+   BOOLEAN utilIsValidOID( const CHAR * pStr )
+   {
+      if ( NULL == pStr || 24 > ossStrlen( pStr ) )
+      {
+         return FALSE ;
+      }
+      for ( UINT32 i = 0; i < 24; ++i )
+      {
+         if ( ! ( ( pStr[i] >= '0' && pStr[i] <= '9' ) ||
+                  ( pStr[i] >= 'a' && pStr[i] <= 'f' ) ||
+                  ( pStr[i] >= 'A' && pStr[i] <= 'F' ) ) )
+         {
+            return FALSE ;
+         }
+      }
+      return TRUE ;
    }
 
    string utilTimeSpanStr( UINT64 seconds )
@@ -516,7 +664,6 @@ namespace engine
       }
 
       pToken = ossStrtok( pVersionStr, pDelim, &pLast ) ;
-      // XXX version: 1.8[.x]
       if ( !pToken )
       {
          rc = SDB_INVALIDARG ;
@@ -526,14 +673,12 @@ namespace engine
       {
          CHAR *pTokenTmp = NULL ;
          CHAR *pLastTmp = NULL ;
-         // 1.8[.x]
          CHAR *pVerPtr = ossStrstr( pToken, ":" ) ;
          if ( !pVerPtr )
          {
             rc = SDB_INVALIDARG ;
             goto error ;
          }
-         // 1
          pTokenTmp = ossStrtok( pVerPtr, " .", &pLastTmp ) ;
          if ( !pTokenTmp )
          {
@@ -542,7 +687,6 @@ namespace engine
          }
          version = ossAtoi( pTokenTmp ) ;
 
-         // 8
          pTokenTmp = ossStrtok( NULL, " .", &pLastTmp ) ;
          if ( !pTokenTmp )
          {
@@ -552,7 +696,6 @@ namespace engine
          subVersion = ossAtoi( pTokenTmp ) ;
 
          fixVersion = 0 ;
-         //[.x]
          pTokenTmp = ossStrtok( NULL, " .", &pLastTmp ) ;
          if ( pTokenTmp )
          {
@@ -560,7 +703,6 @@ namespace engine
          }
       }
 
-      // Release: 14702
       pToken = ossStrtok( NULL, pDelim, &pLast ) ;
       if ( !pToken )
       {
@@ -581,7 +723,6 @@ namespace engine
          release = ossAtoi( releaseStr.c_str() ) ;
       }
 
-      // 2014-08-31-23.18.18(Debug)
       pToken = ossStrtok( NULL, pDelim, &pLast ) ;
       if ( !pToken )
       {
@@ -620,7 +761,6 @@ namespace engine
       CHAR *ch = NULL ;
       const CHAR *r = "" ;
 
-      /// restore
       if ( NULL != _last )
       {
          *_last = _ch ;
@@ -634,7 +774,6 @@ namespace engine
 
       ch = ossStrchr( _src, _ch ) ;
 
-      /// "abc"
       if ( NULL == ch )
       {
          r = _src ;
@@ -649,6 +788,6 @@ namespace engine
 
    done:
       return r ;
-   } 
+   }
 }
 

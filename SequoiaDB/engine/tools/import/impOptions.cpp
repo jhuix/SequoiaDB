@@ -30,7 +30,6 @@
 *******************************************************************************/
 #include "impOptions.hpp"
 #include "impUtil.hpp"
-#include "utilParam.hpp"
 #include "ossUtil.h"
 #include "pd.hpp"
 #include <iostream>
@@ -73,13 +72,14 @@ namespace import
    #define IMP_OPTION_COORD             "coord"
    #define IMP_OPTION_TRANSACTION       "transaction"
    #define IMP_OPTION_ALLOWKEYDUP       "allowkeydup"
-   #define IMP_OPTION_HELPFUL           "helpful"
+   #define IMP_OPTION_HELPFULL          "helpfull"
    #define IMP_OPTION_RECORDSMEM        "recordsmem"
    #define IMP_OPTION_CAST              "cast"
    #define IMP_OPTION_DATEFMT           "datefmt"
    #define IMP_OPTION_TIMESTAMPFMT      "timestampfmt"
    #define IMP_OPTION_TRIMSTRING        "trim"
    #define IMP_OPTION_IGNORENULL        "ignorenull"
+   #define IMP_OPTION_STRICTFIELDNUM    "strictfieldnum"
 
    #define IMP_EXPLAIN_HELP             "print help information"
    #define IMP_EXPLAIN_VERSION          "print version"
@@ -114,15 +114,16 @@ namespace import
    #define IMP_EXPLAIN_COORD            "find coordinators automatically, default: true"
    #define IMP_EXPLAIN_TRANSACTION      "enable transaction, default: false"
    #define IMP_EXPLAIN_ALLOWKEYDUP      "allow key duplication, default: true"
-   #define IMP_EXPLAIN_HELPFUL          "print all options"
-   #define IMP_EXPLAIN_RECORDSMEM       "the maximum memory size used by records, the unit is MB, range is [128~81920], default: 2048"
+   #define IMP_EXPLAIN_HELPFULL         "print all options"
+   #define IMP_EXPLAIN_RECORDSMEM       "the maximum memory size used by records, the unit is MB, range is [128~81920], default: 512"
    #define IMP_EXPLAIN_CAST             "allow type cast when lost precision, default: false"
    #define IMP_EXPLAIN_DATEFMT          "set date format, default: YYYY-MM-DD"
    #define IMP_EXPLAIN_TIMESTAMPFMT     "set timestamp format, default: YYYY-MM-DD-HH.mm.ss.ffffff"
    #define IMP_EXPLAIN_TRIMSTRING       "trim string (arg: [no|right|left|both]), default: no"
    #define IMP_EXPLAIN_IGNORENULL       "ignore null field, default: false"
+   #define IMP_EXPLAIN_STRICTFIELDNUM   "report error if record fields num does not equal to fields definition, default: false"
 
-   #define _TYPE(T) po::value<T>()
+   #define _TYPE(T) utilOptType(T)
 
    #define IMP_DEFAULT_HOSTNAME "localhost"
    #define IMP_DEFAULT_SVCNAME  "11810"
@@ -177,9 +178,10 @@ namespace import
       (IMP_OPTION_SPARSE,              _TYPE(string),    IMP_EXPLAIN_SPARSE) \
       (IMP_OPTION_EXTRA,               _TYPE(string),    IMP_EXPLAIN_EXTRA) \
       (IMP_OPTION_CAST,                _TYPE(string),    IMP_EXPLAIN_CAST) \
+      (IMP_OPTION_STRICTFIELDNUM,      _TYPE(string),    IMP_EXPLAIN_STRICTFIELDNUM) \
 
    #define IMP_HELPFUL_OPTIONS \
-      (IMP_OPTION_HELPFUL,              /* no arg */     IMP_EXPLAIN_HELPFUL) \
+      (IMP_OPTION_HELPFULL,             /* no arg */     IMP_EXPLAIN_HELPFULL) \
       (IMP_OPTION_BUFFERSIZE,          _TYPE(INT32),     IMP_EXPLAIN_BUFFER) \
       (IMP_OPTION_DRYRUN,               /* no arg */     IMP_EXPLAIN_DRYRUN) \
       (IMP_OPTION_RECORDSMEM,          _TYPE(INT32),     IMP_EXPLAIN_RECORDSMEM) \
@@ -202,7 +204,6 @@ namespace import
             str++;
             len--;
 
-            // escape ascii char
             if (isdigit(nextCh))
             {
                INT64 c = 0;
@@ -210,7 +211,6 @@ namespace import
                while (len > 0 && isdigit(*str))
                {
                   c = c * 10 + (*str - '0');
-                  // the max ascii is 127
                   if (c < 0 || c > 127)
                   {
                      rc = SDB_INVALIDARG;
@@ -287,7 +287,6 @@ namespace import
       {
          switch(*fmt)
          {
-         // year: YYYY
          case 'Y':
             if (hasYear)
             {
@@ -307,7 +306,6 @@ namespace import
             fmt += 4;
             len -= 4;
             break;
-         // month: MM
          case 'M':
             if (hasMonth)
             {
@@ -325,7 +323,6 @@ namespace import
             fmt += 2;
             len -= 2;
             break;
-         // day: DD
          case 'D':
             if (hasDay)
             {
@@ -343,7 +340,6 @@ namespace import
             fmt += 2;
             len -= 2;
             break;
-         // hour: HH
          case 'H':
             if (hasHour)
             {
@@ -361,7 +357,6 @@ namespace import
             fmt += 2;
             len -= 2;
             break;
-         // minute: mm
          case 'm':
             if (hasMinute)
             {
@@ -379,7 +374,6 @@ namespace import
             fmt += 2;
             len -= 2;
             break;
-         // second: ss
          case 's':
             if (hasSecond)
             {
@@ -397,7 +391,6 @@ namespace import
             fmt += 2;
             len -= 2;
             break;
-         // millisecond: SSS
          case 'S':
             if (hasMillisecond || hasMicrosecond)
             {
@@ -416,7 +409,6 @@ namespace import
             fmt += 3;
             len -= 3;
             break;
-         // microsecond: ffffff
          case 'f':
             if (hasMillisecond || hasMicrosecond)
             {
@@ -438,7 +430,6 @@ namespace import
             fmt += 6;
             len -= 6;
             break;
-         // any charcater: *
          case '*':
          default:
             fmt++;
@@ -490,10 +481,11 @@ namespace import
       _autoAddField = TRUE;
       _autoCompletion = FALSE;
       _cast = FALSE;
+      _strictFieldNum = FALSE;
 
       _bufferSize = 64;
       _dryRun = FALSE;
-      _recordsMem = (INT64)1024 * 1024 * 1024 * 2; // 2GB
+      _recordsMem = (INT64)1024 * 1024 * 512; // 512MB
       _ignoreNull = FALSE;
    }
 
@@ -508,15 +500,27 @@ namespace import
 
       SDB_ASSERT(!_parsed, "can't parse again");
 
-      _allDesc.add_options()
+      addOptions("General Options")
          IMP_GENERAL_OPTIONS
-         IMP_IMPORT_OPTIONS
+      ;
+
+      addOptions("Input Options")
          IMP_INPUT_OPTIONS
+      ;
+
+      addOptions("CSV Options")
          IMP_CSV_OPTIONS
+      ;
+
+      addOptions("Import Options")
+         IMP_IMPORT_OPTIONS
+      ;
+
+      addOptions("Helpfull Options", TRUE)
          IMP_HELPFUL_OPTIONS
       ;
 
-      rc = utilReadCommandLine( argc, argv, _allDesc, _vm, FALSE );
+      rc = utilOptions::parse(argc, argv);
       if (SDB_OK != rc)
       {
          goto error;
@@ -526,12 +530,16 @@ namespace import
 
       if (has(IMP_OPTION_HELP) ||
           has(IMP_OPTION_VERSION) ||
-          has(IMP_OPTION_HELPFUL))
+          has(IMP_OPTION_HELPFULL))
       {
          goto done;
       }
 
       rc = setOptions();
+      if (SDB_OK != rc)
+      {
+         goto error;
+      }
 
    done:
       return rc;
@@ -549,77 +557,20 @@ namespace import
       return has(IMP_OPTION_VERSION);
    }
 
-   BOOLEAN Options::hasHelpful()
+   BOOLEAN Options::hasHelpfull()
    {
-      return has(IMP_OPTION_HELPFUL);
-   }
-
-   BOOLEAN Options::has(CHAR* option)
-   {
-      SDB_ASSERT(_parsed, "must be used after parsed");
-      SDB_ASSERT(NULL != option, "");
-
-      return (_vm.count(option) > 0);
-   }
-
-   template<typename T>
-   T Options::get(CHAR* option)
-   {
-      SDB_ASSERT(_parsed, "must be used after parsed");
-      SDB_ASSERT(NULL != option, "");
-      return _vm[option].as<T>();
+      return has(IMP_OPTION_HELPFULL);
    }
 
    void Options::printHelpInfo()
    {
-      po::options_description general;
-      po::options_description import;
-      po::options_description input;
-      po::options_description csv;
-
-      SDB_ASSERT(_parsed, "must be used after parsed");
-
-      general.add_options()
-         IMP_GENERAL_OPTIONS
-      ;
-
-      input.add_options()
-         IMP_INPUT_OPTIONS
-      ;
-
-      csv.add_options()
-         IMP_CSV_OPTIONS
-      ;
-
-      import.add_options()
-         IMP_IMPORT_OPTIONS
-      ;
-
-      std::cout << "General Options:" << std::endl;
-      std::cout << general << std::endl;
-
-      std::cout << "Input Options:" << std::endl;
-      std::cout << input << std::endl;
-
-      std::cout << "CSV Options:" << std::endl;
-      std::cout << csv << std::endl;
-
-      std::cout << "Import Options:" << std::endl;
-      std::cout << import << std::endl;
+      SDB_ASSERT(_parsed, "must be parsed");
+      print();
    }
 
-   void Options::printHelpfulInfo()
+   void Options::printHelpfullInfo()
    {
-      po::options_description helpful;
-
-      helpful.add_options()
-         IMP_HELPFUL_OPTIONS
-      ;
-
-      printHelpInfo();
-
-      std::cout << "Helpful Options:" << std::endl;
-      std::cout << helpful << std::endl;
+      print(TRUE);
    }
 
    INT32 Options::setOptions()
@@ -641,11 +592,8 @@ namespace import
          _svcname = get<string>(IMP_OPTION_SVCNAME);
       }
 
-      // add hostname & svcname to hostsString,
-      // so we can process them in one time
       if (has(IMP_OPTION_HOSTNAME) || has(IMP_OPTION_SVCNAME))
       {
-         // it's ok if there are duplicate hostsString, it'll be processed.
          if (has(IMP_OPTION_HOSTS))
          {
             _hostsString += "," + _hostname + ":" + _svcname;
@@ -925,6 +873,12 @@ namespace import
       {
          string cast = get<string>(IMP_OPTION_CAST);
          ossStrToBoolean(cast.c_str(), &_cast);
+      }
+
+      if (has(IMP_OPTION_STRICTFIELDNUM))
+      {
+         string strict = get<string>(IMP_OPTION_STRICTFIELDNUM);
+         ossStrToBoolean(strict.c_str(), &_strictFieldNum);
       }
 
       if (has(IMP_OPTION_DATEFMT))

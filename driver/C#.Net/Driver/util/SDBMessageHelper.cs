@@ -16,8 +16,10 @@ namespace SequoiaDB
         private const int MESSAGE_OPUPDATE_LENGTH = 45;
         private const int MESSAGE_OPGETMORE_LENGTH = 40;
         private const int MESSAGE_KILLCURSOR_LENGTH = 36;
-        private const int MESSAGE_OPLOB_LENGTH = 52;
-        private const int MESSAGE_LOBTUPLE_LENGTH = 16;
+
+        public const int MESSAGE_OPLOB_LENGTH = 52;
+        public const int MESSAGE_LOBTUPLE_LENGTH = 16;
+        public const int MESSAGE_OPREPLY_LENGTH = 48;
 
         private static readonly Logger logger = new Logger("SDBMessageHelper");
 
@@ -38,59 +40,52 @@ namespace SequoiaDB
             short w = sdbMessage.W;
             short padding = sdbMessage.Padding;
             int flags = sdbMessage.Flags;
-            ulong requestID = sdbMessage.RequestID;
+            long requestID = (long)sdbMessage.RequestID;
             long skipRowsCount = sdbMessage.SkipRowsCount;
             long returnRowsCount = sdbMessage.ReturnRowsCount;
-            byte[] collByteArray = System.Text.Encoding.UTF8.GetBytes(collectionName);
-            int collectionNameLength = collByteArray.Length;
-
-            byte[] query = sdbMessage.Matcher.ToBson();
-            byte[] fieldSelector = sdbMessage.Selector.ToBson();
-            byte[] orderBy = sdbMessage.OrderBy.ToBson();
-            byte[] hint = sdbMessage.Hint.ToBson();
             byte[] nodeID = sdbMessage.NodeID;
+            byte[] collectionNameBytes = System.Text.Encoding.UTF8.GetBytes(collectionName);
+
+            byte[] matcherBytes = sdbMessage.Matcher.ToBson();
+            byte[] selectorBytes = sdbMessage.Selector.ToBson();
+            byte[] orderByBytes = sdbMessage.OrderBy.ToBson();
+            byte[] hintBytes = sdbMessage.Hint.ToBson();
             if (isBigEndian)
             {
-                BsonEndianConvert(query, 0, query.Length, true);
-                BsonEndianConvert(fieldSelector, 0, fieldSelector.Length, true);
-                BsonEndianConvert(orderBy, 0, orderBy.Length, true);
-                BsonEndianConvert(hint, 0, hint.Length, true);
+                BsonEndianConvert(matcherBytes, 0, matcherBytes.Length, true);
+                BsonEndianConvert(selectorBytes, 0, selectorBytes.Length, true);
+                BsonEndianConvert(orderByBytes, 0, orderByBytes.Length, true);
+                BsonEndianConvert(hintBytes, 0, hintBytes.Length, true);
             }
 
             int messageLength = Helper.RoundToMultipleXLength(
-                MESSAGE_OPQUERY_LENGTH + collectionNameLength, 4)
-                + Helper.RoundToMultipleXLength(query.Length, 4)
-                + Helper.RoundToMultipleXLength(fieldSelector.Length, 4)
-                + Helper.RoundToMultipleXLength(orderBy.Length, 4)
-                + Helper.RoundToMultipleXLength(hint.Length, 4);
+                MESSAGE_OPQUERY_LENGTH + collectionNameBytes.Length, 4)
+                + Helper.RoundToMultipleXLength(matcherBytes.Length, 4)
+                + Helper.RoundToMultipleXLength(selectorBytes.Length, 4)
+                + Helper.RoundToMultipleXLength(orderByBytes.Length, 4)
+                + Helper.RoundToMultipleXLength(hintBytes.Length, 4);
 
-            List<byte[]> fieldList = new List<byte[]>();
-            fieldList.Add(AssembleHeader(messageLength, requestID, nodeID, opCode, isBigEndian));
-            ByteBuffer buf = new ByteBuffer(32);
-            if (isBigEndian)
-                buf.IsBigEndian = true;
+            // alloc message buffer
+            ByteBuffer buf = new ByteBuffer(messageLength);
+            buf.IsBigEndian = isBigEndian;
+            // append massage header
+            AddMsgHeader(buf, messageLength, opCode, nodeID, requestID);
+            // append massage body
             buf.PushInt(version);
             buf.PushShort(w);
             buf.PushShort(padding);
             buf.PushInt(flags);
-            buf.PushInt(collectionNameLength);
+            buf.PushInt(collectionNameBytes.Length);
             buf.PushLong(skipRowsCount);
             buf.PushLong(returnRowsCount);
+            AddCollNameBytesToByteBuffer(buf, collectionNameBytes, 4);
+            // append massage content
+            AddBytesToByteBuffer(buf, matcherBytes, 0, matcherBytes.Length, 4);
+            AddBytesToByteBuffer(buf, selectorBytes, 0, selectorBytes.Length, 4);
+            AddBytesToByteBuffer(buf, orderByBytes, 0, orderByBytes.Length, 4);
+            AddBytesToByteBuffer(buf, hintBytes, 0, hintBytes.Length, 4);
 
-            fieldList.Add(buf.ToByteArray());
-
-            byte[] newCollectionName = new byte[collectionNameLength + 1];
-            for (int i = 0; i < collectionNameLength; i++)
-                newCollectionName[i] = collByteArray[i];
-
-            fieldList.Add(Helper.RoundToMultipleX(newCollectionName, 4));
-            fieldList.Add(Helper.RoundToMultipleX(query, 4));
-            fieldList.Add(Helper.RoundToMultipleX(fieldSelector, 4));
-            fieldList.Add(Helper.RoundToMultipleX(orderBy, 4));
-            fieldList.Add(Helper.RoundToMultipleX(hint, 4));
-
-            byte[] msgInByteArray = Helper.ConcatByteArray(fieldList);
-
+            byte[] msgInByteArray = buf.ToByteArray();
             if (logger.IsDebugEnabled) {
                StringWriter buff = new StringWriter();
                foreach (byte by in msgInByteArray) {
@@ -99,6 +94,21 @@ namespace SequoiaDB
                logger.Debug("Query Request string==>" + buff.ToString() + "<==");
             }
             return msgInByteArray;
+        }
+
+        internal static BsonDocument TryGenOID(BsonDocument obj, bool ensureOID)
+        {
+            if (ensureOID == true)
+            {
+                ObjectId objId;
+                BsonValue tmp;
+                if (!obj.TryGetValue(SequoiadbConstants.OID, out tmp))
+                {
+                    objId = ObjectId.GenerateNewId();
+                    obj.Add(SequoiadbConstants.OID, objId);
+                }
+            }
+            return obj;
         }
 
         internal static byte[] BuildInsertRequest(SDBMessage sdbMessage, bool isBigEndian)
@@ -110,8 +120,8 @@ namespace SequoiaDB
             short padding = sdbMessage.Padding;
             int flags = sdbMessage.Flags;
             ulong requestID = sdbMessage.RequestID;
-            byte[] collByteArray = System.Text.Encoding.UTF8.GetBytes(collectionName);
-            int collectionNameLength = collByteArray.Length;
+            byte[] collectionNameBytes = System.Text.Encoding.UTF8.GetBytes(collectionName);
+            int collectionNameLength = collectionNameBytes.Length;
 
             byte[] insertor = sdbMessage.Insertor.ToBson();
             byte[] nodeID = sdbMessage.NodeID;
@@ -142,7 +152,7 @@ namespace SequoiaDB
             // cl name also in the packet head, we need one more byte for '\0'
             byte[] newCollectionName = new byte[collectionNameLength + 1];
             for (int i = 0; i < collectionNameLength; i++)
-                newCollectionName[i] = collByteArray[i];
+                newCollectionName[i] = collectionNameBytes[i];
 
             fieldList.Add(Helper.RoundToMultipleX(newCollectionName, 4));
             // we have finish preparing packet head
@@ -151,6 +161,68 @@ namespace SequoiaDB
             // transform the list into byte[]
             byte[] msgInByteArray = Helper.ConcatByteArray(fieldList);
 
+            if (logger.IsDebugEnabled)
+            {
+                StringWriter buff = new StringWriter();
+                foreach (byte by in msgInByteArray)
+                {
+                    buff.Write(string.Format("{0:X}", by));
+                }
+                logger.Debug("Insert Request string==>" + buff.ToString() + "<==");
+            }
+            return msgInByteArray;
+        }
+
+        internal static byte[] BuildBulkInsertRequest(SDBMessage sdbMessage, List<BsonDocument> records, bool ensureOID, bool isBigEndian)
+        {
+            int messageLength = 0;
+            int opCode = (int)sdbMessage.OperationCode;
+            string collectionName = sdbMessage.CollectionFullName;
+            int version = sdbMessage.Version;
+            short w = sdbMessage.W;
+            short padding = sdbMessage.Padding;
+            int flags = sdbMessage.Flags;
+            long requestID = (long)sdbMessage.RequestID;
+            byte[] collectionNameBytes = System.Text.Encoding.UTF8.GetBytes(collectionName);
+            byte[] nodeID = sdbMessage.NodeID;
+            List<byte[]> docsBytes = new List<byte[]>(records.Count);
+
+            // MESSAGE_OPINSERT_LENGTH has contain 1 byte for the end of collection name
+            messageLength = 
+                Helper.RoundToMultipleXLength(MESSAGE_OPINSERT_LENGTH + collectionNameBytes.Length, 4);
+
+            for (int i = 0; i < records.Count; i++)
+            {
+                byte[] docBytes = TryGenOID(records[i], ensureOID).ToBson();
+                messageLength += Helper.RoundToMultipleXLength(docBytes.Length, 4);
+                if (isBigEndian)
+                {
+                    BsonEndianConvert(docBytes, 0, docBytes.Length, true);
+                }
+                docsBytes.Add(docBytes);
+            }
+
+            // alloc the buffer
+            ByteBuffer buf = new ByteBuffer(messageLength);
+            buf.IsBigEndian = isBigEndian;
+
+            // append massage header
+            AddMsgHeader(buf, messageLength, opCode, nodeID, requestID);
+            // append massage body
+            buf.PushInt(version);
+            buf.PushShort(w);
+            buf.PushShort(padding);
+            buf.PushInt(flags);
+            buf.PushInt(collectionNameBytes.Length);
+            AddCollNameBytesToByteBuffer(buf, collectionNameBytes, 4);
+            // append massage contents
+            for (int i = 0; i < docsBytes.Count; i++)
+            {
+                AddBytesToByteBuffer(buf, docsBytes[i], 0, docsBytes[i].Length, 4);
+            }
+
+            // return message bytes
+            byte[] msgInByteArray = buf.ToByteArray();
             if (logger.IsDebugEnabled)
             {
                 StringWriter buff = new StringWriter();
@@ -203,47 +275,42 @@ namespace SequoiaDB
             short w = sdbMessage.W;
             short padding = sdbMessage.Padding;
             int flags = sdbMessage.Flags;
-            ulong requestID = sdbMessage.RequestID;
+            long requestID = (long)sdbMessage.RequestID;
             byte[] nodeID = sdbMessage.NodeID;
-            byte[] collByteArray = System.Text.Encoding.UTF8.GetBytes(collectionName);
-            int collectionNameLength = collByteArray.Length;
+            byte[] collectionNameBytes = System.Text.Encoding.UTF8.GetBytes(collectionName);
 
-            byte[] matcher = sdbMessage.Matcher.ToBson();
-            byte[] hint = sdbMessage.Hint.ToBson();
+            byte[] matcherBytes = sdbMessage.Matcher.ToBson();
+            byte[] hintBytes = sdbMessage.Hint.ToBson();
             if (isBigEndian)
             {
-                BsonEndianConvert(matcher, 0, matcher.Length, true);
-                BsonEndianConvert(hint, 0, hint.Length, true);
+                BsonEndianConvert(matcherBytes, 0, matcherBytes.Length, true);
+                BsonEndianConvert(hintBytes, 0, hintBytes.Length, true);
             }
 
             int messageLength = Helper.RoundToMultipleXLength(
-                MESSAGE_OPDELETE_LENGTH + collectionNameLength, 4)
-                + Helper.RoundToMultipleXLength(matcher.Length, 4)
-                + Helper.RoundToMultipleXLength(hint.Length, 4);
+                MESSAGE_OPDELETE_LENGTH + collectionNameBytes.Length, 4)
+                + Helper.RoundToMultipleXLength(matcherBytes.Length, 4)
+                + Helper.RoundToMultipleXLength(hintBytes.Length, 4);
 
-            List<byte[]> fieldList = new List<byte[]>();
-            fieldList.Add(AssembleHeader(messageLength, requestID, nodeID, opCode, isBigEndian));
-            ByteBuffer buf = new ByteBuffer(16);
-            if (isBigEndian)
-                buf.IsBigEndian = true;
+            // alloc message buffer
+            ByteBuffer buf = new ByteBuffer(messageLength);
+            buf.IsBigEndian = isBigEndian;
+
+            // append message header
+            AddMsgHeader(buf, messageLength, opCode, nodeID, requestID);
+            // append message body
             buf.PushInt(version);
             buf.PushShort(w);
             buf.PushShort(padding);
             buf.PushInt(flags);
-            buf.PushInt(collectionNameLength);
+            buf.PushInt(collectionNameBytes.Length);
+            AddCollNameBytesToByteBuffer(buf, collectionNameBytes, 4);
+            // append message content
+            AddBytesToByteBuffer(buf, matcherBytes, 0, matcherBytes.Length, 4);
+            AddBytesToByteBuffer(buf, hintBytes, 0, hintBytes.Length, 4);
 
-            fieldList.Add(buf.ToByteArray());
-
-            byte[] newCollectionName = new byte[collectionNameLength + 1];
-            for (int i = 0; i < collectionNameLength; i++)
-                newCollectionName[i] = collByteArray[i];
-
-            fieldList.Add(Helper.RoundToMultipleX(newCollectionName, 4));
-            fieldList.Add(Helper.RoundToMultipleX(matcher, 4));
-            fieldList.Add(Helper.RoundToMultipleX(hint, 4));
-
-            byte[] msgInByteArray = Helper.ConcatByteArray(fieldList);
-
+            // return message bytes
+            byte[] msgInByteArray = buf.ToByteArray();
             if (logger.IsDebugEnabled)
             {
                 StringWriter buff = new StringWriter();
@@ -264,51 +331,45 @@ namespace SequoiaDB
             short w = sdbMessage.W;
             short padding = sdbMessage.Padding;
             int flags = sdbMessage.Flags;
-            ulong requestID = sdbMessage.RequestID;
+            long requestID = (long)sdbMessage.RequestID;
             byte[] nodeID = sdbMessage.NodeID;
-            byte[] collByteArray = System.Text.Encoding.UTF8.GetBytes(collectionName);
-            int collectionNameLength = collByteArray.Length;
+            byte[] collectionNameBytes = System.Text.Encoding.UTF8.GetBytes(collectionName);
 
-            byte[] matcher = sdbMessage.Matcher.ToBson();
-            byte[] hint = sdbMessage.Hint.ToBson();
-            byte[] modifier = sdbMessage.Modifier.ToBson();
+            byte[] matcherBytes = sdbMessage.Matcher.ToBson();
+            byte[] hintBytes = sdbMessage.Hint.ToBson();
+            byte[] modifierBytes = sdbMessage.Modifier.ToBson();
             if (isBigEndian)
             {
-                BsonEndianConvert(matcher, 0, matcher.Length, true);
-                BsonEndianConvert(modifier, 0, modifier.Length, true);
-                BsonEndianConvert(hint, 0, hint.Length, true);
+                BsonEndianConvert(matcherBytes, 0, matcherBytes.Length, true);
+                BsonEndianConvert(modifierBytes, 0, modifierBytes.Length, true);
+                BsonEndianConvert(hintBytes, 0, hintBytes.Length, true);
             }
 
             int messageLength = Helper.RoundToMultipleXLength(
-                MESSAGE_OPUPDATE_LENGTH + collectionNameLength, 4)
-                + Helper.RoundToMultipleXLength(matcher.Length, 4)
-                + Helper.RoundToMultipleXLength(hint.Length, 4)
-                + Helper.RoundToMultipleXLength(modifier.Length, 4);
+                MESSAGE_OPUPDATE_LENGTH + collectionNameBytes.Length, 4)
+                + Helper.RoundToMultipleXLength(matcherBytes.Length, 4)
+                + Helper.RoundToMultipleXLength(hintBytes.Length, 4)
+                + Helper.RoundToMultipleXLength(modifierBytes.Length, 4);
 
-            List<byte[]> fieldList = new List<byte[]>();
-            fieldList.Add(AssembleHeader(messageLength, requestID, nodeID, opCode, isBigEndian));
-            ByteBuffer buf = new ByteBuffer(16);
-            if (isBigEndian)
-                buf.IsBigEndian = true;
+            // alloc message buffer
+            ByteBuffer buf = new ByteBuffer(messageLength);
+            buf.IsBigEndian = isBigEndian;
+            // add message header
+            AddMsgHeader(buf, messageLength, opCode, nodeID, requestID);
+            // add message body
             buf.PushInt(version);
             buf.PushShort(w);
             buf.PushShort(padding);
             buf.PushInt(flags);
-            buf.PushInt(collectionNameLength);
+            buf.PushInt(collectionNameBytes.Length);
+            AddCollNameBytesToByteBuffer(buf, collectionNameBytes, 4);
+            // add message contents
+            AddBytesToByteBuffer(buf, matcherBytes, 0, matcherBytes.Length, 4);
+            AddBytesToByteBuffer(buf, modifierBytes, 0, modifierBytes.Length, 4);
+            AddBytesToByteBuffer(buf, hintBytes, 0, hintBytes.Length, 4);
 
-            fieldList.Add(buf.ToByteArray());
-
-            byte[] newCollectionName = new byte[collectionNameLength + 1];
-            for (int i = 0; i < collectionNameLength; i++)
-                newCollectionName[i] = collByteArray[i];
-
-            fieldList.Add(Helper.RoundToMultipleX(newCollectionName, 4));
-            fieldList.Add(Helper.RoundToMultipleX(matcher, 4));
-            fieldList.Add(Helper.RoundToMultipleX(modifier, 4));
-            fieldList.Add(Helper.RoundToMultipleX(hint, 4));
-
-            byte[] msgInByteArray = Helper.ConcatByteArray(fieldList);
-
+            // return message bytes
+            byte[] msgInByteArray = buf.ToByteArray();
             if (logger.IsDebugEnabled)
             {
                 StringWriter buff = new StringWriter();
@@ -670,345 +731,229 @@ namespace SequoiaDB
             return BuildTransactionRequest(sdbMessage, isBigEndian);
         }
 
-        internal static byte[] BuildOpenLobRequest(SDBMessage sdbMessage, bool isBigEndian)
+        internal static void AddMsgHeader(ByteBuffer buff, int totalLen,
+                                          int opCode, byte[] nodeID, long requestID)
         {
-            /*
-                /// open reg msg is |MsgOpLob|bsonobj|
-                struct _MsgHeader
-                {
-                   SINT32 messageLength ; // total message size, including this
-                   SINT32 opCode ;        // operation code
-                   UINT32 TID ;           // client thead id
-                   MsgRouteID routeID ;   // route id 8 bytes
-                   UINT64 requestID ;     // identifier for this message
-                } ;
-
-                typedef struct _MsgOpLob
-                {
-                   MsgHeader header ;
-                   INT32 version ;
-                   SINT16 w ;
-                   SINT16 padding ;
-                   SINT32 flags ;
-                   SINT64 contextID ;
-                   UINT32 bsonLen ;
-                } MsgOpLob ;
-             */
-            // get info to build _MsgOpLob
-            // MsgHeader
-            int messageLength = 0;
-            int opCode = (int)sdbMessage.OperationCode;
-            byte[] nodeID = sdbMessage.NodeID;
-            ulong requestID = sdbMessage.RequestID;
-            // the rest part of _MsgOpLOb
-            int version = sdbMessage.Version;
-            short w = sdbMessage.W;
-            short padding = sdbMessage.Padding;
-            int flags = sdbMessage.Flags;
-            long contextID = sdbMessage.ContextIDList[0];
-            uint bsonLen = 0;
-            byte[] bLob = sdbMessage.Matcher.ToBson();
-            bsonLen = (uint)bLob.Length;
-            if (isBigEndian)
-            {
-                BsonEndianConvert(bLob, 0, bLob.Length, true);
-            }
-            // calculate total length
-            messageLength = MESSAGE_OPLOB_LENGTH +
-                            Helper.RoundToMultipleXLength(bLob.Length, 4);
-            // build a array list for return
-            List<byte[]> fieldList = new List<byte[]>();
-            // add MsgHead
-            fieldList.Add(AssembleHeader(messageLength, requestID, nodeID, opCode, isBigEndian));
-            // add the rest part of MsgOpLob
-            ByteBuffer buf = new ByteBuffer(MESSAGE_OPLOB_LENGTH - MESSAGE_HEADER_LENGTH);
-            if (isBigEndian)
-            {
-                buf.IsBigEndian = true;
-            }
-            buf.PushInt(version);
-            buf.PushShort(w);
-            buf.PushShort(padding);
-            buf.PushInt(flags);
-            buf.PushLong(contextID);
-            buf.PushInt((int)bsonLen);
-            fieldList.Add(buf.ToByteArray());
-            // add msg body
-            fieldList.Add(Helper.RoundToMultipleX(bLob, 4));
-            // convert to byte array and return
-            byte[] msgInByteArray = Helper.ConcatByteArray(fieldList);
-
-            if (logger.IsDebugEnabled)
-            {
-                StringWriter buff = new StringWriter();
-                foreach (byte by in msgInByteArray)
-                {
-                    buff.Write(string.Format("{0:X}", by));
-                }
-                logger.Debug("Open Lob Request string==>" + buff.ToString() + "<==");
-            }
-            return msgInByteArray;
+            //MsgHeader.messageLength
+            buff.PushInt(totalLen);
+            //MsgHeader.opCode
+            buff.PushInt(opCode);
+            //MsgHeader.TID + MsgHeader.routeID
+            buff.PushByteArray(nodeID);
+            //MsgHeader.requestID
+            buff.PushLong(requestID);
         }
 
-        internal static byte[] BuildCloseLobRequest(SDBMessage sdbMessage, bool isBigEndian)
+        internal static void AddBytesToByteBuffer(ByteBuffer buffer, byte[] byteArray,
+                                                  int off, int len, int multipler)
         {
-            /*
-                /// close reg msg is |MsgOpLob|
-                struct _MsgHeader
-                {
-                   SINT32 messageLength ; // total message size, including this
-                   SINT32 opCode ;        // operation code
-                   UINT32 TID ;           // client thead id
-                   MsgRouteID routeID ;   // route id 8 bytes
-                   UINT64 requestID ;     // identifier for this message
-                } ;
-
-                typedef struct _MsgOpLob
-                {
-                   MsgHeader header ;
-                   INT32 version ;
-                   SINT16 w ;
-                   SINT16 padding ;
-                   SINT32 flags ;
-                   SINT64 contextID ;
-                   UINT32 bsonLen ;
-                } MsgOpLob ;
-             */
-            // get info to build _MsgOpLob
-            // MsgHeader
-            int messageLength = MESSAGE_OPLOB_LENGTH;
-            int opCode = (int)sdbMessage.OperationCode;
-            byte[] nodeID = sdbMessage.NodeID;
-            ulong requestID = sdbMessage.RequestID;
-            // the rest part of _MsgOpLOb
-            int version = sdbMessage.Version;
-            short w = sdbMessage.W;
-            short padding = sdbMessage.Padding;
-            int flags = sdbMessage.Flags;
-            long contextID = sdbMessage.ContextIDList[0];
-            uint bsonLen = sdbMessage.BsonLen;
-
-            // build a array list for return
-            List<byte[]> fieldList = new List<byte[]>();
-            // add MsgHead
-            fieldList.Add(AssembleHeader(messageLength, requestID, nodeID, opCode, isBigEndian));
-            // add the rest part of MsgOpLob
-            ByteBuffer buf = new ByteBuffer(MESSAGE_OPLOB_LENGTH - MESSAGE_HEADER_LENGTH);
-            if (isBigEndian)
+            if (off + len > byteArray.Length)
             {
-                buf.IsBigEndian = true;
+                throw new BaseException((int)Errors.errors.SDB_SYS, "off + len is more then byteArray.length");
             }
-            buf.PushInt(version);
-            buf.PushShort(w);
-            buf.PushShort(padding);
-            buf.PushInt(flags);
-            buf.PushLong(contextID);
-            buf.PushInt((int)bsonLen);
-            fieldList.Add(buf.ToByteArray());
-
-            // convert to byte array and return
-            byte[] msgInByteArray = Helper.ConcatByteArray(fieldList);
-
-            if (logger.IsDebugEnabled)
+            int newLength = Helper.RoundToMultipleXLength(len, multipler);
+            int incLength = newLength - len;
+            // check
+            if (newLength > buffer.Remaining())
             {
-                StringWriter buff = new StringWriter();
-                foreach (byte by in msgInByteArray)
-                {
-                    buff.Write(string.Format("{0:X}", by));
-                }
-                logger.Debug("Close Lob Request string==>" + buff.ToString() + "<==");
+                throw new BaseException((int)Errors.errors.SDB_SYS, String.Format(
+                        "buffer is too small, need {0} bytes, but remaining is {1}",
+                        newLength, buffer.Remaining()));
             }
-            return msgInByteArray;
+            // put data
+            buffer.PushByteArray(byteArray, off, len);
+            // align ByteBuffer
+            Helper.AlignByteBuffer(buffer, incLength);
         }
 
-        internal static byte[] BuildReadLobRequest(SDBMessage sdbMessage, bool isBigEndian)
+        internal static void AddCollNameBytesToByteBuffer(ByteBuffer buffer, byte[] collectionNameBytes, int multipler)
         {
-            /*
-                /// read req msg is |MsgOpLob|_MsgLobTuple|
-                struct _MsgHeader
-                {
-                   SINT32 messageLength ; // total message size, including this
-                   SINT32 opCode ;        // operation code
-                   UINT32 TID ;           // client thead id
-                   MsgRouteID routeID ;   // route id 8 bytes
-                   UINT64 requestID ;     // identifier for this message
-                } ;
-
-                typedef struct _MsgOpLob
-                {
-                   MsgHeader header ;
-                   INT32 version ;
-                   SINT16 w ;
-                   SINT16 padding ;
-                   SINT32 flags ;
-                   SINT64 contextID ;
-                   UINT32 bsonLen ;
-                } MsgOpLob ;
-
-                union _MsgLobTuple
-                {
-                   struct
-                   {
-                      UINT32 len ;
-                      UINT32 sequence ;
-                      SINT64 offset ;
-                   } columns ;
-
-                   CHAR data[16] ;
-                } ;
-             */
-            // get info to build _MsgOpLob
-            // MsgHeader
-            int messageLength = 0;
-            int opCode = (int)sdbMessage.OperationCode;
-            byte[] nodeID = sdbMessage.NodeID;
-            ulong requestID = sdbMessage.RequestID;
-            // the rest part of _MsgOpLOb
-            int version = sdbMessage.Version;
-            short w = sdbMessage.W;
-            short padding = sdbMessage.Padding;
-            int flags = sdbMessage.Flags;
-            long contextID = sdbMessage.ContextIDList[0];
-            uint bsonLen = sdbMessage.BsonLen;
-            // MsgLobTuple
-            uint length = sdbMessage.LobLen;
-            uint sequence = sdbMessage.LobSequence;
-            long offset = sdbMessage.LobOffset;
-            // calculate total length
-            messageLength = MESSAGE_OPLOB_LENGTH + MESSAGE_LOBTUPLE_LENGTH;
-            // build a array list for return
-            List<byte[]> fieldList = new List<byte[]>();
-            // add MsgHead
-            fieldList.Add(AssembleHeader(messageLength, requestID, nodeID, opCode, isBigEndian));
-            // add the rest part of MsgOpLob and MsgLobTuple
-            ByteBuffer buf = new ByteBuffer(MESSAGE_OPLOB_LENGTH - MESSAGE_HEADER_LENGTH + MESSAGE_LOBTUPLE_LENGTH);
-            if (isBigEndian)
+            int len = collectionNameBytes.Length + 1;
+            int newLength = Helper.RoundToMultipleXLength(len, multipler);
+            int incLength = newLength - len;
+            // check
+            if (newLength > buffer.Remaining())
             {
-                buf.IsBigEndian = true;
+                throw new BaseException((int)Errors.errors.SDB_SYS, String.Format(
+                        "buffer is too small, need {0} bytes, but remaining is {1}",
+                        newLength, buffer.Remaining()));
             }
-            buf.PushInt(version);
-            buf.PushShort(w);
-            buf.PushShort(padding);
-            buf.PushInt(flags);
-            buf.PushLong(contextID);
-            buf.PushInt((int)bsonLen);
-
-            buf.PushInt((int)length);
-            buf.PushInt((int)sequence);
-            buf.PushLong(offset);
-            fieldList.Add(buf.ToByteArray());
-            // convert to byte array and return
-            byte[] msgInByteArray = Helper.ConcatByteArray(fieldList);
-
-            if (logger.IsDebugEnabled)
-            {
-                StringWriter buff = new StringWriter();
-                foreach (byte by in msgInByteArray)
-                {
-                    buff.Write(string.Format("{0:X}", by));
-                }
-                logger.Debug("Read Lob Request string==>" + buff.ToString() + "<==");
-            }
-            return msgInByteArray;
+            // put data
+            buffer.PushByteArray(collectionNameBytes);
+            buffer.PushByte(0);
+            // align ByteBuffer
+            Helper.AlignByteBuffer(buffer, incLength);
         }
 
-        internal static byte[] BuildWriteLobRequest(SDBMessage sdbMessage, byte[] data, bool isBigEndian)
+        internal static void AddLobOpMsg(ByteBuffer buff, int version, short w,
+                                         short padding, int flags, long contextID, int bsonLen)
         {
-            /*
-                /// write req msg is |MsgOpLob|_MsgLobTuple|data|
-                struct _MsgHeader
-                {
-                   SINT32 messageLength ; // total message size, including this
-                   SINT32 opCode ;        // operation code
-                   UINT32 TID ;           // client thead id
-                   MsgRouteID routeID ;   // route id 8 bytes
-                   UINT64 requestID ;     // identifier for this message
-                } ;
-
-                typedef struct _MsgOpLob
-                {
-                   MsgHeader header ;
-                   INT32 version ;
-                   SINT16 w ;
-                   SINT16 padding ;
-                   SINT32 flags ;
-                   SINT64 contextID ;
-                   UINT32 bsonLen ;
-                } MsgOpLob ;
-
-                union _MsgLobTuple
-                {
-                   struct
-                   {
-                      UINT32 len ;
-                      UINT32 sequence ;
-                      SINT64 offset ;
-                   } columns ;
-
-                   CHAR data[16] ;
-                } ;
-             */
-            // get info to build _MsgOpLob
-            // MsgHeader
-            int messageLength = 0;
-            int opCode = (int)sdbMessage.OperationCode;
-            byte[] nodeID = sdbMessage.NodeID;
-            ulong requestID = sdbMessage.RequestID;
-            // the rest part of _MsgOpLOb
-            int version = sdbMessage.Version;
-            short w = sdbMessage.W;
-            short padding = sdbMessage.Padding;
-            int flags = sdbMessage.Flags;
-            long contextID = sdbMessage.ContextIDList[0];
-            uint bsonLen = sdbMessage.BsonLen;
-            // MsgLobTuple
-            uint length = sdbMessage.LobLen;
-            uint sequence = sdbMessage.LobSequence;
-            long offset = sdbMessage.LobOffset;
-            // calculate total length
-            messageLength = MESSAGE_OPLOB_LENGTH
-                            + MESSAGE_LOBTUPLE_LENGTH
-                            + Helper.RoundToMultipleXLength(data.Length, 4);
-            // build a array list for return
-            List<byte[]> fieldList = new List<byte[]>();
-            // add MsgHead
-            fieldList.Add(AssembleHeader(messageLength, requestID, nodeID, opCode, isBigEndian));
-            // add the rest part of MsgOpLob and MsgLobTuple
-            ByteBuffer buf = new ByteBuffer(MESSAGE_OPLOB_LENGTH - MESSAGE_HEADER_LENGTH + MESSAGE_LOBTUPLE_LENGTH);
-            if (isBigEndian)
-            {
-                buf.IsBigEndian = true;
-            }
-            buf.PushInt(version);
-            buf.PushShort(w);
-            buf.PushShort(padding);
-            buf.PushInt(flags);
-            buf.PushLong(contextID);
-            buf.PushInt((int)bsonLen);
-
-            buf.PushInt((int)length);
-            buf.PushInt((int)sequence);
-            buf.PushLong(offset);
-            // add msg header
-            fieldList.Add(buf.ToByteArray());
-            // add msg body
-            fieldList.Add(Helper.RoundToMultipleX(data, 4));
-            // convert to byte array and return
-            byte[] msgInByteArray = Helper.ConcatByteArray(fieldList);
-
-            if (logger.IsDebugEnabled)
-            {
-                StringWriter buff = new StringWriter();
-                foreach (byte by in msgInByteArray)
-                {
-                    buff.Write(string.Format("{0:X}", by));
-                }
-                logger.Debug("Write Lob Request string==>" + buff.ToString() + "<==");
-            }
-            return msgInByteArray;
+            //_MsgOpLob.version
+            buff.PushInt(version);
+            //_MsgOpLob.w
+            buff.PushShort(w);
+            //_MsgOpLob.padding
+            buff.PushShort(padding);
+            //_MsgOpLob.flags
+            buff.PushInt(flags);
+            //_MsgOpLob.contextID
+            buff.PushLong(contextID);
+            //_MsgOpLob.bsonLen
+            buff.PushInt(bsonLen);
         }
 
-        internal static byte[] BuildRemoveLobRequest(SDBMessage sdbMessage, bool isBigEndian)
+        // extract lob open replay
+        internal static SDBMessage ExtractLobOpenReply(ByteBuffer byteBuffer)
+        {
+            SDBMessage sdbMessage = new SDBMessage();
+            /// when disable open with data return, the open response is |MsgOpReply|bsonobj|
+            /// however, when enable open with data return, the open response is 
+            /// MsgOpReply  |  Meta Object  |  _MsgLobTuple   | Data
+            
+            // get the total length of the return message
+            int messageLength = byteBuffer.PopInt();
+
+            // check the length
+            if (messageLength < MESSAGE_HEADER_LENGTH)
+            {
+                throw new BaseException((int)Errors.errors.SDB_SYS, 
+                    "receive invalid message lengthe: " + messageLength);
+            }
+
+            // set message length
+            sdbMessage.RequestLength = messageLength;
+
+            // op code
+            sdbMessage.OperationCode = (Operation)byteBuffer.PopInt();
+
+            // nodeID
+            byte[] nodeID = byteBuffer.PopByteArray(12);
+            sdbMessage.NodeID = nodeID;
+
+            // request id
+            sdbMessage.RequestID = (ulong)byteBuffer.PopLong();
+
+            // context id
+            List<long> contextIDList = new List<long>();
+            contextIDList.Add(byteBuffer.PopLong());
+            sdbMessage.ContextIDList = contextIDList;
+
+            // flags
+            sdbMessage.Flags = byteBuffer.PopInt();
+
+            // start from
+            sdbMessage.StartFrom = byteBuffer.PopInt();
+
+            // return record rows
+            sdbMessage.ReturnRowsCount = byteBuffer.PopInt();
+
+            // get meta info message from ByteBuffer
+            int metaObjStartPos = byteBuffer.Position();
+            byteBuffer.Mark();
+            int metaObjLen = byteBuffer.PopInt();
+            byteBuffer.Reset();
+            if (byteBuffer.IsBigEndian)
+            {
+                BsonEndianConvert(byteBuffer.ByteArray(),
+                    byteBuffer.Position(), metaObjLen, false);
+            }
+            // TODO: check this
+            BsonDocument metaInfoObj = BsonDocument.ReadFrom(byteBuffer.ByteArray(), byteBuffer.Position(), metaObjLen);
+            List<BsonDocument> objList = new List<BsonDocument>();
+            objList.Add(metaInfoObj);
+            sdbMessage.ObjectList = objList;
+
+            // get return data from byteBuffer
+            if (sdbMessage.Flags == 0)
+            {
+                int tupleInfoStartPos = metaObjStartPos +
+                    Helper.RoundToMultipleXLength(metaObjLen, 4);
+                // check whether there is any data behind meta info object or not
+                if (messageLength > tupleInfoStartPos)
+                {
+                    byteBuffer.Position(tupleInfoStartPos);
+                    // _MsgLobTuple
+                    sdbMessage.LobLen = (uint)byteBuffer.PopInt();
+                    sdbMessage.LobSequence = (uint)byteBuffer.PopInt();
+                    sdbMessage.LobOffset = byteBuffer.PopLong();
+                    // lob data
+                    // to avoid copy, we save byteBuffer directly
+                    sdbMessage.LobCachedDataBuf = byteBuffer;
+                }
+            }
+
+            return sdbMessage;
+        }
+
+        // extract lob remove replay
+        internal static SDBMessage ExtractLobRemoveReply(ByteBuffer byteBuffer)
+        {
+            return ExtractReply(byteBuffer);
+        }
+
+        // extract lob read replay
+        internal static SDBMessage ExtractLobReadReply(ByteBuffer byteBuffer)
+        {
+            /// when it is read res |MsgOpReply|_MsgLobTuple|data|
+            SDBMessage sdbMessage = new SDBMessage();
+
+            int MessageLength = byteBuffer.PopInt();
+
+            if (MessageLength < MESSAGE_HEADER_LENGTH) {
+                throw new BaseException((int)Errors.errors.SDB_SYS, 
+                    string.Format("Invalid return message length: {0}", MessageLength));
+            }
+
+            // Request message length
+            sdbMessage.RequestLength = MessageLength;
+
+            // Action code
+            sdbMessage.OperationCode = (Operation)byteBuffer.PopInt();
+
+            // nodeID
+            byte[] nodeID = byteBuffer.PopByteArray(12);
+            sdbMessage.NodeID = nodeID;
+
+            // Request id
+            sdbMessage.RequestID = (ulong)byteBuffer.PopLong();
+
+            // context id
+            List<long> contextIDList = new List<long>();
+            contextIDList.Add(byteBuffer.PopLong());
+            sdbMessage.ContextIDList = contextIDList;
+
+            // flags
+            sdbMessage.Flags = byteBuffer.PopInt();
+
+            // Start from
+            sdbMessage.StartFrom = byteBuffer.PopInt();
+
+            // Return record rows
+            int numReturned = byteBuffer.PopInt();
+            sdbMessage.NumReturned = numReturned;
+
+            sdbMessage.ObjectList = null;
+
+            if (sdbMessage.Flags == 0) {
+                // _MsgLobTuple
+                sdbMessage.LobLen = (uint)byteBuffer.PopInt();
+                sdbMessage.LobSequence = (uint)byteBuffer.PopInt();
+                sdbMessage.LobOffset = byteBuffer.PopLong();
+                // to avoid copy, we save byteBuffer directly 
+                sdbMessage.LobCachedDataBuf = byteBuffer;
+            }
+
+            return sdbMessage;
+        }
+
+        // extract lob write replay
+        internal static SDBMessage ExtractLobWriteReply(ByteBuffer byteBuffer)
+        {
+            return ExtractReply(byteBuffer);
+        }
+
+        // TODO: going to use ByteBuffer to replace it
+        static byte[] BuildOperatingLobRequest(SDBMessage sdbMessage, bool isBigEndian)
         {
             /*
                 /// remove lob reg msg is |MsgOpLob|bsonobj|
@@ -1091,6 +1036,16 @@ namespace SequoiaDB
             return msgInByteArray;
         }
 
+        internal static byte[] BuildRemoveLobRequest(SDBMessage sdbMessage, bool isBigEndian)
+        {
+            return BuildOperatingLobRequest(sdbMessage, isBigEndian);
+        }
+
+        internal static byte[] BuildTruncateLobRequest(SDBMessage sdbMessage, bool isBigEndian)
+        {
+            return BuildOperatingLobRequest(sdbMessage, isBigEndian);
+        }
+
         internal static SDBMessage MsgExtractReply(byte[] inBytes, bool isBigEndian)
         {
             if (logger.IsDebugEnabled)
@@ -1141,6 +1096,60 @@ namespace SequoiaDB
             {
                 List<BsonDocument> objList = ExtractBsonObject(remaining, isBigEndian);
                 sdbMessage.ObjectList = objList;
+            }
+
+            return sdbMessage;
+        }
+
+        public static SDBMessage ExtractReply(ByteBuffer byteBuffer)
+        {
+
+            SDBMessage sdbMessage = new SDBMessage();
+
+            int messageLength = byteBuffer.PopInt();
+
+            if (messageLength < MESSAGE_HEADER_LENGTH)
+            {
+                throw new BaseException((int)Errors.errors.SDB_SYS,
+                    "receive invalid message lengthe: " + messageLength);
+            }
+
+            // Request message length
+            sdbMessage.RequestLength = messageLength;
+
+            // Action code
+            sdbMessage.OperationCode = (Operation)byteBuffer.PopInt();
+
+            // nodeID
+            byte[] nodeID = byteBuffer.PopByteArray(12);
+            sdbMessage.NodeID = nodeID;
+
+            // Request id
+            sdbMessage.RequestID = (ulong)byteBuffer.PopLong();
+
+            // context id
+            List<long> contextIDList = new List<long>();
+            contextIDList.Add(byteBuffer.PopLong());
+            sdbMessage.ContextIDList = contextIDList;
+
+            // flags
+            sdbMessage.Flags = byteBuffer.PopInt();
+
+            // Start from
+            sdbMessage.StartFrom = byteBuffer.PopInt();
+
+            // Return record rows
+            int numReturned = byteBuffer.PopInt();
+            sdbMessage.NumReturned = numReturned;
+
+            if (numReturned > 0)
+            {
+                List<BsonDocument> objList = ExtractBSONObjectList(byteBuffer);
+                sdbMessage.ObjectList = objList;
+            }
+            else
+            {
+                sdbMessage.ObjectList = null;
             }
 
             return sdbMessage;
@@ -1321,6 +1330,38 @@ namespace SequoiaDB
             sdbMessage.RequestID = (ulong)Helper.ByteToLong(remainning, isBigEndian); 
         }
 
+        private static List<BsonDocument> ExtractBSONObjectList(ByteBuffer byteBuffer)
+        {
+
+            List<BsonDocument> objList = new List<BsonDocument>();
+            int nextBsonPos = byteBuffer.Position();
+            while (nextBsonPos < byteBuffer.Limit()) {
+                byteBuffer.Position(nextBsonPos);
+
+                int startPos = byteBuffer.Position();
+                // we had set the byte order in byteBuffer when we received the bytes
+                // so, no need to worry about the accuracy of "objLen"
+                int objLen = byteBuffer.PopInt();
+                byteBuffer.Position(startPos);
+
+                int objAllotLen = Helper.RoundToMultipleXLength(objLen, 4);
+                if (byteBuffer.IsBigEndian)
+                {
+                    // the "BsonDocument.ReadFrom" can only handle the byte order which
+                    // is in little-endian, so, we need to convert the big-endian to
+                    // little-endian
+                    BsonEndianConvert(byteBuffer.ByteArray(), byteBuffer.Position(),
+                            objLen, false); 
+                }
+                BsonDocument bson = BsonDocument.ReadFrom(byteBuffer.ByteArray(), byteBuffer.Position(), objLen);
+                objList.Add(bson);
+
+                nextBsonPos = byteBuffer.Position() + objAllotLen;
+            }
+
+            return objList;
+        }
+
         private static List<BsonDocument> ExtractBsonObject(byte[] inBytes, bool isBigEndian)
         {
             int objLen;
@@ -1367,7 +1408,7 @@ namespace SequoiaDB
             return Helper.ByteToInt(tmp, isBigEndian);
         }
 
-        private static void BsonEndianConvert(byte[] inBytes, int offset, int objSize, bool l2r)
+        internal static void BsonEndianConvert(byte[] inBytes, int offset, int objSize, bool l2r)
         {
             int beginOff = offset;
             Array.Reverse(inBytes, offset, 4);
@@ -1495,6 +1536,34 @@ namespace SequoiaDB
                         Array.Reverse(inBytes, offset, 4);
                         offset += 4;
                         break;
+
+                    case BsonType.Decimal:
+                    {
+                        // size(4) + typemod(4) + dscale(2) + weight(2) + digits(2x)
+
+                        // size
+                        int len = BitConverter.ToInt32(inBytes, offset);
+                        Array.Reverse(inBytes, offset, 4);
+                        int newlen = BitConverter.ToInt32(inBytes, offset);
+                        offset += 4;
+                        // typemod
+                        Array.Reverse(inBytes, offset, 4);
+                        offset += 4;
+                        // dscale
+                        Array.Reverse(inBytes, offset, 2);
+                        offset += 2;
+                        // weight
+                        Array.Reverse(inBytes, offset, 2);
+                        offset += 2;
+                        // digits
+                        int ndigits = ((l2r ? len : newlen) - BsonDecimal.DECIMAL_HEADER_SIZE) / sizeof(short);
+                        for (int i = 0; i < ndigits; ++i)
+                        {
+                            Array.Reverse(inBytes, offset, 2);
+                            offset += 2;                             
+                        }
+                        break;
+                    }
                 }
             }
             if (offset - beginOff != objSize )

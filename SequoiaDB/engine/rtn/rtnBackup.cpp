@@ -36,6 +36,7 @@
 *******************************************************************************/
 #include "barBkupLogger.hpp"
 #include "rtn.hpp"
+#include "rtnContextDump.hpp"
 #include "pmd.hpp"
 #include "pmdCB.hpp"
 #include "pdTrace.hpp"
@@ -76,9 +77,12 @@ namespace engine
 
       BOOLEAN isSubDir        = FALSE ;
       BOOLEAN enableDateDir   = FALSE ;
+      BOOLEAN backupLog       = FALSE ;
       const CHAR *prefix      = NULL ;
+      BOOLEAN compressed      = TRUE ;
+      const CHAR *pCompType   = VALUE_NAME_SNAPPY ;
+      UTIL_COMPRESSOR_TYPE compType = UTIL_COMPRESSOR_INVALID ;
 
-      // option config
       rc = rtnGetBooleanElement( option, FIELD_NAME_ISSUBDIR, isSubDir ) ;
       if ( SDB_FIELD_NOT_EXIST == rc )
       {
@@ -113,13 +117,48 @@ namespace engine
       PD_RC_CHECK( rc, PDWARNING, "Failed to get field[%s], rc: %d",
                    FIELD_NAME_PREFIX, rc ) ;
 
+      rc = rtnGetBooleanElement( option, FIELD_NAME_BACKUP_LOG, backupLog ) ;
+      if ( SDB_FIELD_NOT_EXIST == rc )
+      {
+         rc = SDB_OK ;
+      }
+      PD_RC_CHECK( rc, PDWARNING, "Failed to get field[%s], rc: %d",
+                   FIELD_NAME_BACKUP_LOG, rc ) ;
+
+      rc = rtnGetBooleanElement( option, FIELD_NAME_COMPRESSED, compressed ) ;
+      if ( SDB_FIELD_NOT_EXIST == rc )
+      {
+         rc = SDB_OK ;
+      }
+      PD_RC_CHECK( rc, PDWARNING, "Failed to get field[%s], rc: %d",
+                   FIELD_NAME_COMPRESSED, rc ) ;
+
+      rc = rtnGetStringElement( option, FIELD_NAME_COMPRESSIONTYPE,
+                                &pCompType ) ;
+      if ( SDB_FIELD_NOT_EXIST == rc )
+      {
+         rc = SDB_OK ;
+      }
+      PD_RC_CHECK( rc, PDWARNING, "Failed to get field[%s], rc: %d",
+                   FIELD_NAME_COMPRESSIONTYPE, rc ) ;
+
+      compType = utilString2CompressType( pCompType ) ;
+      if ( UTIL_COMPRESSOR_INVALID == compType ||
+           UTIL_COMPRESSOR_LZW == compType )
+      {
+         PD_LOG( PDERROR, "Field[%s]'s value[%s] is invalid, only support: %s",
+                 FIELD_NAME_COMPRESSIONTYPE, pCompType,
+                 "snappy/lz4/zlib" ) ;
+         rc = SDB_INVALIDARG ;
+         goto error ;
+      }
+
       if ( maxDataFileSize < BAR_MIN_DATAFILE_SIZE ||
            maxDataFileSize > BAR_MAX_DATAFILE_SIZE )
       {
          maxDataFileSize = BAR_DFT_DATAFILE_SIZE ;
       }
 
-      // make path
       if ( isSubDir && path )
       {
          bkpath = rtnFullPathName( pmdGetOptionCB()->getBkupPath(), path ) ;
@@ -143,6 +182,8 @@ namespace engine
                         BAR_BACKUP_OP_TYPE_FULL, rewrite, desp ) ;
       PD_RC_CHECK( rc, PDERROR, "Init off line backup logger failed, rc: %d",
                    rc ) ;
+      logger.setBackupLog( backupLog ) ;
+      logger.enableCompress( compressed, compType ) ;
 
       rc = logger.backup( cb ) ;
       PD_RC_CHECK( rc, PDERROR, "Off line backup failed, rc: %d", rc ) ;
@@ -191,7 +232,6 @@ namespace engine
       PD_RC_CHECK( rc, PDWARNING, "Failed to get field[%s], rc: %d",
                    FIELD_NAME_DETAIL, rc ) ;
 
-      // option config
       rc = rtnGetBooleanElement( hint, FIELD_NAME_ISSUBDIR, isSubDir ) ;
       if ( SDB_FIELD_NOT_EXIST == rc )
       {
@@ -208,7 +248,6 @@ namespace engine
       PD_RC_CHECK( rc, PDWARNING, "Failed to get field[%s], rc: %d",
                    FIELD_NAME_PREFIX, rc ) ;
 
-      // make path
       if ( isSubDir && pPath )
       {
          bkpath = rtnFullPathName( pmdGetOptionCB()->getBkupPath(), pPath ) ;
@@ -225,7 +264,6 @@ namespace engine
       rc = bkMgr.init( bkpath.c_str(), backupName, prefix ) ;
       PD_RC_CHECK( rc, PDWARNING, "Init backup manager failed, rc: %d", rc ) ;
 
-      // list
       rc = bkMgr.list( vecBackup, detail ) ;
       PD_RC_CHECK( rc, PDWARNING, "List backup failed, rc: %d", rc ) ;
 
@@ -253,10 +291,10 @@ namespace engine
       BOOLEAN isSubDir        = FALSE ;
       const CHAR *prefix      = NULL ;
       string bkpath ;
+      INT32 incID             = -1 ;
 
       barBackupMgr bkMgr( krcb->getGroupName() ) ;
 
-      // option config
       rc = rtnGetBooleanElement( option, FIELD_NAME_ISSUBDIR, isSubDir ) ;
       if ( SDB_FIELD_NOT_EXIST == rc )
       {
@@ -273,7 +311,14 @@ namespace engine
       PD_RC_CHECK( rc, PDWARNING, "Failed to get field[%s], rc: %d",
                    FIELD_NAME_PREFIX, rc ) ;
 
-      // make path
+      rc = rtnGetIntElement( option, FIELD_NAME_ID, incID ) ;
+      if ( SDB_FIELD_NOT_EXIST == rc )
+      {
+         rc = SDB_OK ;
+      }
+      PD_RC_CHECK( rc, PDWARNING, "Failed to get field[%s], rc: %d",
+                   FIELD_NAME_ID, rc ) ;
+
       if ( isSubDir && path )
       {
          bkpath = rtnFullPathName( pmdGetOptionCB()->getBkupPath(), path ) ;
@@ -290,9 +335,9 @@ namespace engine
       rc = bkMgr.init( bkpath.c_str(), backupName, prefix ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to init backup manager, rc: %d", rc ) ;
 
-      rc = bkMgr.drop() ;
-      PD_RC_CHECK( rc, PDERROR, "Failed to drop backup[%s], rc: %d",
-                   bkMgr.backupName(), rc ) ;
+      rc = bkMgr.drop( incID ) ;
+      PD_RC_CHECK( rc, PDERROR, "Failed to drop backup[%s], ID:%d, rc: %d",
+                   bkMgr.backupName(), incID, rc ) ;
 
    done:
       return rc ;
@@ -302,8 +347,7 @@ namespace engine
 
    BOOLEAN rtnIsInBackup ()
    {
-      return DMS_STATE_BACKUP == pmdGetKRCB()->getDMSCB()->getCBState() ?
-             TRUE : FALSE ;
+      return SDB_DB_OFFLINE_BK == PMD_DB_STATUS() ? TRUE : FALSE ;
    }
 
 }

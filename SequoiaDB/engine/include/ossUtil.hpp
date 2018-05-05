@@ -53,7 +53,6 @@
 #endif // SDB_ENGINE
 
 UINT32 ossRand () ;
-// djb2 hashing algorithm
 OSS_INLINE UINT32 ossHash ( const CHAR *str )
 {
    UINT32 hash = 5381 ;
@@ -96,8 +95,6 @@ OSS_INLINE void ossSleepmillis ( UINT64 s )
 {
    Sleep ( ( DWORD ) s ) ;
 }
-// sad truth in windows is that we don't have nansleep nor usleep,
-// so we need to depends on boost again
 OSS_INLINE void ossSleepmicros(UINT64 s)
 {
 #if defined( SDB_ENGINE )
@@ -116,13 +113,11 @@ OSS_INLINE void ossSleepmicros(UINT64 s)
 #endif // SDB_ENGINE
 }
 #else
-// we use nanosleep instead of usleep because we want to capture signal during sleep
 OSS_INLINE void ossSleepmicros(UINT64 s)
 {
    struct timespec t;
    t.tv_sec = (time_t)(s / 1000000);
    t.tv_nsec = 1000 * ( s % 1000000 );
-   // nanosleep can be interrupted by signal, the remaining time is put in rem
    while(nanosleep( &t , &t )==-1 && ossGetLastError()==EINTR);
 }
 OSS_INLINE void ossSleepmillis(UINT64 s)
@@ -149,33 +144,54 @@ public :
    time_t time ;     // tv_sec ,  seconds
    UINT32 microtm ;  // tv_usec,  microseconds
 
+   ossTimestamp ()
+   : time( 0 ),
+     microtm( 0 )
+   {
+   }
+
+   ossTimestamp ( UINT64 curTime )
+   : time( curTime / 1000 ),
+     microtm( ( curTime % 1000 ) * 1000 )
+   {
+   }
+
+   ossTimestamp ( const ossTimestamp & timestamp )
+   : time( timestamp.time ),
+     microtm( timestamp.microtm )
+   {
+   }
+
    ossTimestamp &operator= ( const ossTimestamp &rhs )
    {
       time    = rhs.time ;
       microtm = rhs.microtm ;
       return *this ;
    }
+
+   void clear ()
+   {
+      time = 0 ;
+      microtm = 0 ;
+   }
 } ;
 typedef class ossTimestamp ossTimestamp ;
 
 
-// timestamp format: yyyy-mm-dd-hh.mm.ss.uuuuuu
 #define OSS_TIMESTAMP_STRING_LEN 26
 
-// convert ossTimestamp into string
 void ossTimestampToString( ossTimestamp &Tm, CHAR * pStr ) ;
 
-// Wrapper of localtime, convert a time value and correct for the local time
-// zone. The input pTime represents the seconds elapsed since the Epoch,
-// midnight (00:00:00), January 1, 1970, UTC
+void ossStringToTimestamp( const CHAR * pStr, ossTimestamp &Tm ) ;
+
 void ossLocalTime ( time_t &Time, struct tm &TM ) ;
 
-//  Wrapper of gmtime, converts a time value to a broken-down time structure.
-//  The pTime is represented as seconds elapsed since the Epoch.
 void ossGmtime ( time_t &Time, struct tm &TM ) ;
 
-// Get current time, expressed as seconds and microseconds since the Epoch
 void ossGetCurrentTime( ossTimestamp &TM ) ;
+
+UINT64 ossGetCurrentMicroseconds() ;
+UINT64 ossGetCurrentMilliseconds() ;
 
 SINT32 ossGetCPUUsage
 (
@@ -220,50 +236,9 @@ OSS_INLINE void ossUnpack32From64 ( UINT64 u64, UINT32 & hi, UINT32 & lo )
 }
 
 
-///////////////////////////////////////////////////////////////////////////////
-//  OSS Ticks
-///////////////////////////////////////////////////////////////////////////////
-//
-// OSS Timestamp utilities
-//
-// Sample code illustrating usage interval timer and how interval can be
-// used / convert to normal time unites.
-//
-//    ossTick tk1, tk2 ;
-//    ossTickDelta diff ;
-//    UINT32 sec, microsec ;
-//    ossTickConversionFactor factor ;
-//
-//    tk1.sample() ;
-//    ...... do workloads
-//    tk2.sample() ;
-//
-//    diff = tk2 - tk1 ;
-//    diff.convertToTime( factor, sec, microsec ) ;
-//
-//    printf("elapsed time : %dSeconds %dMicroseconds\n", sec, microsec ) ;
-//
-//
 
-// The Time Stamp Counter is a 64bit register present on all x86 processors
-// since Pentium. It counts the number of cycles since reset. The time stamp
-// counter has, until recently, been an excellent high-resolution, low-overhead
-// way of getting CPU timing information. With the advent of multi-core CPUs,
-// systems with multiple CPUs, and "hibernating" operating systems, the TSC
-// cannot be relied on to provide accurate results unless great care is taken
-// to correct the possible flaws: rate of tick and whether all cores (
-// processors ) have identical values in their time-keeping registers. There
-// is no promise that the timestamp counters of multiple CPUs on a single
-// motherboard will be synchronized. In such cases, programmers can only get
-// reliable results by locking their code to a single CPU.
 
-// In our ossTick, we use the most portable method gettimeofday( Linux ) and
-// QueryPerformanceCounter( windows ) to get the 'timestamp', then convert
-// and save it as 'ticks' into a 64bit integer. We also provide, ossTickDelta,
-// ossTickConversionFactor for tick's operation and calculation.
 
-// The ossRdtsc is also provided as single API, which may be used/fit for
-// some specific condition in the future.
 #if defined (_LINUX)
 OSS_INLINE UINT64 ossRdtsc()
 {
@@ -303,12 +278,27 @@ OSS_INLINE UINT64 ossTimeValToUint64( struct timeval & tv )
 #define OSS_TICKS_OP_SUB 2
 #define OSS_TICKS_OP_NO_SCALE 4
 
-// class ossTickCore is base class of ossTick and ossTickDelta,
-// it is primitive and for the tick storage only.
-// The mininum measure unit is microsecond.
 class ossTickCore : public SDBObject
 {
 public :
+   ossTickCore()
+   {
+#if defined (_WINDOWS)
+      _value.QuadPart = 0 ;
+#else
+      _value = 0 ;
+#endif
+   }
+
+   ossTickCore ( const ossTickCore & tick )
+   {
+#if defined (_WINDOWS)
+      _value.QuadPart = tick._value.QuadPart ;
+#else
+      _value = tick._value ;
+#endif
+   }
+
 #if defined (_WINDOWS)
    LARGE_INTEGER _value ;
 #else
@@ -359,9 +349,6 @@ public :
    } ;
 
 
-   // calculate the difference or sum between two ticks values( represented by
-   // a 64bit integer ). On Linux platform, the timeval is stored as seconds
-   // and microseconds pair
    static UINT64 addOrSub
    (
       const UINT64 op1, const UINT64 op2, const UINT32 flags
@@ -419,40 +406,14 @@ public :
 class ossTickDelta ;
 class ossTick ;
 
-// Used for saving the conversion factor required to convert ossTick
-// into time units
-// A tick value is only valid to the machine where it was taken from,
-// this class allows for saving and setting such a conversion factor so
-// ticks can be interpreted at later time ( even on different machine )
 class ossTickConversionFactor : public SDBObject
 {
 protected :
    friend class ossTickDelta ;
-
    UINT64 factor ;
-
-   // save the timestamp conversion factor for the running machine
-   void oneTimeInitialization(void)
-   {
-   #if defined (_WINDOWS)
-      LARGE_INTEGER countsPerSecond ;
-      if ( ! QueryPerformanceFrequency(&countsPerSecond) )
-      {
-         countsPerSecond.QuadPart = 1 ;
-      }
-      factor = countsPerSecond.QuadPart ;
-   #elif defined (_LINUX) || defined (_AIX)
-      factor = 1 ;
-   #endif
-   }
-   void initialize(void) ;
 public :
-   ossTickConversionFactor ()
-   {
-      initialize () ;
-   }
+   ossTickConversionFactor() ;
 } ;
-
 
 ossTickDelta operator - (const ossTick      &x, const ossTick      &y) ;
 ossTickDelta operator - (const ossTickDelta &x, const ossTickDelta &y) ;
@@ -473,8 +434,6 @@ BOOLEAN operator <  (const ossTick &x, const ossTick &y) ;
 BOOLEAN operator <= (const ossTick &x, const ossTick &y) ;
 BOOLEAN operator == (const ossTick &x, const ossTick &y) ;
 
-// ossTickDelta represents the interval( ticks delta's internal representation )
-// of two tick values
 class ossTickDelta : protected ossTickCore
 {
    friend ossTickDelta operator- (const ossTick      &x, const ossTick      &y);
@@ -490,13 +449,21 @@ class ossTickDelta : protected ossTickCore
    friend ossTick operator +  (const ossTick      &x, const ossTickDelta &y) ;
    friend ossTick operator +  (const ossTickDelta &x, const ossTick      &y) ;
 public :
-   // set the tick value to zero
+   ossTickDelta ()
+   : ossTickCore()
+   {
+   }
+
+   ossTickDelta ( const ossTickDelta & delta )
+   : ossTickCore( delta )
+   {
+   }
+
    OSS_INLINE void clear(void)
    {
       poke( 0 ) ;
    } ;
 
-   // test tick for non-zero
    OSS_INLINE operator BOOLEAN() const
    {
       return ( 0 != peek() ) ;
@@ -512,7 +479,6 @@ public :
       ossTickCore::poke( val ) ;
    } ;
 
-   // retrive _value as a UINT64
    OSS_INLINE UINT64 toUINT64() const
    {
       UINT64 val = peek() ;
@@ -522,22 +488,16 @@ public :
       hi = (UINT32)( val >> 32 ) ;
       lo = (UINT32)( val & 0xFFFFFFFF ) ;
 
-      // we use gettimeofday on Linux platform, which uses seconds and
-      // microseconds to represent the ticks.
       val = ( UINT64 )hi * OSS_ONE_MILLION + lo ;
    #endif
       return val ;
    } ;
 
-   // cast to UINT64
    OSS_INLINE operator UINT64() const
    {
       return toUINT64() ;
    } ;
 
-   // store a tick delta value into the internal value, i.e., _value
-   // here we expect the v is accquired by QueryPerformanceCounter ( windows )
-   // gettimeofday(Linux)
    OSS_INLINE void fromUINT64( const UINT64 v )
    {
    #if defined (_WINDOWS)
@@ -546,9 +506,6 @@ public :
       UINT32 hi, lo ;
       UINT64 val ;
 
-      // On Linux we use gettimeofday for sampling, and ticks is represents
-      // as seconds and microseconds pair. We assume that v is a 64bit
-      // presenting as number of microseconds.
       hi = v / OSS_ONE_MILLION ;
       lo = v % OSS_ONE_MILLION ;
       val= ((UINT64)hi << 32) | (UINT64)lo ;
@@ -557,10 +514,15 @@ public :
    #endif
    } ;
 
-   // add a tick delta to an existing tick interval.
    OSS_INLINE ossTickDelta & operator += ( const ossTickDelta & x )
    {
       poke( ossTickCore::addOrSub( *this, x, OSS_TICKS_OP_ADD ) ) ;
+      return *this ;
+   } ;
+
+   OSS_INLINE ossTickDelta & operator -= ( const ossTickDelta & x )
+   {
+      poke( ossTickCore::addOrSub( *this, x, OSS_TICKS_OP_SUB ) ) ;
       return *this ;
    } ;
 
@@ -570,7 +532,6 @@ public :
       return *this ;
    }
 
-   // convert into time units ( seconds and microseconds )
    OSS_INLINE void convertToTime
    (
       const ossTickConversionFactor &  cFactor,
@@ -590,7 +551,6 @@ public :
    #endif
    } ;
 
-   // convert a time value( microseconds ) to a tick equivalent.
    OSS_INLINE SINT32 initFromTimeValue
    (
       const ossTickConversionFactor &  cFactor,
@@ -634,10 +594,16 @@ class ossTick : protected ossTickCore
    friend ossTick operator +  (const ossTickDelta &x, const ossTick &y ) ;
    friend ossTickDelta operator - (const ossTick &x, const ossTick &y ) ;
 public :
-   // Get a timestamp represented by tick number.
-   // Tick values are only valid relative to each other, and cannot be
-   // converted to time of day/date values. Conversion to time units can be
-   // done via convertToTime.
+   ossTick ()
+   : ossTickCore()
+   {
+   }
+
+   ossTick ( const ossTick & tick )
+   : ossTickCore( tick )
+   {
+   }
+
    OSS_INLINE void sample(void)
    {
    #if defined (_WINDOWS)
@@ -655,13 +621,11 @@ public :
    #endif
    } ;
 
-   // Set the tick value to zero
    OSS_INLINE void clear(void)
    {
       poke( 0 ) ;
    } ;
 
-   // Test tick for non-zero
    OSS_INLINE operator BOOLEAN() const
    {
       return (0 != peek()) ;
@@ -694,7 +658,6 @@ public :
       ((ossTickDelta*)this)->convertToTime( cFactor, seconds, microseconds ) ;
    } ;
 
-   // convert into timestamp
    void convertToTimestamp( ossTimestamp &Tm ) const
    {
       UINT64 ticks = peek() ;
@@ -884,29 +847,6 @@ typedef UINT32_64 UintPtr ;
 #define OSS_HEXDUMP_RAW_HEX_ONLY    2
 #define OSS_HEXDUMP_PREFIX_AS_ADDR  4
 
-// Hex dump one line into a buffer
-// It converts each word into two 8-bit ASCII characters to a buffer
-// from the given input address. If the 8-bit ASCII equivalent
-// is unprintable a '.' is output instead.
-//   inPtr[in]
-//      The address of the memory to format
-//   len[in]
-//      The number of characters to format. It must be less or equal than
-//      OSS_HEXDUMP_BYES_PER_LINE, i.e. 16 bytes.
-//   szOutBuf[out]
-//      An output buffer. The size of this bufer must be great or eual than
-//      OSS_HEXDUMP_LINE_BUFFER_SIZE
-//   flags[in]
-//      A bitmask of the following :
-//      - OSS_HEXDUMP_INCLUDE_ADDR
-//        When set, the address of the buffer is displayed in the output
-//        e.g., "0x12345678 : "
-//      - OSS_HEXDUMP_RAW_HEX_ONLY
-//        When set, only display the raw hex value, the ASCII
-//        representation will not be displayed.
-//   Return value:
-//       The offset of last character written into the output buffer( not
-//       including the NULL terminator )
 UINT32 ossHexDumpLine
 (
    const void *   inPtr,
@@ -916,57 +856,7 @@ UINT32 ossHexDumpLine
 ) ;
 
 
-// Hex dump into a buffer
-//    Similar as ossHexDumpLine, but it takes bigger size buffer,
-//    and dumps all the data provided till the fill the output buffer size.
-//    If a line is same as previous line, a '*' will be printed instead
-//    of duplicate the whole line. When mulitple lines are same, only one
-//    '*' will be printed, e.g.
-//      ...
-//      0x004B : 6F66 2053 6571 756F 6961 4442 2049 6E63    of SequoiaDB Inc
-//      0x005B : 2E0D 0A0D 0A20 2020 5468 6520 736F 7572    .....   The sour
-//      *
-//      0x009B : 2070 726F 6772 616D 2069 7320 6E6F 7420     program is not
-//      ...
-//
-// inPtr [in]
-//    The address of the memory to format.
-// len [in]
-//    The number of characters to format.
-// szOutBuf [out]
-//    The output buffer.
-// outBufSz [in]
-//    The size of the output buffer.
-// szPrefix [in]
-//    String prefix for the indentation
-// flags [in]
-//      A bitmask of the following :
-//      - OSS_HEXDUMP_INCLUDE_ADDR
-//        When set, the address of the buffer is displayed in the output
-//        e.g., "0x12345678 : "
-//      - OSS_HEXDUMP_PREFIX_AS_ADDR
-//        When set, use szPreFix as staring address
-//      - OSS_HEXDUMP_RAW_HEX_ONLY
-//        When set, only display the raw hex value, the ASCII
-//        representation will not be displayed.
-// pBytesProcessed [out]
-//     number of bytes processed/printed from input
-// Return value:
-//     The offset of last character written into the output buffer( not
-//     including the NULL terminator )
 
-//
-// Example:
-//   hexdump first 2K of file ossUtil.cpp :
-//     char junk[2048] ;
-//     char myBuf[4096] = { 0 } ;
-//     int bytesRead = 0 ;
-//     ossPrimitiveFileOp fop;
-//     fop.Open( "/home/sequoiadb/sequoiadb/SequoiaDB/engine/oss/ossUtil.cpp" );
-//     fop.Read( sizeof( junk ), junk, &bytesRead ) ;
-//     ossHexDumpBuffer( junk, sizeof(junk), myBuf, sizeof(myBuf), NULL,
-//                       OSS_HEXDUMP_PREFIX_AS_ADDR ) ;
-//     printf("\n%s\n", myBuf ) ;
 UINT32 ossHexDumpBuffer
 (
    const void *   inPtr,
@@ -981,11 +871,40 @@ UINT32 ossHexDumpBuffer
 INT32 ossGetMemoryInfo ( INT32 &loadPercent,
                          INT64 &totalPhys,   INT64 &availPhys,
                          INT64 &totalPF,     INT64 &availPF,
+                         INT64 &totalVirtual, INT64 &availVirtual,
+                         INT32 &overCommitMode,
+                         INT64 &commitLimit,  INT64 &committedAS ) ;
+
+INT32 ossGetMemoryInfo ( INT32 &loadPercent,
+                         INT64 &totalPhys,   INT64 &availPhys,
+                         INT64 &totalPF,     INT64 &availPF,
                          INT64 &totalVirtual, INT64 &availVirtual ) ;
 
-INT32 ossGetDiskInfo ( const CHAR *pPath,
-                       INT64 &totalBytes,
-                       INT64 &freeBytes ) ;
+INT32 ossGetDiskInfo ( const CHAR *pPath, INT64 &totalBytes, INT64 &freeBytes,
+                       CHAR* fsName = NULL, INT32 fsNameSize = 0 ) ;
+
+INT32 ossGetFileDesp ( INT64 &usedNum ) ;
+
+INT32 ossGetProcessMemory( OSSPID pid, INT64 &vmRss, INT64 &vmSize ) ;
+
+typedef struct _ossDiskIOStat
+{
+   UINT64 rdSectors ;
+   UINT64 wrSectors ;
+   UINT64 rdIos ;
+   UINT64 rdMerges ;
+   UINT64 wrIos ;
+   UINT64 wrMerges ;
+   UINT32 rdTicks ;
+   UINT32 wrTicks ;
+   UINT32 iosPgr ;
+   UINT32 totTicks ;
+   UINT32 rqTicks ;
+} ossDiskIOStat ;
+
+INT32 ossReadlink ( const CHAR *pPath, CHAR *pLinkedPath, INT32 maxLen ) ;
+
+INT32 ossGetDiskIOStat ( const CHAR *pDriverName, ossDiskIOStat &ioStat ) ;
 
 INT32 ossGetCPUInfo ( SINT64 &user, SINT64 &sys,
                       SINT64 &idle, SINT64 &other ) ;
@@ -1077,18 +996,22 @@ private:
 #define OSS_LIMIT_OPEN_FILE "open files"
 #define OSS_LIMIT_SCHE_PRIO "scheduling priority"
 #define OSS_LIMIT_STACK_SIZE "stack size"
+#define OSS_LIMIT_PROC_NUM "process num"
 
 class ossProcLimits
 {
 public:
+   ossProcLimits() ;
+
    std::string str() const ;
 
    INT32 init() ;
 
-   /// -1 means unlimited
    BOOLEAN getLimit( const CHAR *str,
                      INT64 &soft,
                      INT64 &hard ) const ;
+
+   INT32 setLimit( const CHAR *str, INT64 soft, INT64 hard ) ;
 
 private:
    void _initRLimit( INT32 resource, const CHAR *str ) ;
@@ -1105,6 +1028,21 @@ private:
 } ;
 
 BOOLEAN ossNetIpIsValid( const CHAR *ip, INT32 len ) ;
+
+BOOLEAN& ossGetSignalShieldFlag() ;
+INT32& ossGetPendingSignal() ;
+
+/*
+   ossSignalShield define
+*/
+class ossSignalShield
+{
+   public:
+      ossSignalShield() ;
+      ~ossSignalShield() ;
+      void close() ;
+      void doNothing() {}
+} ;
 
 #endif  //OSSUTIL_HPP_
 

@@ -46,7 +46,6 @@
 namespace engine
 {
    #define DMS_LOB_OID_LEN                   12 
-   #define DMS_LOB_DATA_MAP_BLK_LEN          DMS_PAGE_SIZE256B
    #define DMS_LOB_INVALID_PAGEID            DMS_INVALID_EXTENT
 
    typedef SINT32 DMS_LOB_PAGEID ;
@@ -58,27 +57,25 @@ namespace engine
    #define DMS_LOB_COMPLETE                  1
    #define DMS_LOB_UNCOMPLETE                0
 
-   #define RTN_LOB_GET_SEQUENCE( offset, log ) \
-     (( (offset) >> (log))+1)
+   /*
+      Lob meta fixed size, 1K
+   */
+   #define DMS_LOB_META_LENGTH               ( 1024 )
+   #define DMS_LOB_META_PIECESINFO_MAX_LEN   ( 320 )
 
-   #define RTN_LOB_GET_OFFSET_IN_SEQUENCE( offset, pagesize ) \
-     ((offset) & ((pagesize)-1))
+   #define RTN_LOB_GET_SEQUENCE( offset, isMerge, log ) \
+     ( (isMerge) ? ( ( (INT64)(offset) + DMS_LOB_META_LENGTH ) >> (log) ) : \
+                   ( ( ( (INT64)offset) >> (log) ) + 1 ) )
 
-   #define RTN_LOB_GET_SEQUENCE_NUM( len, pagesize, num )\
-     do\
-     {\
-       if ( 0 == ((len) & ((pagesize)-1)) )\
-       {\
-          num = (len) / (pagesize) + 1;\
-       }\
-       else\
-       {\
-          num = (len) / (pagesize) + 2 ;\
-       }\
-     } while ( FALSE )
+   #define RTN_LOB_GET_OFFSET_IN_SEQUENCE( offset, isMerge, pagesize ) \
+     ( (isMerge) ? ( ((INT64)(offset) + DMS_LOB_META_LENGTH ) & ((pagesize)-1) ) : \
+                   ( (INT64)(offset) & ((pagesize)-1) ) )
 
-   #define RTN_LOB_GET_OFFSET_OF_LOB( pageSz, sequence, offsetInSeq )\
-      ( ( (SINT64)( sequence ) - 1 ) * (SINT64)( pageSz ) + (SINT64)( offsetInSeq ) )
+   #define RTN_LOB_GET_OFFSET_OF_LOB( pageSz, sequence, offsetInSeq, isMerge ) \
+      ( (isMerge) ? ( (SINT64)(sequence)*(SINT64)(pageSz)+ \
+                      (SINT64)(offsetInSeq)-DMS_LOB_META_LENGTH ) : \
+                    ( ((SINT64)(sequence)-1)*(SINT64)(pageSz)+ \
+                      (SINT64)(offsetInSeq) ) )
 
    /*
       _dmsLobRecord define
@@ -134,27 +131,61 @@ namespace engine
          _data = data ;
          return ;
       }
+
+      string toString() const
+      {
+         stringstream ss ;
+         if ( _oid )
+         {
+            ss << "oid:" << _oid->str() << ", " ;
+         }
+         ss << "sequence:" << _sequence
+            << ", offset:" << _offset
+            << ", len:" << _dataLen
+            << endl ;
+         return ss.str() ;
+      }
    } ;
    typedef struct _dmsLobRecord dmsLobRecord ;
 
    #pragma pack(1)
+
+   #define DMS_LOB_META_MERGE_DATA_VERSION   ( 2 )
+
+   #define DMS_LOB_META_CURRENT_VERSION       DMS_LOB_META_MERGE_DATA_VERSION
+
+   #define DMS_LOB_META_FLAG_PIECESINFO_INSIDE 0x00000001
 
    /*
       _dmsLobMeta define
    */
    struct _dmsLobMeta : public SDBObject
    {
-      SINT64      _lobLen ;
+      INT64       _lobLen ;
       UINT64      _createTime ;
       UINT8       _status ;
-      CHAR        _pad[495] ;
+      UINT8       _version ;
+      UINT16      _padding ;
+      UINT64      _modificationTime ;
+      UINT32      _flag ;
+      INT32       _piecesInfoNum ;
+      CHAR        _pad[476] ;
 
       _dmsLobMeta()
       :_lobLen( 0 ),
        _createTime( 0 ),
-       _status( DMS_LOB_UNCOMPLETE )
+       _status( DMS_LOB_UNCOMPLETE ),
+       _version( DMS_LOB_META_CURRENT_VERSION ),
+       _padding( 0 ),
+       _modificationTime( 0 ),
+       _flag( 0 ),
+       _piecesInfoNum( 0 )
       {
          ossMemset( _pad, 0, sizeof( _pad ) ) ;
+         SDB_ASSERT( sizeof( _dmsLobMeta ) == 512,
+                     "Lob meta size must be 512" ) ;
+         SDB_ASSERT( sizeof( _dmsLobMeta ) <= DMS_LOB_META_LENGTH,
+                     "Lob meta size must <= DMS_LOB_META_LENGTH" ) ;
       }
 
       void clear()
@@ -162,6 +193,11 @@ namespace engine
          _lobLen = 0 ;
          _createTime = 0 ;
          _status = DMS_LOB_UNCOMPLETE ;
+         _version = DMS_LOB_META_CURRENT_VERSION ;
+         _padding = 0 ;
+         _modificationTime = 0 ;
+         _flag = 0 ;
+         _piecesInfoNum = 0 ;
          ossMemset( _pad, 0, sizeof( _pad ) ) ;
       }
 
@@ -169,8 +205,31 @@ namespace engine
       {
          return ( DMS_LOB_COMPLETE == _status ) ? TRUE : FALSE ;
       }
+
+      BOOLEAN hasPiecesInfo() const
+      {
+         return ( _flag & DMS_LOB_META_FLAG_PIECESINFO_INSIDE ) ? TRUE : FALSE ;
+      }
+
+      string toString() const
+      {
+         stringstream ss ;
+         ss << "Len:" << _lobLen
+            << ", CreateTime:" << _createTime
+            << ", ModificationTime:" << _modificationTime
+            << ", Status:" << (UINT32)_status
+            << ", Version:" << (UINT32)_version
+            << ", Flag:" << _flag
+            << ", PiecesInfoNum:" << _piecesInfoNum
+            << endl ;
+         return ss.str() ;
+      }
    } ;
    typedef struct _dmsLobMeta dmsLobMeta ;
+
+
+   #define DMS_LOB_PAGE_NORMAL               ( 0 )
+   #define DMS_LOB_PAGE_REMOVED              ( 1 )
 
    /*
       _dmsLobDataMapBlk define
@@ -185,25 +244,55 @@ namespace engine
       SINT32         _nextPageInBucket ;
       UINT32         _clLogicalID ;
       UINT16         _mbID ;
-      CHAR           _pad2[212];  /// sizeof( _dmsLobDataMapBlk ) == 256B
+      BYTE           _status ;
+      CHAR           _pad2[25];  /// sizeof( _dmsLobDataMapBlk ) == 64B
 
       _dmsLobDataMapBlk()
-      :_sequence( 0 ),
-       _dataLen( 0 ),
-       _prevPageInBucket( DMS_LOB_INVALID_PAGEID ),
-       _nextPageInBucket( DMS_LOB_INVALID_PAGEID ),
-       _clLogicalID( DMS_INVALID_CLID ),
-       _mbID( DMS_INVALID_MBID )
+      {
+         reset() ;
+         ossMemset( _pad2, 0, sizeof( _pad2 ) ) ;
+         SDB_ASSERT( 64 == sizeof( _dmsLobDataMapBlk ), "invalid blk" ) ;
+      }
+
+      void reset()
       {
          ossMemset( this, 0, sizeof( _pad1 ) + sizeof( _oid ) ) ;
-         ossMemset( _pad2, 0, sizeof( _pad2 ) ) ;
-         SDB_ASSERT( 256 == sizeof( _dmsLobDataMapBlk ),
-                     "invalid blk" ) ;
+
+         _sequence = 0 ;
+         _dataLen = 0 ;
+         _prevPageInBucket = DMS_LOB_INVALID_PAGEID ;
+         _nextPageInBucket = DMS_LOB_INVALID_PAGEID ;
+         _clLogicalID = DMS_INVALID_CLID ;
+         _mbID = DMS_INVALID_MBID ;
+         _status = DMS_LOB_PAGE_REMOVED ;
       }
+
+      BOOLEAN isUndefined() const
+      {
+         const static BYTE s_emptyOID[ DMS_LOB_OID_LEN ] = { 0 } ;
+
+         if ( 0 == _sequence && 0 == _dataLen &&
+              0 == _clLogicalID && 0 == _mbID &&
+              0 == ossMemcmp( _oid, s_emptyOID, DMS_LOB_OID_LEN ) )
+         {
+            return TRUE ;
+         }
+         return FALSE ;
+      }
+
+      BOOLEAN isNormal() const
+      {
+         return _status == DMS_LOB_PAGE_NORMAL ? TRUE : FALSE ;
+      }
+      BOOLEAN isRemoved() const
+      {
+         return _status == DMS_LOB_PAGE_REMOVED ? TRUE : FALSE ;
+      }
+      void setNormal() { _status = DMS_LOB_PAGE_NORMAL ; }
+      void setRemoved() { _status = DMS_LOB_PAGE_REMOVED ; }
 
       BOOLEAN equals( const BYTE *oid, UINT32 sequence ) const
       {
-         /// compare sequence first.
          return ( _sequence == sequence &&
                   0 == ossMemcmp( _oid, oid, DMS_LOB_OID_LEN ) ) ?
                 TRUE : FALSE ;

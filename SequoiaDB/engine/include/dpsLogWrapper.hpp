@@ -41,7 +41,9 @@
 #include "core.hpp"
 #include "oss.hpp"
 #include "sdbInterface.hpp"
+#include "sdbIPersistence.hpp"
 #include "dpsReplicaLogMgr.hpp"
+#include "dpsArchiveMgr.hpp"
 #include "../bson/bsonelement.h"
 #include "../bson/bsonobj.h"
 #include <vector>
@@ -71,7 +73,7 @@ namespace engine
       public:
          virtual INT32     search( const DPS_LSN &minLsn,
                                    _dpsMessageBlock *mb,
-                                   UINT8 type = DPS_SERCAH_ALL,
+                                   UINT8 type = DPS_SEARCH_ALL,
                                    INT32 maxNum = 1,        // -1 for unlimited
                                    INT32 maxTime = -1,      // -1 for unlimited
                                    INT32 maxSize = 5242880  // -1 for unlimited
@@ -79,12 +81,13 @@ namespace engine
 
          virtual INT32     searchHeader( const DPS_LSN &lsn,
                                          _dpsMessageBlock *mb,
-                                         UINT8 type = DPS_SERCAH_ALL ) = 0 ;
+                                         UINT8 type = DPS_SEARCH_ALL ) = 0 ;
 
          virtual DPS_LSN   getStartLsn ( BOOLEAN logBufOnly = FALSE ) = 0 ;
 
          virtual DPS_LSN   getCurrentLsn() = 0 ;
          virtual DPS_LSN   expectLsn() = 0 ;
+         virtual DPS_LSN   commitLsn() = 0 ;
 
          virtual void      getLsnWindow( DPS_LSN &beginLsn,
                                          DPS_LSN &memBeginLsn,
@@ -109,13 +112,22 @@ namespace engine
    /*
       _dpsLogWrapper define
    */
-   class _dpsLogWrapper : public _IControlBlock, public ILogAccessor
+   class _dpsLogWrapper : public _IControlBlock, public ILogAccessor,
+                          public IDataSyncBase
    {
    private:
       _dpsReplicaLogMgr          _buf ;
       BOOLEAN                    _initialized ;
       BOOLEAN                    _dpslocal ;
       vector< dpsEventHandler* > _vecEventHandler ;
+      dpsArchiveMgr              _archiver ;
+
+      UINT32                     _syncInterval ;
+      UINT32                     _syncRecordNum ;
+
+      UINT32                     _writeReordNum ;
+      UINT64                     _lastWriteTick ;
+      UINT64                     _lastSyncTime ;
 
    public:
       _dpsLogWrapper() ;
@@ -128,23 +140,25 @@ namespace engine
       virtual INT32  active () ;
       virtual INT32  deactive () ;
       virtual INT32  fini () ;
+      virtual void   onConfigChange() ;
 
    public:
       virtual INT32     search( const DPS_LSN &minLsn,
                                 _dpsMessageBlock *mb,
-                                UINT8 type = DPS_SERCAH_ALL,
+                                UINT8 type = DPS_SEARCH_ALL,
                                 INT32 maxNum = 1,
                                 INT32 maxTime = -1,
                                 INT32 maxSize = 5242880 ) ;
 
       virtual INT32     searchHeader( const DPS_LSN &lsn,
                                       _dpsMessageBlock *mb,
-                                      UINT8 type = DPS_SERCAH_ALL ) ;
+                                      UINT8 type = DPS_SEARCH_ALL ) ;
 
       virtual DPS_LSN   getStartLsn ( BOOLEAN logBufOnly = FALSE ) ;
 
       virtual DPS_LSN   getCurrentLsn() ;
       virtual DPS_LSN   expectLsn() ;
+      virtual DPS_LSN   commitLsn() ;
 
       virtual void      getLsnWindow( DPS_LSN &beginLsn,
                                       DPS_LSN &memBeginLsn,
@@ -161,6 +175,17 @@ namespace engine
                               const DPS_LSN_VER &version ) ;
 
       virtual INT32     recordRow( const CHAR *row, UINT32 len ) ;
+
+   public:
+         virtual BOOLEAN      isClosed() const ;
+         virtual BOOLEAN      canSync( BOOLEAN &force ) const ;
+
+         virtual INT32        sync( BOOLEAN force,
+                                    BOOLEAN sync,
+                                    IExecutor* cb ) ;
+
+         virtual void         lock() ;
+         virtual void         unlock() ;
 
    public:
       void regEventHandler( dpsEventHandler *pHandler ) ;
@@ -194,20 +219,29 @@ namespace engine
       {
          return _initialized ;
       }
+      OSS_INLINE INT32 archive()
+      {
+         if ( !_initialized )
+         {
+            return SDB_OK ;
+         }
+         return _archiver.run() ;
+      }
 
-      // note flushAll function is ONLY USED IN TESTCASE
-      // engine should NEVER call flushAll in any situation.
-      // The log write thread supposed to call run() in order to flush dirty
-      // pages once at a time
       OSS_INLINE INT32 flushAll()
       {
          SDB_ASSERT ( _initialized, "shouldn't call flushAll without init" ) ;
          return _buf.flushAll() ;
       }
 
-      OSS_INLINE DPS_LSN_VER incVersion()
+      OSS_INLINE void incVersion()
       {
-         return _buf.incVersion() ;
+         _buf.incVersion() ;
+      }
+
+      OSS_INLINE void cancelIncVersion()
+      {
+         _buf.cancelIncVersion() ;
       }
 
       OSS_INLINE INT32 checkSyncControl( UINT32 reqLen, _pmdEDUCB *cb )
@@ -215,10 +249,7 @@ namespace engine
          return _buf.checkSyncControl( reqLen, cb ) ;
       }
 
-      OSS_INLINE INT32 commit( BOOLEAN deeply, DPS_LSN *committedLsn )
-      {
-         return _buf.commit( deeply, committedLsn ) ;
-      }
+      INT32 commit( BOOLEAN deeply, DPS_LSN *committedLsn ) ;
 
    public:
       INT32 prepare( dpsMergeInfo &info ) ;

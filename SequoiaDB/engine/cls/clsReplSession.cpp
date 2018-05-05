@@ -32,6 +32,7 @@
 #include "pmd.hpp"
 #include "pmdCB.hpp"
 #include "rtn.hpp"
+#include "rtnRecover.hpp"
 #include "pmdStartup.hpp"
 #include "msgMessage.hpp"
 #include "pdTrace.hpp"
@@ -49,7 +50,6 @@ namespace engine
       _clsReplDstSession implement
    */
    BEGIN_OBJ_MSG_MAP( _clsReplDstSession , _pmdAsyncSession )
-      //ON_MSG
       ON_MSG( MSG_CLS_SYNC_RES, handleSyncRes )
       ON_MSG( MSG_CLS_SYNC_NOTIFY, handleNotify )
       ON_MSG( MSG_CLS_CONSULTATION_RES, handleConsultRes )
@@ -63,7 +63,8 @@ namespace engine
        _quit( FALSE ),
        _addFSSession(0),
        _timeout( 0 ),
-       _consultLsn()
+       _consultLsn(),
+       _lastRecvConsultLsn()
    {
       PD_TRACE_ENTRY ( SDB__CLSDSTREPSN__CLSDSTREPSN );
       _logger = pmdGetKRCB()->getDPSCB() ;
@@ -77,6 +78,8 @@ namespace engine
 
       _syncSrc.value = MSG_INVALID_ROUTEID ;
       _lastSyncNode.value = MSG_INVALID_ROUTEID ;
+
+      _fullSyncIgnoreTimes = 0 ;
 
       PD_TRACE_EXIT ( SDB__CLSDSTREPSN__CLSDSTREPSN );
    }
@@ -140,6 +143,7 @@ namespace engine
          goto done ;
       }
       else if ( _isFirstToSync &&
+                CLS_SESSION_STATUS_FULL_SYNC != _status &&
                 pmdGetKRCB()->getEDUMgr()->getWritingEDUCount() > 0 )
       {
          PD_LOG( PDWARNING, "Session[%s]: Has some writing edus don't "
@@ -149,7 +153,6 @@ namespace engine
 
       _isFirstToSync = FALSE ;
 
-      //if the peer node is sharing-break, shoud change node
       if ( MSG_INVALID_ROUTEID != _syncSrc.value &&
            !_repl->isAlive ( _syncSrc ) )
       {
@@ -160,7 +163,6 @@ namespace engine
          _syncSrc = _selector.src() ;
       }
 
-      // has error, need to rollback
       if ( CLS_BUCKET_WAIT_ROLLBACK == _pReplBucket->getStatus() )
       {
          _pReplBucket->waitEmptyAndRollback() ;
@@ -194,7 +196,6 @@ namespace engine
       }
       else
       {
-         //do nothing
       }
 
    done:
@@ -205,39 +206,13 @@ namespace engine
 
    void _clsReplDstSession::_onAttach()
    {
-      // if start form crash, should full sync
       if ( !pmdGetStartup().isOK() )
       {
-         BOOLEAN needFullSync = FALSE ;
-         std::set<monCollectionSpace> csList ;
-         sdbGetDMSCB()->dumpInfo( csList, TRUE ) ;
-         for ( std::set<monCollectionSpace>::const_iterator itr = csList.begin() ;
-               itr != csList.end();
-               ++itr )
-         {
-            if ( !(itr->_committed) )
-            {
-               needFullSync = TRUE ;
-            }
-            PD_LOG( PDEVENT, "the valid flag of cs[%s] is [%d]",
-                    itr->_name, itr->_committed ) ;
-         }
-         
-         if ( needFullSync )
-         {
-            PD_LOG( PDEVENT, "Session[%s]: The db data is abnormal, "
-                    "need to synchronize full data", sessionName() ) ;
-            _status = CLS_SESSION_STATUS_FULL_SYNC ;
-         }
-         else
-         {
-            pmdGetStartup().ok( TRUE ) ;
-            PD_LOG( PDEVENT, "no crashed file was found, we do not"
-                    " synchronize full data" ) ;
-         } 
+         PD_LOG( PDEVENT, "Session[%s]: The db data is abnormal, "
+                 "need to synchronize full data", sessionName() ) ;
+         _status = CLS_SESSION_STATUS_FULL_SYNC ;
       }
 
-      // full sync to repl sync, need to reset repl bucket
       _pReplBucket->reset() ;
    }
 
@@ -276,7 +251,8 @@ namespace engine
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__CLSDSTREPSN_HNDSYNCRES );
 
-      /// 1. some validate.
+      _repl->getSyncEmptyEvent()->reset() ;
+
       MsgReplSyncRes *msg = ( MsgReplSyncRes * )header ;
       if ( CLS_SESSION_STATUS_SYNC != _status )
       {
@@ -344,19 +320,14 @@ namespace engine
             {
                _syncFailedNum = 0 ;
 
-               /// sync res is ok but remote has no more new data.
-               /// we choose a new node to sync data.
                _selector.addToBlakList( _syncSrc ) ;
                _selector.clearSrc() ;
 
-               // can't call _sendSyncReq, because the primary maybe
-               // sharing-break, so this will run loop for other nodes fastly
                _timeout = CLS_SYNC_INTERVAL ;
             }
 
             if ( _pReplBucket->maxReplSync() > 0 )
             {
-               // if has complete some log replay,need to notify primary
                DPS_LSN completeLSN = _pReplBucket->completeLSN() ;
                if ( !completeLSN.invalid() &&
                     _completeLSN.offset != completeLSN.offset )
@@ -411,6 +382,7 @@ namespace engine
       }
 
    done:
+      _repl->getSyncEmptyEvent()->signalAll() ;
       PD_TRACE_EXITRC ( SDB__CLSDSTREPSN_HNDSYNCRES, rc ) ;
       return rc ;
    }
@@ -443,7 +415,6 @@ namespace engine
 
       if ( (UINT32)header->messageLength < sizeof( _MsgReplConsultationRes ) )
       {
-         /// the message is old( no hashValue, no reserved )
          PD_LOG( PDWARNING, "Session[%s]: Consultation responses message "
                  "length[%d] is less than %d", header->messageLength,
                  sizeof( _MsgReplConsultationRes ) ) ;
@@ -503,12 +474,12 @@ namespace engine
             goto done ;
          }
 
-         /// can not find rollback point, will find the consult lsn again
+         _lastRecvConsultLsn = msg->returnTo ;
+
          if ( SDB_OK != _logger->search( msg->returnTo, &_mb ) )
          {
             bValid = FALSE ;
          }
-         /// the hash valud is not the same, will find the pre lsn
          else if ( msg->hashValue != ossHash( _mb.offset(0), _mb.length() ) )
          {
             bValid = FALSE ;
@@ -521,8 +492,8 @@ namespace engine
                      "curLsn[%d,%lld]", sessionName(), _consultLsn.version,
                      _consultLsn.offset, curLsn.version, curLsn.offset ) ;
 
-            //find the first lsn which is less than returnTo lsn
             DPS_LSN search = _consultLsn ;
+            UINT32 count = 0 ;
             do
             {
                _mb.clear() ;
@@ -541,7 +512,10 @@ namespace engine
                                       ( _mb.offset(0) ))->_version ;
                search.offset = ((dpsLogRecordHeader *)
                                 (_mb.offset(0)))->_preLsn ;
-            } while ( _consultLsn.compare( msg->returnTo ) >= 0 ) ;
+               ++count ;
+            } while ( _consultLsn.compareOffset( msg->returnTo ) >= 0 ||
+                      _consultLsn.compareVersion( msg->returnTo.version ) > 0 ||
+                      count <= 1 ) ;
 
             _sendConsultReq () ;
             goto done ;
@@ -566,8 +540,6 @@ namespace engine
                goto done ;
             }
 
-            /// now we are sure the point of rollback exists.
-            /// begin to rollback.
             while ( TRUE )
             {
                _mb.clear() ;
@@ -604,7 +576,6 @@ namespace engine
                }
             }
 
-            /// move to correct expect point.
             if ( SDB_OK != _logger->move( point.offset + pLogHeader->_length,
                                           point.version ) )
             {
@@ -622,8 +593,8 @@ namespace engine
             _status = CLS_SESSION_STATUS_SYNC ;
             ++_requestID ;
             _syncFailedNum = 0 ;
-            _consultLsn.offset = DPS_INVALID_LSN_OFFSET ;
-            _consultLsn.version = DPS_INVALID_LSN_VERSION ;
+            _consultLsn.reset() ;
+            _lastRecvConsultLsn.reset() ;
          }
       }
       }
@@ -645,6 +616,8 @@ namespace engine
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__CLSDSTREPSN__FULLSYNC ) ;
       clsCB *pClsCB = pmdGetKRCB()->getClsCB() ;
+      pmdOptionsCB *optionCB = pmdGetKRCB()->getOptionCB() ;
+      BOOLEAN needNotify = FALSE ;
 
       _status = CLS_SESSION_STATUS_FULL_SYNC ;
 
@@ -657,7 +630,6 @@ namespace engine
       }
       else if ( sdbGetTransCB()->getTransCBSize() != 0 )
       {
-         // has some trans edu in rollback or commit
          PD_LOG( PDINFO, "Has %d edus in rollback or commit, can't intial "
                  "full sync", sdbGetTransCB()->getTransCBSize() ) ;
          goto done ;
@@ -665,60 +637,56 @@ namespace engine
 
       SDB_ASSERT( 0 < sdbGetReplCB()->groupSize(), "impossible" ) ;
 
-      // if the group size is 1, then rebuild, otherwise full sync
+      if ( PMD_OPT_VALUE_NONE == optionCB->getDataErrorOp() )
+      {
+         if ( PMD_IS_DB_AVAILABLE() )
+         {
+            PMD_SET_DB_STATUS( SDB_DB_FULLSYNC ) ;
+         }
+         if ( 0 == ( _fullSyncIgnoreTimes % 150 ) )
+         {
+            PD_LOG( PDERROR, "The node's data is error, forbidden "
+                    "fullsync by configure" ) ;
+            needNotify = TRUE ;
+         }
+         ++_fullSyncIgnoreTimes ;
+         goto done ;
+      }
+      else if ( PMD_OPT_VALUE_SHUTDOWN == optionCB->getDataErrorOp() )
+      {
+         PD_LOG( PDSEVERE, "The node's data is error, shutdown by configure" ) ;
+         PMD_SHUTDOWN_DB( SDB_CLS_FULL_SYNC ) ;
+         needNotify = TRUE ;
+         goto done ;
+      }
+
+      _fullSyncIgnoreTimes = 0 ;
+      if ( SDB_DB_FULLSYNC == PMD_DB_STATUS() )
+      {
+         PMD_SET_DB_STATUS( SDB_DB_NORMAL ) ;
+      }
+
       if ( 1 >=  pClsCB->getReplCB()->groupSize() || pmdIsPrimary() )
       {
          PD_LOG( PDWARNING, "Session[%s]: Group size is one or the node "
                  "begin to primary, begin to rebuild database",
                  sessionName() ) ;
-         DPS_LSN expectLSN = _logger->expectLsn() ;
-         if ( DPS_INVALID_LSN_OFFSET == expectLSN.offset ||
-              0 == expectLSN.offset )
-         {
-            /// when rebuild, we can't move the dps to 0, because the new add
-            /// node will sync from lsn 0
-            expectLSN.offset = ossAlign4( (UINT32)sizeof( dpsLogRecordHeader ) ) ;
-         }
-         if ( DPS_INVALID_LSN_VERSION == expectLSN.version )
-         {
-            expectLSN.version = DPS_INVALID_LSN_VERSION + 1 ;
-         }
+
+         rtnDBRebuilder rebuilder ;
 
          PMD_SET_DB_STATUS( SDB_DB_REBUILDING ) ;
          pClsCB->getReplCB()->getFaultEvent()->signalAll( SDB_RTN_IN_REBUILD ) ;
-
-         rc = rtnRebuildDB ( eduCB() ) ;
-
-         /// restore
+         eduCB()->getEDUMgr()->interruptWritingEDUS() ;
+         pClsCB->getShardRouteAgent()->disconnectAll() ;
+         rc = rebuilder.doOpr( eduCB() ) ;
          pClsCB->getReplCB()->getFaultEvent()->reset() ;
          PMD_SET_DB_STATUS( SDB_DB_NORMAL ) ;
-         /// judge is error
          if ( SDB_OK != rc )
          {
             goto error ;
          }
-         /// clear all trans info
-         sdbGetTransCB()->clearTransInfo() ;
-         // then cut all dps
-         rc = _logger->move( 0, expectLSN.version ) ;
-         if ( SDB_OK != rc )
-         {
-            PD_LOG( PDERROR, "Session[%s]: Move dps to begin failed "
-                    "after rebuild, rc: %d", sessionName(), rc ) ;
-            goto error ;
-         }
-         else
-         {
-            PD_LOG( PDEVENT, "Session[%s]: Move dps to begin after "
-                    "rebuild succeed", sessionName() ) ;
-         }
-         /// then move to none-zero
-         _logger->move( expectLSN.offset, expectLSN.version ) ;
-
-         pmdGetStartup().ok ( TRUE ) ;
          _status = CLS_SESSION_STATUS_SYNC ;
          ++_requestID ;
-         // force to secondary
          pClsCB->getReplCB()->voteMachine()->force( CLS_ELECTION_STATUS_SEC ) ;
       }
       else
@@ -734,6 +702,26 @@ namespace engine
       }
 
    done:
+      if ( needNotify )
+      {
+         BOOLEAN hasSend = FALSE ;
+         /* Notify the node status to the primary node */
+         MsgRouteID primaryID = _repl->getPrimary() ;
+         if ( MSG_INVALID_ROUTEID != primaryID.value )
+         {
+            MsgClsNodeStatusNotify ntyMsg ;
+            ntyMsg.status = SDB_DB_FULLSYNC ;
+            if ( SDB_OK == routeAgent()->syncSend( primaryID,
+                                                   (void*)&ntyMsg ) )
+            {
+               hasSend = TRUE ;
+            }
+         }
+         if ( !hasSend )
+         {
+            _fullSyncIgnoreTimes = 0 ;
+         }
+      }
       PD_TRACE_EXIT ( SDB__CLSDSTREPSN__FULLSYNC ) ;
       return ;
    error:
@@ -748,6 +736,8 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__CLSDSTREPSN__RLBCK );
+      dpsTransCB *pTransCB = pmdGetKRCB()->getTransCB() ;
+
       const dpsLogRecordHeader *header = (const dpsLogRecordHeader *)log;
       PD_LOG( PDDEBUG, "Session[%s]: Begin to rollback lsn:[%lld, %d]",
               sessionName(), header->_lsn, header->_version ) ;
@@ -759,14 +749,14 @@ namespace engine
          goto error ;
       }
 
-      // rollback trans info
-      if ( !sdbGetTransCB()->isNeedSyncTrans() )
+      if ( pTransCB && pTransCB->isTransOn() &&
+           !pTransCB->isNeedSyncTrans() )
       {
          dpsLogRecord record ;
          record.load( log ) ;
-         if ( !sdbGetTransCB()->rollbackTransInfoFromLog( record ) )
+         if ( !pTransCB->rollbackTransInfoFromLog( record ) )
          {
-            sdbGetTransCB()->setIsNeedSyncTrans( TRUE ) ;
+            pTransCB->setIsNeedSyncTrans( TRUE ) ;
          }
       }
 
@@ -798,12 +788,9 @@ namespace engine
               _lastSyncNode.value != _syncSrc.value &&
               !_logger->getCurrentLsn().invalid() )
          {
-            /// when the last node is not same with this node,
-            /// need to get the current lsn for context check
             msg.next = _logger->getCurrentLsn() ;
          }
 
-         /// when lsn is not specified we set complete with expected.
          if ( pCompleteLSN )
          {
             _completeLSN = *pCompleteLSN ;
@@ -849,7 +836,6 @@ namespace engine
                  _pReplBucket->size() ) ;
          goto done ;
       }
-      // need to reset repl backet
       _pReplBucket->reset() ;
 
       if ( _consultLsn.invalid () )
@@ -866,6 +852,7 @@ namespace engine
          msg.header.TID = CLS_TID( _sessionID ) ;
          msg.header.requestID = _requestID ;
          msg.current =  _consultLsn ;
+         msg.lastConsult = _lastRecvConsultLsn ;
          msg.identity = routeAgent()->localID() ;
 
          if ( !_consultLsn.invalid() )
@@ -894,6 +881,7 @@ namespace engine
                                          UINT32 &num )
    {
       INT32 rc = SDB_OK ;
+      INT32 rcTmp = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__CLSDSTREPSN__REPLG ) ;
 
       dpsLogRecordHeader *recordHeader = NULL ;
@@ -928,7 +916,6 @@ namespace engine
             searchLSN.offset = recordHeader->_lsn ;
             searchLSN.version = recordHeader->_version ;
             _mb.clear() ;
-            /// search from local
             rc = _logger->search( searchLSN, &_mb ) ;
             if ( SDB_OK != rc )
             {
@@ -938,7 +925,6 @@ namespace engine
                goto error ;
             }
             searchHeader = (dpsLogRecordHeader*)_mb.offset(0) ;
-            /// check the version and length is the same
             if ( recordHeader->_version != searchHeader->_version ||
                  recordHeader->_length != searchHeader->_length )
             {
@@ -952,7 +938,6 @@ namespace engine
                rc = SDB_CLS_REPLAY_LOG_FAILED ;
                goto error ;
             }
-            /// check the hash value
             if ( ossHash( log, recordHeader->_length ) !=
                  ossHash( _mb.offset(0), searchHeader->_length ) )
             {
@@ -984,9 +969,10 @@ namespace engine
 #endif
 
          rc = _replay( recordHeader ) ;
-         SDB_ASSERT( SDB_OK == rc, "must be ok" ) ;
          if ( SDB_OK != rc )
          {
+            SDB_ASSERT( SDB_OOM == rc || SDB_NOSPC == rc,
+                        "Unexpect error occured" ) ;
             PD_LOG( PDERROR, "Session[%s]: Failed to replay log, rc: %d",
                     sessionName(), rc ) ;
             goto error ;
@@ -1011,30 +997,31 @@ namespace engine
    error:
       if ( _pReplBucket->waitEmptyAndRollback() )
       {
-         DPS_LSN expectLSN = _pReplBucket->completeLSN() ;
-         rc = _logger->move( expectLSN.offset, expectLSN.version ) ;
-         if ( rc )
+         DPS_LSN completeLSN = _pReplBucket->completeLSN() ;
+         rcTmp = _logger->move( completeLSN.offset, completeLSN.version ) ;
+         if ( rcTmp )
          {
             PD_LOG( PDERROR, "Session[%s]: Failed to move lsn to "
                     "[%u, %llu], rc: %d, need to synchronize full data",
-                    sessionName(), expectLSN.version, expectLSN.offset ) ;
+                    sessionName(), completeLSN.version, completeLSN.offset,
+                    rcTmp ) ;
             _fullSync() ;
          }
          else
          {
             PD_LOG( PDEVENT, "Session[%s]: Move lsn to[%u, %llu]",
-                    sessionName(), expectLSN.version, expectLSN.offset ) ;
+                    sessionName(), completeLSN.version, completeLSN.offset ) ;
          }
       }
       else if ( needRollback )
       {
-         rc = _rollback( log ) ;
-         if ( SDB_OK != rc )
+         rcTmp = _rollback( log ) ;
+         if ( rcTmp )
          {
             PD_LOG( PDERROR, "Session[%s]: Failed to rollback[%lld, "
                     "type: %d], rc: %d, need to synchronize full data",
                     sessionName(), recordHeader->_lsn, recordHeader->_type,
-                    rc ) ;
+                    rcTmp ) ;
             _fullSync() ;
          }
       }
@@ -1057,7 +1044,6 @@ namespace engine
       _clsReplSrcSession implement
    */
    BEGIN_OBJ_MSG_MAP( _clsReplSrcSession , _pmdAsyncSession )
-      //ON_MSG
       ON_MSG( MSG_CLS_SYNC_REQ, handleSyncReq )
       ON_MSG( MSG_CLS_SYNC_VIR_REQ, handleVirSyncReq )
       ON_MSG( MSG_CLS_CONSULTATION_REQ, handleConsultReq )
@@ -1113,7 +1099,6 @@ namespace engine
       PD_TRACE_ENTRY ( SDB__CLSSRCREPSN_ONTIMER ) ;
       _timeout += interval ;
 
-      //if the peer node no msg a long time,need to quit
       if ( !_quit && CLS_DST_SESSION_NO_MSG_TIME < _timeout )
       {
          PD_LOG ( PDEVENT, "Session[%s] peer node a long time no msg, "
@@ -1144,7 +1129,6 @@ namespace engine
                           CLS_TID( _sessionID ) ) ;
       }
 
-      // not ok, not reply
       if ( pmdGetStartup().isOK() )
       {
          rc = _syncLog( handle, msg ) ;
@@ -1187,15 +1171,12 @@ namespace engine
 
       if ( (UINT32)header->messageLength < sizeof( _MsgReplConsultation ) )
       {
-         /// the old message( no hashValue, and reserved )
          PD_LOG( PDWARNING, "Session[%s]: Recv consult request message "
                  "length[%d] is less than %d", sessionName(), header->messageLength,
                  sizeof( _MsgReplConsultation ) ) ;
          needReply = FALSE ; /// not reply
          goto done ;
       }
-      /// when processed reqid >= msg's reqid and msg queque is not empty,
-      /// dispatch the request
       else if ( header->requestID <= _lastProcRequestID &&
                 eduCB()->getQueSize() > 0 )
       {
@@ -1207,7 +1188,6 @@ namespace engine
          needReply = FALSE ; /// not reply
          goto done ;
       }
-      /// update processed request id
       _lastProcRequestID = header->requestID ;
 
       if ( msg->current.invalid() )
@@ -1219,7 +1199,7 @@ namespace engine
       _logger->getLsnWindow( fLsn, mLsn, eLsn, NULL, NULL ) ;
       PD_LOG( PDEVENT, "Session[%s]: Recv a consult req. "
               "[remote offset:%lld, remote ver:%d, local foffset:%lld, "
-              "local fver:%d], local eoffset:%lld, local ever:%d]",
+              "local fver:%d, local eoffset:%lld, local ever:%d]",
               sessionName(), msg->current.offset, msg->current.version,
               fLsn.offset, fLsn.version, eLsn.offset, eLsn.version ) ;
 
@@ -1228,7 +1208,6 @@ namespace engine
          res.header.res = SDB_CLS_CONSULT_FAILED ;
          goto done ;
       }
-      /// remote version 
       else if ( 0 < fLsn.compare( msg->current ) )
       {
          res.header.res = SDB_CLS_CONSULT_FAILED ;
@@ -1248,11 +1227,18 @@ namespace engine
          dpsLogRecordHeader *logHeader = NULL ;
          UINT32 baseVersion = DPS_INVALID_LSN_VERSION ;
 
-         /// not found the search lsn
          if ( SDB_OK != _logger->search( search, &_mb ) )
          {
-            search.offset = eLsn.offset ;
-            baseVersion = eLsn.version ;
+            if ( msg->lastConsult.invalid() )
+            {
+               search.offset = eLsn.offset ;
+               baseVersion = eLsn.version ;
+            }
+            else
+            {
+               search = msg->lastConsult ;
+               baseVersion = search.version ;
+            }
          }
          else
          {
@@ -1273,8 +1259,6 @@ namespace engine
          }
 
          DPS_LSN returnTo ;
-         /// we try to find the lsn whose version is equal to
-         /// remote minus one.
          do
          {
             _mb.clear() ;
@@ -1293,8 +1277,6 @@ namespace engine
                   ( returnTo.version == baseVersion &&
                     time( NULL ) - bTime <= CLS_REPL_MAX_TIME ) ) ;
 
-         /// we do not know whether remote can rollback.
-         /// but we'd better to send back.
          if ( returnTo.invalid() )
          {
             res.returnTo = fLsn ;
@@ -1344,7 +1326,6 @@ namespace engine
          goto done ;
       }
 
-      //if don't know who is primary node, don't reply
       if ( MSG_INVALID_ROUTEID == _repl->getPrimary().value )
       {
          PD_LOG ( PDINFO, "Session[%s]: Don't know who is primary node, "
@@ -1352,8 +1333,6 @@ namespace engine
          goto done ;
       }
 
-      /// when processed reqid >= msg's reqid and msg queque is not empty,
-      /// dispatch the request
       if ( req->header.requestID <= _lastProcRequestID &&
            eduCB()->getQueSize() > 0 )
       {
@@ -1364,17 +1343,14 @@ namespace engine
                  eduCB()->getQueSize() ) ;
          goto done ;
       }
-      /// update processed request id
       _lastProcRequestID = req->header.requestID ;
 
-      /// set remote routeID especially, to find remote session.
       msg.oldestTransLsn = pmdGetKRCB()->getTransCB()->getOldestBeginLsn();
       msg.header.header.routeID = req->header.routeID ;
       msg.header.header.TID = req->header.TID ;
       msg.header.header.requestID = req->header.requestID ;
       msg.identity = routeAgent()->localID() ;
 
-      /// get lsn window and judge
       _logger->getLsnWindow( fLsn, mLsn, eLsn, &expect, NULL ) ;
       if ( 0 < fLsn.compareOffset( req->next.offset ) )
       {
@@ -1438,7 +1414,7 @@ namespace engine
                  fLsn.offset, fLsn.version, eLsn.offset, eLsn.version ) ;
          _mb.clear() ;
 
-         _logger->search( search, &_mb, DPS_SERCAH_ALL, -1,
+         _logger->search( search, &_mb, DPS_SEARCH_ALL, -1,
                           CLS_REPL_MAX_TIME, CLS_SYNC_MAX_LEN ) ;
       }
 

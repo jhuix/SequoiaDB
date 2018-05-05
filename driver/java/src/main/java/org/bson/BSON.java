@@ -1,4 +1,3 @@
-// BSON.java
 
 /**
  *      Copyright (C) 2008 10gen Inc.
@@ -18,31 +17,20 @@
 
 package org.bson;
 
+import org.bson.types.*;
+import org.bson.util.ClassMap;
+
+import java.math.BigDecimal;
 import java.nio.charset.Charset;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
-
-import org.bson.types.BSONTimestamp;
-import org.bson.types.Binary;
-import org.bson.types.Code;
-import org.bson.types.CodeWScope;
-import org.bson.types.MaxKey;
-import org.bson.types.MinKey;
-import org.bson.types.ObjectId;
-import org.bson.types.Symbol;
-import org.bson.util.ClassMap;
 
 public class BSON {
 
     static final Logger LOGGER = Logger.getLogger( "org.bson.BSON" );
 
-    // ---- basics ----
 
     public static final byte EOO = 0;
     public static final byte NUMBER = 1;
@@ -63,11 +51,12 @@ public class BSON {
     public static final byte NUMBER_INT = 16;
     public static final byte TIMESTAMP = 17;
     public static final byte NUMBER_LONG = 18;
+    
+    public static final byte NUMBER_DECIMAL = 100;
 
     public static final byte MINKEY = -1;
     public static final byte MAXKEY = 127;
 
-    // --- binary types
     /*
        these are binary types
        so the format would look like
@@ -79,7 +68,6 @@ public class BSON {
     public static final byte B_BINARY = 2;
     public static final byte B_UUID = 3;
 
-    // ---- regular expression handling ----
 
     /** Converts a string of regular expression flags from the database in Java regular
      * expression flags.
@@ -179,7 +167,6 @@ public class BSON {
 
     private static final int GLOBAL_FLAG = 256;
 
-    // --- (en|de)coding hooks -----
 
     public static boolean hasDecodeHooks() { return _decodeHooks; }
 
@@ -227,7 +214,7 @@ public class BSON {
         return o;
     }
 
-   /**
+    /**
      * Returns the encoding hook(s) associated with the specified class
      *
      */
@@ -257,7 +244,7 @@ public class BSON {
         getEncodingHooks( c ).remove( t );
     }
 
-   /**
+    /**
      * Returns the decoding hook(s) associated with the specific class
      */
     public static List<Transformer> getDecodingHooks( Class c ){
@@ -309,7 +296,6 @@ public class BSON {
 
     static protected Charset _utf8 = Charset.forName( "UTF-8" );
 
-    // ----- static encode/decode -----
 
     public static byte[] encode( BSONObject o ){
         BSONEncoder e = _staticEncoder.get();
@@ -326,6 +312,11 @@ public class BSON {
         return d.readObject( b );
     }
 
+    public static BSONObject decode(byte[] b, int offset) {
+        BSONDecoder d = _staticDecoder.get();
+        return d.readObject(b, offset);
+    }
+
     static ThreadLocal<BSONEncoder> _staticEncoder = new ThreadLocal<BSONEncoder>(){
         protected BSONEncoder initialValue(){
             return new BasicBSONEncoder();
@@ -334,11 +325,10 @@ public class BSON {
 
     static ThreadLocal<BSONDecoder> _staticDecoder = new ThreadLocal<BSONDecoder>(){
         protected BSONDecoder initialValue(){
-            return new BasicBSONDecoder();
+            return new NewBSONDecoder();
         }
     };
 
-    // --- coercing ---
 
     public static int toInt( Object o ){
         if ( o == null )
@@ -369,27 +359,23 @@ public class BSON {
 			return true;
 		else if (obj instanceof ObjectId)
 			return true;
-		// else if (obj instanceof BSONObject)
-		// return true;
 		else if (obj instanceof Boolean)
 			return true;
 		else if (obj instanceof Pattern)
 			return true;
-		// else if (obj instanceof Map)
-		// return true;
-		// else if (obj instanceof Iterable)
-		// return true;
 		else if (obj instanceof byte[])
 			return true;
 		else if (obj instanceof Binary)
 			return true;
 		else if (obj instanceof UUID)
 			return true;
-		// else if (obj.getClass().isArray())
-		// return true;
 		else if (obj instanceof Symbol)
 			return true;
 		else if (obj instanceof BSONTimestamp)
+			return true;
+		else if (obj instanceof BSONDecimal)
+			return true;
+		else if (obj instanceof BigDecimal)
 			return true;
 		else if (obj instanceof CodeWScope)
 			return true;
@@ -401,5 +387,42 @@ public class BSON {
 			return true;
 		else
 			return false;
+	}
+    
+    private static boolean _compatible = false;
+
+	/**
+	 * When "compatible" is true, the content of BasicBSONObject method "toString" is show
+	 * absolutely the same with which is show in sdb shell.
+	 * @param compatible true or false, default to be false;
+	 * 
+	 * {@code
+	 *  // we have a bson as below:
+	 *  BSONObject obj = new BasicBSONObject("a", Long.MAX_VALUE);
+	 *  // sdb shell shows this bson like this:
+	 *  {"a" : { "$numberLong" : "9223372036854775807"}}
+	 *  // sdb shell use javascript grammer, so, it can't display number
+	 *  // which is great that 2^53 - 1. So it use "$numberLong" to represent
+	 *  // the type, and keep the number between the quotes.
+	 *  // However, in java, when we use "obj.toString()", 
+	 *  // most of the time, we don't hope to get a result with 
+	 *  // the format "$numberLong", we hope to see the result as 
+	 *  // below:
+	 *  {"a" : 9223372036854775807}
+	 *  // When parameter "compatible" is false, we get this kind of result
+	 *  // all the time. Otherwise, we get a result which is show as the sdb shell shows.
+	 * }
+	 */
+	public static void setJSCompatibility(boolean compatible) {
+		_compatible = compatible;
+	}
+	
+	/**
+	 * Get whether the display mode of BSON is the same with that in sdb shell or not.
+	 * @return true or false.
+	 * @see #setJSCompatibility(boolean)
+	 */
+	public static boolean getJSCompatibility() {
+		return _compatible;
 	}
 }

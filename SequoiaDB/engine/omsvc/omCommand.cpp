@@ -3755,15 +3755,6 @@ namespace engine
          goto error ;
       }
 
-      if ( string(pBusinessType) == OM_BUSINESS_SEQUOIASQL )
-      {
-         _errorDetail = "only supported in enterprise edition" ;
-         rc = SDB_OPTION_NOT_SUPPORT ;
-         _sendErrorRes2Web( rc, _errorDetail ) ;
-         goto error ;
-      }
-#endif
-
       _setFileLanguageSep() ;
       templateFile = _rootPath + OSS_FILE_SEP + OM_BUSINESS_CONFIG_SUBDIR
                      + OSS_FILE_SEP + pBusinessType + OM_TEMPLATE_FILE_NAME
@@ -9868,12 +9859,6 @@ namespace engine
       string businessName ;
       INT64 taskID ;
 
-      _errorDetail = "only supported in enterprise edition" ;
-      rc = SDB_OPTION_NOT_SUPPORT ;
-      _sendErrorRes2Web( rc, _errorDetail ) ;
-      goto error ;
-#endif
-
       rc = _parseRestSsqlExecInfo() ;
       if ( SDB_OK != rc )
       {
@@ -10665,8 +10650,6 @@ namespace engine
          obVersion.append ( FIELD_NAME_RELEASE, release ) ;
          obVersion.append ( FIELD_NAME_BUILD, pBuild ) ;
          systemInfo.append ( FIELD_NAME_VERSION, obVersion.obj () ) ;
-         systemInfo.append ( FIELD_NAME_EDITION, "Enterprise" ) ;
-#endif // SDB_ENTERPRISE
       }
       catch ( std::exception &e )
       {

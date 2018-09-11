@@ -43,22 +43,30 @@ namespace engine
    class _rtnLobStream ;
    class _rtnLobFetcher ;
 
+   /*
+      _rtnContextLob define
+   */
    class _rtnContextLob : public _rtnContextBase
    {
+      DECLARE_RTN_CTX_AUTO_REGISTER()
    public:
       _rtnContextLob( INT64 contextID, UINT64 eduID ) ;
       virtual ~_rtnContextLob() ;
 
    public:
+      virtual std::string      name() const ;
       virtual RTN_CONTEXT_TYPE getType() const { return RTN_CONTEXT_LOB ; }
       virtual _dmsStorageUnit*  getSU () ;
 
    public:
+      /*
+         Note: The pStream will be takeover in cases both failed and succed
+      */
       INT32 open( const BSONObj &lob,
-                  BOOLEAN isLocal,
                   INT32 flags,
                   _pmdEDUCB *cb,
-                  SDB_DPSCB *dpsCB ) ;
+                  SDB_DPSCB *dpsCB,
+                  _rtnLobStream *pStream ) ;
 
       INT32 read( UINT32 len,
                   SINT64 offset,
@@ -66,14 +74,21 @@ namespace engine
 
       INT32 write( UINT32 len,
                    const CHAR *buf,
+                   INT64 lobOffset,
                    _pmdEDUCB *cb ) ;
+
+      INT32 lock( _pmdEDUCB *cb,
+                  INT64 offset,
+                  INT64 length ) ;
 
       INT32 close( _pmdEDUCB *cb ) ;
 
       INT32 getLobMetaData( BSONObj &meta ) ;
 
+      INT32 mode() const ;
+
       virtual void     getErrorInfo( INT32 rc,
-                                     pmdEDUCB *cb,
+                                     _pmdEDUCB *cb,
                                      rtnContextBuf &buffObj ) ;
 
    protected:
@@ -82,9 +97,9 @@ namespace engine
       virtual void  _toString( stringstream &ss ) ;
 
    private:
-      rtnLobStream *_stream ;
-      SINT64 _offset ;
-      UINT32 _readLen ;
+      _rtnLobStream     *_stream ;
+      SINT64            _offset ;
+      UINT32            _readLen ;
    } ;
    typedef class _rtnContextLob rtnContextLob ;
 
@@ -93,6 +108,7 @@ namespace engine
    */
    class _rtnContextLobFetcher : public rtnContextBase
    {
+      DECLARE_RTN_CTX_AUTO_REGISTER()
       public:
          _rtnContextLobFetcher( INT64 contextID, UINT64 eduID ) ;
          virtual ~_rtnContextLobFetcher() ;
@@ -111,6 +127,7 @@ namespace engine
          _rtnLobFetcher*   getLobFetcher() ;
 
       public:
+         virtual std::string      name() const ;
          virtual RTN_CONTEXT_TYPE getType () const ;
          virtual _dmsStorageUnit* getSU () ;
 

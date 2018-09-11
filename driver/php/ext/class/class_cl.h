@@ -53,6 +53,7 @@ PHP_METHOD( SequoiaCL, dropIdIndex ) ;
 
 PHP_METHOD( SequoiaCL, openLob ) ;
 PHP_METHOD( SequoiaCL, removeLob ) ;
+PHP_METHOD( SequoiaCL, truncateLob ) ;
 PHP_METHOD( SequoiaCL, listLob ) ;
 PHP_METHOD( SequoiaCL, listLobPieces ) ;
 

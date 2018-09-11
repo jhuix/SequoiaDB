@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <iterator>
 
 #define OPTLISTTAG            "optlist"
 #define NAMETAG               "name"
@@ -28,7 +29,6 @@
 #define NOTETAG                     "note"
 #define NOTE_FIRSTTAG               "first"
 #define NOTE_SECONDTAG              "second"
-#define NOTE_THIRDTAG               "third"
 
 using namespace boost::property_tree;
 using namespace std;
@@ -181,11 +181,6 @@ void OptGenForWeb::loadOtherInfoFromXML ()
                         else if ( NOTE_SECONDTAG == v2.first )
                         {
                             newele->secondtag = v2.second
-                                    .get<string>(language) ;
-                        }
-                        else if ( NOTE_THIRDTAG == v2.first )
-                        {
-                            newele->thirdtag = v2.second
                                     .get<string>(language) ;
                         }
                     }
@@ -394,17 +389,44 @@ string OptGenForWeb::genOptions ()
     }
     oss << endl ;
 
-    oss << ">**Note:**  " << endl ;
-    oss << ">1. " << (*ite)->firsttag << "  " << endl ;
-    oss << ">2. " << (*ite)->secondtag << "  " << endl ;
-    oss << ">3. " << (*ite)->thirdtag << "  " << endl ;
-
+    if( !(*ite)->firsttag.empty() )
+    {
+        oss << ">**Note:**  " << endl ;
+        oss << ">1. " << (*ite)->firsttag << "  " << endl ;
+        if( !(*ite)->secondtag.empty() )
+        {
+            oss << ">2. " << (*ite)->secondtag << "  " << endl ;
+        }
+    }
+    oss << endl ;
     return oss.str() ;
+}
+
+string OptGenForWeb::genSupplement()
+{
+    string str ;
+
+    if ( 0 == strcmp( pLanguage[0], language ) )
+    {
+    }
+    else if ( 0 == strcmp( pLanguage[1], language ) )
+    {
+        ifstream fin( OPT_SUPPLEMENTFILE ) ;
+        str = string( istreambuf_iterator< char >( fin ),
+                      istreambuf_iterator< char >() ) ;
+    }
+    else
+    {
+        cout << "The language is not support: " << language << endl ;
+    }
+
+    return str ;
 }
 
 void OptGenForWeb::gendoc()
 {
-    string str ;
+    string optStr ;
+    string suppleStr ;
     string fileName ;
 
     if ( 0 == strcmp( pLanguage[0], language ) )
@@ -420,16 +442,17 @@ void OptGenForWeb::gendoc()
         cout << "The language is not support: " << language << endl ;
     }
 
-    str = genOptions() ;
-    if ( "" == str )
+    optStr = genOptions() ;
+    if ( "" == optStr )
     {
         cout << "Failed to generate database configuration options." << endl ;
         exit ( 0 ) ;
     }
 
+    suppleStr = genSupplement() ;
     ofstream fout( fileName.c_str() ) ;
 
-    fout << str << endl ;
+    fout << optStr << suppleStr << endl ;
 }
 
 void OptGenForWeb::run ()

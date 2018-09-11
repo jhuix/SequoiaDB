@@ -58,6 +58,14 @@ using namespace std ;
 namespace engine
 {
 
+   enum
+   {
+       TITLE1 = 0,
+       TITLE2 =1, 
+       TITLE3 = 3,
+       TITLE4 = 5,
+       TITLE5 = 7
+   };
    #define DMS_SU_DMP_OPT_HEX                ((UINT32)(0x00000001))
    #define DMS_SU_DMP_OPT_HEX_WITH_ASCII     ((UINT32)(0x00000002))
    #define DMS_SU_DMP_OPT_HEX_PREFIX_AS_ADDR ((UINT32)(0x00000004))
@@ -87,8 +95,8 @@ namespace engine
                                     UINT32 outSize,
                                     CHAR * addrPrefix,
                                     UINT32 options,
-                                    SINT32 &pageSize,
-                                    INT32 &pageNum ) ;
+                                    UINT32 &pageSize,
+                                    UINT32 &pageNum ) ;
 
          static UINT32 dumpSME ( void * inBuf,
                                  UINT32 inSize,
@@ -123,6 +131,7 @@ namespace engine
                                  CHAR * addrPrefix,
                                  UINT32 options,
                                  dmsExtentID extID ) ;
+
          static UINT32 dumpDictExtent( void * inBuf,
                                        UINT32 inSize,
                                        CHAR * outBuf,
@@ -131,13 +140,22 @@ namespace engine
                                        UINT32 options,
                                        dmsExtentID extID ) ;
 
+         static UINT32 dumpExtOptExtent( CHAR * inBuf,
+                                         UINT32 inSize,
+                                         CHAR * outBuf,
+                                         UINT32 outSize,
+                                         CHAR * addrPrefix,
+                                         UINT32 options,
+                                         dmsExtentID extID,
+                                         DMS_STORAGE_TYPE type ) ;
+
          static UINT32 dumpRawPage ( void * inBuf,
                                      UINT32 inSize,
                                      CHAR * outBuf,
                                      UINT32 outSize ) ;
 
          static UINT32 dumpDataExtent ( _pmdEDUCB *cb,
-                                        void * inBuf,
+                                        CHAR * inBuf,
                                         UINT32 inSize,
                                         CHAR * outBuf,
                                         UINT32 outSize,
@@ -146,7 +164,8 @@ namespace engine
                                         dmsExtentID &nextExtent,
                                         dmsCompressorEntry *compressorEntry,
                                         set<dmsRecordID> *ridList = NULL,
-                                        BOOLEAN dumpRecord = FALSE ) ;
+                                        BOOLEAN dumpRecord = FALSE,
+                                        BOOLEAN capped = FALSE ) ;
 
          static UINT32 dumpExtentHeader ( void * inBuf,
                                           UINT32 inSize,
@@ -167,14 +186,25 @@ namespace engine
                                              CHAR * outBuf,
                                              UINT32 outSize ) ;
 
-         static UINT32 dumpDataRecord ( _pmdEDUCB *cb,
-                                        void * inBuf,
+         static UINT32 dumpExtOptExtentHeader( void *inBuf,
+                                               UINT32 inSize,
+                                               CHAR * outBuf,
+                                               UINT32 outSize ) ;
+
+         static UINT32 dumpDataRecord ( pmdEDUCB *cb,
+                                        CHAR * inBuf,
                                         UINT32 inSize,
                                         CHAR * outBuf,
                                         UINT32 outSize,
                                         dmsOffset &nextRecord,
                                         dmsCompressorEntry *compressorEntry,
                                         set<dmsRecordID> *ridList = NULL ) ;
+
+         static UINT32 dumpCappedDataRecord( pmdEDUCB *cb,
+                                             dmsCappedRecord *record,
+                                             CHAR *outBuf,
+                                             UINT32 outSize,
+                                             dmsCompressorEntry *compressorEntry ) ;
 
          static UINT32 dumpIndexExtent ( void * inBuf,
                                          UINT32 inSize,
@@ -208,12 +238,48 @@ namespace engine
                                             CHAR * addrPrefix,
                                             UINT32 options,
                                             dmsExtentID &root ) ;
+
+         static UINT32 dumpDmsLobMeta( CHAR *inBuf, 
+                                        UINT32 inSize,
+                                        CHAR * outBuf,
+                                        UINT32 outSize, 
+                                        CHAR * addrPrefix,
+                                        UINT32 options);
+
+         static UINT32 dumpDmsLobData( CHAR *inBuf, 
+                                        UINT32 inSize, 
+                                        CHAR * outBuf, 
+                                        UINT32 outSize, 
+                                        CHAR * addrPrefix, 
+                                        UINT32 options);
+
+         static UINT32 dumpDmsLobDataMapBlk( dmsLobDataMapBlk *blk,
+                                        CHAR * outBuf,
+                                        UINT32 outSize, 
+                                        CHAR * addrPrefix,
+                                        UINT32 options, 
+                                        UINT32 pageSize);
       private:
          static UINT32 _dumpExtentHeaderComm( const dmsExtent *extent,
                                               CHAR *outBuf, UINT32 outSize ) ;
 
          static UINT32 _dumpDictDetail( void *inBuf, UINT32 inSize,
                                         CHAR *outBuf, UINT32 outSize ) ;
+
+         static UINT32 _dumpExtOptionDetail( CHAR *inBuf, UINT32 inSize,
+                                             CHAR *outBuf, UINT32 outSize,
+                                             DMS_STORAGE_TYPE type ) ;
+
+         static UINT32 _dumpNormalExtent( CHAR *inBuf, UINT32 inSize,
+                                          CHAR *outBuf, UINT32 outSize,
+                                          dmsCompressorEntry *compressorEntry,
+                                          set< dmsRecordID > *ridList,
+                                          pmdEDUCB *cb ) ;
+
+         static UINT32 _dumpCappedExtent( CHAR *inBuf, UINT32 inSize,
+                                          CHAR *outBuf, UINT32 outSize,
+                                          dmsCompressorEntry *compressorEntry,
+                                          pmdEDUCB *cb ) ;
    } ;
    typedef _dmsDump dmsDump ;
 

@@ -1,49 +1,41 @@
-/**
- * Copyright (C) 2012 SequoiaDB Inc.
- * <p>
+/*
+ * Copyright 2017 SequoiaDB Inc.
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * <p>
+ *
  * http://www.apache.org/licenses/LICENSE-2.0
- * <p>
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *
- */
-/**
- * @package com.sequoiadb.base;
- * @brief SequoiaDB Driver for Java
- * @author Jacky Zhang
- */
+*/
+
 package com.sequoiadb.base;
 
-import com.sequoiadb.base.SequoiadbConstants.Operation;
 import com.sequoiadb.exception.BaseException;
 import com.sequoiadb.exception.SDBError;
-import com.sequoiadb.net.IConnection;
-import com.sequoiadb.util.SDBMessageHelper;
+import com.sequoiadb.message.request.AdminRequest;
+import com.sequoiadb.message.response.SdbReply;
 import org.bson.BSONObject;
 import org.bson.BasicBSONObject;
 
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * @class CollectionSpace
- * @brief Database operation interfaces of collection space.
+ * Collection space of SequoiaDB.
  */
 public class CollectionSpace {
     private String name;
     private Sequoiadb sequoiadb;
 
     /**
-     * @fn String getName()
-     * @brief Return the name of current collection space.
+     * Return the name of current collection space.
+     *
      * @return The collection space name
      */
     public String getName() {
@@ -51,8 +43,8 @@ public class CollectionSpace {
     }
 
     /**
-     * @fn Sequoiadb getSequoiadb()
-     * @brief Return the Sequoiadb instance of current collection space belong to.
+     * Get the Sequoiadb instance of current collection space belongs to.
+     *
      * @return Sequoiadb object
      */
     public Sequoiadb getSequoiadb() {
@@ -60,12 +52,8 @@ public class CollectionSpace {
     }
 
     /**
-     * @fn CollectionSpace(Sequoiadb sequoiadb, String name)
-     * @brief Constructor
-     * @param sequoiadb
-     *            Sequoiadb handle
-     * @param name
-     *            Collection space name
+     * @param sequoiadb Sequoiadb instance
+     * @param name      Collection space name
      */
     CollectionSpace(Sequoiadb sequoiadb, String name) {
         this.name = name;
@@ -73,12 +61,11 @@ public class CollectionSpace {
     }
 
     /**
-     * @fn DBCollection getCollection(String collectionName)
-     * @brief Get the named collection
-     * @param collectionName
-     *            The collection name
+     * Get the named collection.
+     *
+     * @param collectionName The collection name
      * @return The collection object or null for collection not exist
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public DBCollection getCollection(String collectionName)
             throws BaseException {
@@ -86,6 +73,7 @@ public class CollectionSpace {
         if (sequoiadb.fetchCache(collectionFullName)) {
             return new DBCollection(sequoiadb, this, collectionName);
         }
+
         if (isCollectionExist(collectionName)) {
             return new DBCollection(sequoiadb, this, collectionName);
         } else {
@@ -94,37 +82,39 @@ public class CollectionSpace {
     }
 
     /**
-     * @fn boolean isCollectionExist(String colName)
-     * @brief Verify the existence of collection in current collection space
-     * @param colName
-     *            The collection name
+     * Verify the existence of collection in current collection space.
+     *
+     * @param collectionName The collection name
      * @return True if collection existed or False if not existed
-     * @throws com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
-    public boolean isCollectionExist(String colName) throws BaseException {
-        String commandString = SequoiadbConstants.ADMIN_PROMPT
-                + SequoiadbConstants.TEST_CMD + " "
-                + SequoiadbConstants.COLLECTION;
-        String collectionFullName = name + "." + colName;
+    public boolean isCollectionExist(String collectionName) throws BaseException {
+        String collectionFullName = name + "." + collectionName;
+
         BSONObject obj = new BasicBSONObject();
-        obj.put(SequoiadbConstants.FIELD_NAME_NAME, collectionFullName);
-        SDBMessage rtn = adminCommand(commandString, obj, null, null, null);
-        int flags = rtn.getFlags();
-        if (flags == 0) {
+        obj.put(SdbConstants.FIELD_NAME_NAME, collectionFullName);
+
+        AdminRequest request = new AdminRequest(AdminCommand.TEST_CL, obj);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+
+        int flag = response.getFlag();
+        if (flag == 0) {
             sequoiadb.upsertCache(collectionFullName);
             return true;
-        } else if (flags == SDBError.SDB_DMS_NOTEXIST.getErrorCode()) {
+        } else if (flag == SDBError.SDB_DMS_NOTEXIST.getErrorCode()) {
             sequoiadb.removeCache(collectionFullName);
             return false;
-        } else
-            throw new BaseException(flags);
+        } else {
+            sequoiadb.throwIfError(response);
+            return false; // make compiler happy
+        }
     }
 
     /**
-     * @fn List<String> getCollectionNames()
-     * @brief Get all the collection names of current collection space
+     * Get all the collection names of current collection space.
+     *
      * @return A list of collection names
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public List<String> getCollectionNames() throws BaseException {
         List<String> collectionNames = new ArrayList<String>();
@@ -140,127 +130,79 @@ public class CollectionSpace {
     }
 
     /**
-     * @fn void createCollection(String collectionName)
-     * @brief Create the named collection in current collection space
-     * @param collectionName
-     *            The collection name
-     * @exception com.sequoiadb.exception.BaseException
+     * Create the named collection in current collection space.
+     *
+     * @param collectionName The collection name
+     * @return the newly created object of collection
+     * @throws BaseException If error happens.
      */
     public DBCollection createCollection(String collectionName)
             throws BaseException {
-        if (isCollectionExist(collectionName)) {
-            throw new BaseException(SDBError.SDB_DMS_EXIST, collectionName);
-        }
-        String commandString = SequoiadbConstants.ADMIN_PROMPT
-                + SequoiadbConstants.CREATE_CMD + " "
-                + SequoiadbConstants.COLLECTION;
-        String collectionFullName = name + "." + collectionName;
-        BSONObject obj = new BasicBSONObject();
-        obj.put(SequoiadbConstants.FIELD_NAME_NAME, collectionFullName);
-        SDBMessage rtn = adminCommand(commandString, obj, null, null, null);
-        int flags = rtn.getFlags();
-        if (flags != 0) {
-            throw new BaseException(flags, collectionName);
-        }
-        return getCollection(collectionName);
+        return createCollection(collectionName, null);
     }
 
     /**
-     * @fn DBCollection createCollection(String collectionName, BSONObject
-     *     options)
-     * @brief Create collection by options
-     * @param collectionName
-     *           The collection name
-     * @param options
-     *           The options for creating collection, including
-     *           "ShardingKey", "ReplSize", "IsMainCL" and "Compressed" informations,
-     *           no options, if null
+     * Create collection by options.
+     *
+     * @param collectionName The collection name
+     * @param options        The options for creating collection, including
+     *                       "ShardingKey", "ReplSize", "IsMainCL" and "Compressed" informations,
+     *                       no options, if null
      * @return the created DBCollection
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException Tf error happens.
      */
     public DBCollection createCollection(String collectionName,
                                          BSONObject options) {
-        String commandString = SequoiadbConstants.ADMIN_PROMPT
-                + SequoiadbConstants.CREATE_CMD + " "
-                + SequoiadbConstants.COLLECTION;
-        String collectionFullName = name + "." + collectionName;
-        BSONObject obj = new BasicBSONObject();
-        obj.put(SequoiadbConstants.FIELD_NAME_NAME, collectionFullName);
-        if (options != null)
-            obj.putAll(options);
-        SDBMessage rtn = adminCommand(commandString, obj, null, null, null);
-        int flags = rtn.getFlags();
-        if (flags != 0) {
-            String msg = "collection = " + collectionFullName +
-                    ", options = " + options;
-            throw new BaseException(flags, msg);
+        if (isCollectionExist(collectionName)) {
+            throw new BaseException(SDBError.SDB_DMS_EXIST, collectionName);
         }
+
+        String collectionFullName = name + "." + collectionName;
+
+        BSONObject obj = new BasicBSONObject();
+        obj.put(SdbConstants.FIELD_NAME_NAME, collectionFullName);
+        if (options != null) {
+            obj.putAll(options);
+        }
+
+        AdminRequest request = new AdminRequest(AdminCommand.CREATE_CL, obj);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+        String msg = "collection = " + collectionFullName + ", options = " + options;
+        sequoiadb.throwIfError(response, msg);
         sequoiadb.upsertCache(collectionFullName);
         return new DBCollection(sequoiadb, this, collectionName);
     }
 
     /**
-     * @fn void drop()
-     * @brief Drop current collectionSpace
-     * @return void
-     * @exception com.sequoiadb.exception.BaseException
-     * @deprecated the method will be deprecated in version 2.x, use Sequoiadb.dropCollectionSpace instead
-     * @see com.sequoiadb.base.Sequoiadb.dropCollectionSpace
+     * Drop current collection space.
+     *
+     * @throws BaseException If error happens.
+     * @see com.sequoiadb.base.Sequoiadb#dropCollectionSpace(String)
+     * @deprecated Use Sequoiadb.dropCollectionSpace() instead.
      */
     public void drop() throws BaseException {
         sequoiadb.dropCollectionSpace(this.name);
     }
 
     /**
-     * @fn void dropCollection(String collectionName)
-     * @brief Remove the named collection of current collection space
-     * @param collectionName
-     *            The collection name
-     * @exception com.sequoiadb.exception.BaseException
+     * Remove the named collection of current collection space.
+     *
+     * @param collectionName The collection name
+     * @throws BaseException If error happens.
      */
     public void dropCollection(String collectionName) throws BaseException {
         if (!isCollectionExist(collectionName)) {
             throw new BaseException(SDBError.SDB_DMS_NOTEXIST, collectionName);
         }
-        String commandString = SequoiadbConstants.ADMIN_PROMPT
-                + SequoiadbConstants.DROP_CMD + " "
-                + SequoiadbConstants.COLLECTION;
+
         String collectionFullName = name + "." + collectionName;
+
         BSONObject obj = new BasicBSONObject();
-        obj.put(SequoiadbConstants.FIELD_NAME_NAME, collectionFullName);
-        SDBMessage rtn = adminCommand(commandString, obj, null, null, null);
-        int flags = rtn.getFlags();
-        if (flags != 0) {
-            throw new BaseException(flags, collectionName);
-        }
+        obj.put(SdbConstants.FIELD_NAME_NAME, collectionFullName);
+
+        AdminRequest request = new AdminRequest(AdminCommand.DROP_CL, obj);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+        sequoiadb.throwIfError(response, collectionName);
         sequoiadb.removeCache(collectionFullName);
-    }
-
-    private SDBMessage adminCommand(String commandString, BSONObject arg1,
-                                    BSONObject arg2, BSONObject arg3, BSONObject arg4)
-            throws BaseException {
-        IConnection connection = sequoiadb.getConnection();
-        BSONObject dummyObj = new BasicBSONObject();
-        SDBMessage sdbMessage = new SDBMessage();
-        sdbMessage.setMatcher(arg1);
-        sdbMessage.setCollectionFullName(commandString);
-        sdbMessage.setFlags(0);
-        sdbMessage.setNodeID(SequoiadbConstants.ZERO_NODEID);
-        sdbMessage.setRequestID(sequoiadb.getNextRequstID());
-        sdbMessage.setSkipRowsCount(-1);
-        sdbMessage.setReturnRowsCount(-1);
-        sdbMessage.setSelector(dummyObj);
-        sdbMessage.setOrderBy(dummyObj);
-        sdbMessage.setHint(dummyObj);
-        sdbMessage.setOperationCode(Operation.OP_QUERY);
-
-        byte[] request = SDBMessageHelper.buildQueryRequest(sdbMessage, sequoiadb.endianConvert);
-        connection.sendMessage(request);
-
-        ByteBuffer byteBuffer = connection.receiveMessage(sequoiadb.endianConvert);
-
-        SDBMessage rtnSDBMessage = SDBMessageHelper.msgExtractReply(byteBuffer);
-        SDBMessageHelper.checkMessage(sdbMessage, rtnSDBMessage);
-        return rtnSDBMessage;
     }
 }

@@ -642,7 +642,7 @@ namespace engine
 
       try
       {
-         BSONObj &shardingKey = cataSet.getShardingKey() ;
+         const BSONObj &shardingKey = cataSet.getShardingKey() ;
          BSONObjIterator shardingItr ( shardingKey ) ;
          while ( shardingItr.more() )
          {
@@ -734,7 +734,7 @@ namespace engine
       CHAR szCLName[ DMS_COLLECTION_NAME_SZ + 1 ] = {0} ;
       CHAR szCSName[ DMS_COLLECTION_SPACE_NAME_SZ + 1 ] = {0} ;
 
-      rc = catResolveCollectionName( clFullName.c_str(), clFullName.size(),
+      rc = rtnResolveCollectionName( clFullName.c_str(), clFullName.size(),
                                      szCSName, DMS_COLLECTION_SPACE_NAME_SZ,
                                      szCLName, DMS_COLLECTION_NAME_SZ ) ;
       PD_RC_CHECK( rc, PDWARNING, "Resolve collection name[%s] failed, rc: %d",

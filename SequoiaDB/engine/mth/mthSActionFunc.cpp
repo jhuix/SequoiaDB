@@ -194,14 +194,14 @@ namespace engine
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY( SDB__MTHELEMMATCHBUILDN ) ;
 
-      PD_CHECK( NULL != action->getMatcher(), SDB_SYS, error, PDERROR,
+      PD_CHECK( NULL != action->getMatchTree(), SDB_SYS, error, PDERROR,
                 "Failed to get match tree" ) ;
 
       if ( Array == e.type() )
       {
          BSONArrayBuilder arrayBuilder( builder.subarrayStart( fieldName ) ) ;
          _mthElemMatchIterator i( e.embeddedObject(),
-                                  action->getMatcher(),
+                                  action->getMatchTree(),
                                   n ) ;
          do
          {
@@ -214,6 +214,31 @@ namespace engine
             else if ( SDB_DMS_EOC == rc )
             {
                arrayBuilder.doneFast() ;
+               rc = SDB_OK ;
+               break ;
+            }
+            else
+            {
+               PD_LOG( PDERROR, "failed to get next element:%d", rc ) ;
+               goto error ;
+            }
+         } while ( TRUE ) ;
+      }
+      else if ( Object == e.type() )
+      {
+         _mthElemMatchIterator i( e.wrap(),
+                                  action->getMatchTree(),
+                                  n ) ;
+         do
+         {
+            BSONElement next ;
+            rc = i.next( next ) ;
+            if ( SDB_OK == rc )
+            {
+               builder.append( next ) ;
+            }
+            else if ( SDB_DMS_EOC == rc )
+            {
                rc = SDB_OK ;
                break ;
             }
@@ -241,7 +266,7 @@ namespace engine
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY( SDB__MTHELEMMATCHGETN ) ;
 
-      PD_CHECK( NULL != action->getMatcher(), SDB_SYS, error, PDERROR,
+      PD_CHECK( NULL != action->getMatchTree(), SDB_SYS, error, PDERROR,
                 "Failed to get match tree" ) ;
 
       if ( Array == in.type() )
@@ -249,7 +274,7 @@ namespace engine
          BSONObjBuilder objBuilder ;
          BSONArrayBuilder arrayBuilder( objBuilder.subarrayStart( fieldName ) ) ;
          _mthElemMatchIterator i( in.embeddedObject(),
-                                  action->getMatcher(),
+                                  action->getMatchTree(),
                                   n ) ;
          do
          {
@@ -345,13 +370,22 @@ namespace engine
                       bson::BSONObjBuilder &builder )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       PD_TRACE_ENTRY( SDB__MTHABSBUILD ) ;
       SDB_ASSERT( NULL != action, "can not be null" ) ;
+      BOOLEAN strictDataMode = action->getStrictDataMode() ;
 
-      rc = mthAbs( fieldName, e, builder ) ;
+      rc = mthAbs( fieldName, e, builder, flag ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "mthAbs failed:rc=%d", rc ) ;
+         goto error ;
+      }
+      if ( strictDataMode && OSS_BIT_TEST( flag, MTH_OPERATION_FLAG_OVERFLOW ) )
+      {
+         rc = SDB_VALUE_OVERFLOW ;
+         PD_LOG( PDERROR, "overflow happened, field: %s, abs(%lld), rc = %d",
+                 fieldName, e.numberLong(), rc ) ;
          goto error ;
       }
 
@@ -369,15 +403,24 @@ namespace engine
                     bson::BSONElement &out )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       PD_TRACE_ENTRY( SDB__MTHABSGET ) ;
       SDB_ASSERT( NULL != action, "can not be null" ) ;
+      BOOLEAN strictDataMode = action->getStrictDataMode() ;
       BSONObjBuilder builder ;
       BSONObj obj ;
 
-      rc = mthAbs( fieldName, in, builder ) ;
+      rc = mthAbs( fieldName, in, builder, flag ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "mthAbs failed:rc=%d", rc ) ;
+         goto error ;
+      }
+      if ( strictDataMode && OSS_BIT_TEST( flag, MTH_OPERATION_FLAG_OVERFLOW ) )
+      {
+         rc = SDB_VALUE_OVERFLOW ;
+         PD_LOG( PDERROR, "overflow happened, field: %s, abs(%lld), rc = %d",
+                 fieldName, in.numberLong(), rc ) ;
          goto error ;
       }
 
@@ -1091,16 +1134,25 @@ namespace engine
                       bson::BSONObjBuilder &builder )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       PD_TRACE_ENTRY( SDB__MTHADDBUILD ) ;
       SDB_ASSERT( NULL != action, "can not be null" ) ;
+      BOOLEAN strictDataMode = action->getStrictDataMode() ;
       const BSONObj &obj = action->getArg() ;
       BSONElement arg = obj.getField( "arg1" ) ;
       SDB_ASSERT( arg.isNumber(), "must be numeric" ) ;
 
-      rc = mthAdd( fieldName, e, arg, builder ) ;
+      rc = mthAdd( fieldName, e, arg, builder, flag ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "mthAdd failed:rc=%d", rc ) ;
+         goto error ;
+      }
+      if ( strictDataMode && OSS_BIT_TEST( flag, MTH_OPERATION_FLAG_OVERFLOW ) )
+      {
+         rc = SDB_VALUE_OVERFLOW ;
+         PD_LOG( PDERROR, "overflow happened, field: %s, (%lld + %lld), rc = %d",
+                 fieldName, e.numberLong(), arg.numberLong(), rc ) ;
          goto error ;
       }
 
@@ -1118,16 +1170,25 @@ namespace engine
                     bson::BSONElement &out )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       PD_TRACE_ENTRY( SDB__MTHADDGET ) ;
       BSONObjBuilder builder ;
       BSONObj obj ;
+      BOOLEAN strictDataMode = action->getStrictDataMode() ;
       BSONElement arg = action->getArg().getField( "arg1" ) ;
       SDB_ASSERT( arg.isNumber(), "must be numeric" ) ;
 
-      rc = mthAdd( fieldName, in, arg, builder ) ;
+      rc = mthAdd( fieldName, in, arg, builder, flag ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "mthAdd failed:rc=%d", rc ) ;
+         goto error ;
+      }
+      if ( strictDataMode && OSS_BIT_TEST( flag, MTH_OPERATION_FLAG_OVERFLOW ) )
+      {
+         rc = SDB_VALUE_OVERFLOW ;
+         PD_LOG( PDERROR, "overflow happened, field: %s, (%lld + %lld), rc = %d",
+                 fieldName, in.numberLong(), arg.numberLong(), rc ) ;
          goto error ;
       }
 
@@ -1152,16 +1213,25 @@ namespace engine
                            bson::BSONObjBuilder &builder )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       PD_TRACE_ENTRY( SDB__MTHSUBTRACTBUILD ) ;
       SDB_ASSERT( NULL != action, "can not be null" ) ;
+      BOOLEAN strictDataMode = action->getStrictDataMode() ;
       const BSONObj &obj = action->getArg() ;
       BSONElement arg = obj.getField( "arg1" ) ;
       SDB_ASSERT( arg.isNumber(), "must be numeric" ) ;
 
-      rc = mthSub( fieldName, e, arg, builder ) ;
+      rc = mthSub( fieldName, e, arg, builder, flag ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "mthSub failed:rc=%d", rc ) ;
+         goto error ;
+      }
+      if ( strictDataMode && OSS_BIT_TEST( flag, MTH_OPERATION_FLAG_OVERFLOW ) )
+      {
+         rc = SDB_VALUE_OVERFLOW ;
+         PD_LOG( PDERROR, "overflow happened, field: %s, (%lld - %lld), rc = %d",
+                 fieldName, e.numberLong(), arg.numberLong(), rc ) ;
          goto error ;
       }
 
@@ -1179,16 +1249,25 @@ namespace engine
                          bson::BSONElement &out )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       PD_TRACE_ENTRY( SDB__MTHSUBTRACTGET ) ;
       BSONObjBuilder builder ;
       BSONObj obj ;
+      BOOLEAN strictDataMode = action->getStrictDataMode() ;
       BSONElement arg = action->getArg().getField( "arg1" ) ;
       SDB_ASSERT( arg.isNumber(), "must be numeric" ) ;
 
-      rc = mthSub( fieldName, in, arg, builder ) ;
+      rc = mthSub( fieldName, in, arg, builder, flag ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "mthSub failed:rc=%d", rc ) ;
+         goto error ;
+      }
+      if ( strictDataMode && OSS_BIT_TEST( flag, MTH_OPERATION_FLAG_OVERFLOW ) )
+      {
+         rc = SDB_VALUE_OVERFLOW ;
+         PD_LOG( PDERROR, "overflow happened, field: %s, (%lld - %lld), rc = %d",
+                 fieldName, in.numberLong(), arg.numberLong(), rc ) ;
          goto error ;
       }
 
@@ -1213,15 +1292,24 @@ namespace engine
                            bson::BSONObjBuilder &builder )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       PD_TRACE_ENTRY( SDB__MTHMULTIPLYBUILD ) ;
+      BOOLEAN strictDataMode = action->getStrictDataMode() ;
       const BSONObj &obj = action->getArg() ;
       BSONElement arg = obj.getField( "arg1" ) ;
       SDB_ASSERT( arg.isNumber(), "must be numeric" ) ;
 
-      rc = mthMultiply( fieldName, e, arg, builder ) ;
+      rc = mthMultiply( fieldName, e, arg, builder, flag ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "mthMultiply failed:rc=%d", rc ) ;
+         goto error ;
+      }
+      if ( strictDataMode && OSS_BIT_TEST( flag, MTH_OPERATION_FLAG_OVERFLOW ) )
+      {
+         rc = SDB_VALUE_OVERFLOW ;
+         PD_LOG( PDERROR, "overflow happened, field: %s, (%lld * %lld), rc = %d",
+                 fieldName, e.numberLong(), arg.numberLong(), rc ) ;
          goto error ;
       }
 
@@ -1239,16 +1327,25 @@ namespace engine
                          bson::BSONElement &out )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       PD_TRACE_ENTRY( SDB__MTHMULTIPLYGET ) ;
       BSONObjBuilder builder ;
       BSONObj obj ;
+      BOOLEAN strictDataMode = action->getStrictDataMode() ;
       BSONElement arg = action->getArg().getField( "arg1" ) ;
       SDB_ASSERT( arg.isNumber(), "must be numeric" ) ;
 
-      rc = mthMultiply( fieldName, in, arg, builder ) ;
+      rc = mthMultiply( fieldName, in, arg, builder, flag ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "mthMultiply failed:rc=%d", rc ) ;
+         goto error ;
+      }
+      if ( strictDataMode && OSS_BIT_TEST( flag, MTH_OPERATION_FLAG_OVERFLOW ) )
+      {
+         rc = SDB_VALUE_OVERFLOW ;
+         PD_LOG( PDERROR, "overflow happened, field: %s, (%lld * %lld), rc = %d",
+                 fieldName, in.numberLong(), arg.numberLong(), rc ) ;
          goto error ;
       }
 
@@ -1273,15 +1370,24 @@ namespace engine
                          bson::BSONObjBuilder &builder )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       PD_TRACE_ENTRY( SDB__MTHDIVIDEBUILD ) ;
+      BOOLEAN strictDataMode = action->getStrictDataMode() ;
       const BSONObj &obj = action->getArg() ;
       BSONElement arg = obj.getField( "arg1" ) ;
       SDB_ASSERT( arg.isNumber(), "must be numeric" ) ;
 
-      rc = mthDivide( fieldName, e, arg, builder ) ;
+      rc = mthDivide( fieldName, e, arg, builder, flag ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "mthDivide failed:rc=%d", rc ) ;
+         goto error ;
+      }
+      if ( strictDataMode && OSS_BIT_TEST( flag, MTH_OPERATION_FLAG_OVERFLOW ) )
+      {
+         rc = SDB_VALUE_OVERFLOW ;
+         PD_LOG( PDERROR, "overflow happened, field: %s, (%lld / %lld), rc = %d",
+                 fieldName, e.numberLong(), arg.numberLong(), rc ) ;
          goto error ;
       }
 
@@ -1299,16 +1405,25 @@ namespace engine
                        bson::BSONElement &out )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       PD_TRACE_ENTRY( SDB__MTHDIVIDEGET ) ;
       BSONObjBuilder builder ;
       BSONObj obj ;
+      BOOLEAN strictDataMode = action->getStrictDataMode() ;
       BSONElement arg = action->getArg().getField( "arg1" ) ;
       SDB_ASSERT( arg.isNumber(), "must be numeric" ) ;
 
-      rc = mthDivide( fieldName, in, arg, builder ) ;
+      rc = mthDivide( fieldName, in, arg, builder, flag ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "mthDivide failed:rc=%d", rc ) ;
+         goto error ;
+      }
+      if ( strictDataMode && OSS_BIT_TEST( flag, MTH_OPERATION_FLAG_OVERFLOW ) )
+      {
+         rc = SDB_VALUE_OVERFLOW ;
+         PD_LOG( PDERROR, "overflow happened, field: %s, (%lld / %lld), rc = %d",
+                 fieldName, in.numberLong(), arg.numberLong(), rc ) ;
          goto error ;
       }
 

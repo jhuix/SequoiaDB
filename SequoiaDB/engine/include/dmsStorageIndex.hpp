@@ -44,9 +44,12 @@
 
 using namespace bson ;
 
+#define DMS_DFT_TEXTINDEX_BUFF_SIZE             (30 * 1024 * 1024 * 1024LL)
+
 namespace engine
 {
 
+   class _dmsStorageDataCommon ;
    class _dmsStorageData ;
    class _pmdEDUCB ;
    class _ixmIndexCB ;
@@ -63,7 +66,7 @@ namespace engine
    {
       public:
          _dmsStorageIndex ( const CHAR *pSuFileName, dmsStorageInfo *pInfo,
-                            _dmsStorageData *pDataSu ) ;
+                            _dmsStorageDataCommon *pDataSu ) ;
          ~_dmsStorageIndex () ;
 
          virtual void  syncMemToMmap() ;
@@ -113,7 +116,7 @@ namespace engine
                                   BSONObj &inputObj, const dmsRecordID &rid,
                                   _pmdEDUCB *cb ) ;
 
-         INT32    truncateIndexes ( _dmsMBContext *context ) ;
+         INT32    truncateIndexes ( _dmsMBContext *context, _pmdEDUCB *cb ) ;
 
          INT32    getIndexCBExtent ( _dmsMBContext *context,
                                      const CHAR *indexName,
@@ -131,11 +134,18 @@ namespace engine
          void     decStatFreeSpace ( UINT16 mbID, UINT16 size ) ;
 
       private:
+         INT32    _createIndex( _dmsMBContext *context,
+                                const BSONObj &index,
+                                _pmdEDUCB * cb,
+                                SDB_DPSCB *dpscb,
+                                BOOLEAN isSys,
+                                INT32 sortBufferSize ) ;
 
          INT32    _rebuildIndex ( _dmsMBContext *context,
                                   dmsExtentID indexExtentID,
                                   _pmdEDUCB * cb,
-                                  INT32 sortBufferSize ) ;
+                                  INT32 sortBufferSize,
+                                  UINT16 indexType ) ;
 
          INT32    _indexInsert( _ixmIndexCB *indexCB,
                                  const _ixmKey &key, const dmsRecordID &rid,
@@ -179,11 +189,13 @@ namespace engine
 
          virtual void   _onRestore() ;
 
-      protected:
+         INT32 _allocateIdxID( _dmsMBContext *context,
+                               const BSONObj &index,
+                               INT32 &indexID ) ;
 
       private:
-         _dmsStorageData               *_pDataSu ;
-         dmsPageMapUnit                _mbPageInfo ;
+         _dmsStorageData         *_pDataSu ;
+         dmsPageMapUnit          _mbPageInfo ;
 
       friend class _dmsIndexBuilder ;
    };

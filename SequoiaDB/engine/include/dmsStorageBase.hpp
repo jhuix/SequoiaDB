@@ -51,7 +51,7 @@
 #include "dmsLobDef.hpp"
 #include "pmdEnv.hpp"
 #include "sdbIPersistence.hpp"
-
+#include "dmsExtDataHandler.hpp"
 
 #include <string>
 
@@ -70,11 +70,11 @@ namespace engine
    */
    struct _dmsStorageInfo
    {
-      SINT32      _pageSize ;
+      UINT32      _pageSize ;
       CHAR        _suName [ DMS_SU_NAME_SZ + 1 ] ; // storage unit file name is
       UINT32      _sequence ;
       UINT64      _secretValue ;
-      INT32       _lobdPageSize ;
+      UINT32       _lobdPageSize ;
 
       UINT32      _overflowRatio ;
       UINT32      _extentThreshold ;
@@ -86,6 +86,9 @@ namespace engine
 
       BOOLEAN     _dataIsOK ;
       UINT64      _curLSNOnStart ;
+
+      DMS_STORAGE_TYPE _type ;
+      IDmsExtDataHandler *_extDataHandler ;
 
       _dmsStorageInfo ()
       {
@@ -104,6 +107,8 @@ namespace engine
 
          _dataIsOK       = FALSE ;
          _curLSNOnStart  = ~0 ;
+         _type = DMS_STORAGE_NORMAL ;
+         _extDataHandler = NULL ;
       }
    };
    typedef _dmsStorageInfo dmsStorageInfo ;
@@ -405,6 +410,10 @@ namespace engine
          OSS_INLINE INT32   maxSegID () const ;
          OSS_INLINE UINT32  dataStartSegID () const ;
          OSS_INLINE BOOLEAN isTempSU () const { return _isTempSU ; }
+         OSS_INLINE BOOLEAN isBlockScanSupport() const
+         {
+            return _blockScanSupport ;
+         }
 
          OSS_INLINE UINT32  extent2Segment( dmsExtentID extentID,
                                             UINT32 *pSegOffset = NULL ) ;
@@ -423,6 +432,11 @@ namespace engine
          OSS_INLINE void        markDirty( INT32 collectionID,
                                            INT32 extentID,
                                            DMS_CHG_STEP step ) ;
+
+         OSS_INLINE DMS_STORAGE_TYPE getStorageType()
+         {
+            return _pStorageInfo->_type ;
+         }
 
       private:
          /*
@@ -492,6 +506,11 @@ namespace engine
             return SDB_OK ;
          }
 
+         virtual void _onAllocSpaceReady( dmsContext *context, BOOLEAN &doit )
+         {
+            doit = TRUE ;
+         }
+
          virtual UINT64 _getOldestWriteTick() const { return ~0 ; }
 
          virtual void   _onRestore() {}
@@ -518,6 +537,8 @@ namespace engine
                                       BOOLEAN isAll ) ;
 
          void     _incWriteRecord() ;
+
+         void     _disableBlockScan() ;
 
       private:
          INT32    _initializeStorageUnit () ;
@@ -568,7 +589,7 @@ namespace engine
          UINT32                        _pageSizeSquare ;
          CHAR                          _fullPathName[ OSS_MAX_PATHSIZE + 1 ] ;
          BOOLEAN                       _isTempSU ;
-
+         BOOLEAN                       _blockScanSupport ;
    } ;
    typedef _dmsStorageBase dmsStorageBase ;
 

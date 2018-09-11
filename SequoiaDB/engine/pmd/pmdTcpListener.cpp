@@ -54,6 +54,7 @@ namespace engine
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB_PMDTCPLSTNENTPNT ) ;
       pmdKRCB *krcb = pmdGetKRCB() ;
+      pmdOptionsCB *optionCB = krcb->getOptionCB() ;
       monDBCB *mondbcb = krcb->getMonDBCB () ;
       pmdEDUMgr * eduMgr = cb->getEDUMgr() ;
       EDUID agentEDU = PMD_INVALID_EDUID ;
@@ -68,9 +69,36 @@ namespace engine
       {
          SOCKET s ;
          rc = pListerner->accept ( &s, NULL, NULL ) ;
-         if ( SDB_TIMEOUT == rc || SDB_TOO_MANY_OPEN_FD == rc )
+         if ( SDB_TIMEOUT == rc )
          {
             rc = SDB_OK ;
+            continue ;
+         }
+         else if ( SDB_TOO_MANY_OPEN_FD == rc )
+         {
+            pListerner->close() ;
+            PD_LOG( PDERROR, "Can not accept more connections because of "
+                    "open files upto limits, restart listening" ) ;
+            pmdIncErrNum( rc ) ;
+
+            while( !cb->isDisconnected() )
+            {
+               pListerner->close() ;
+               ossSleep( 2 * OSS_ONE_SEC ) ;
+               rc = pListerner->initSocket() ;
+               if ( rc )
+               {
+                  continue ;
+               }
+               rc = pListerner->bind_listen() ;
+               if ( rc )
+               {
+                  continue ;
+               }
+               PD_LOG( PDEVENT, "Restart listening on port[%d] succeed",
+                       pListerner->getLocalPort() ) ;
+               break ;
+            }
             continue ;
          }
          if ( rc && PMD_IS_DB_DOWN() )
@@ -93,7 +121,6 @@ namespace engine
          }
 
          cb->incEventCount() ;
-         ++mondbcb->numConnects ;
 
          void *pData = NULL ;
          *((SOCKET *) &pData) = s ;
@@ -105,6 +132,15 @@ namespace engine
             continue ;
          }
 
+         mondbcb->connInc() ;
+         if ( mondbcb->isConnLimited( optionCB->getMaxConn() ) )
+         {
+            ossSocket newsock ( &s ) ;
+            newsock.close () ;
+            mondbcb->connDec();
+            continue ;
+         }
+
          rc = eduMgr->startEDU ( EDU_TYPE_AGENT, pData, &agentEDU ) ;
          if ( rc )
          {
@@ -113,6 +149,7 @@ namespace engine
 
             ossSocket newsock ( &s ) ;
             newsock.close () ;
+            mondbcb->connDec();
             continue ;
          }
       } //while ( ! cb->isDisconnected() )
@@ -138,6 +175,10 @@ namespace engine
       }
       goto done ;
    }
+
+   PMD_DEFINE_ENTRYPOINT( EDU_TYPE_TCPLISTENER, TRUE,
+                          pmdTcpListenerEntryPoint,
+                          "TCPListener" ) ;
 
 }
 

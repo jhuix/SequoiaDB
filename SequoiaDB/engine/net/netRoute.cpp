@@ -71,9 +71,12 @@ namespace engine
       }
       else
       {
-         clsStrcpy( itr->second._host, host, hostLen ) ;
-         clsStrcpy( ((itr->second._service)[id.columns.serviceID]).c_str(),
-                    service, svcLen ) ;
+         ossMemset( host, 0, hostLen ) ;
+         ossStrncpy( host, itr->second._host, hostLen - 1 ) ;
+         ossMemset( service, 0, svcLen ) ;
+         ossStrncpy( service,
+                     ((itr->second._service)[id.columns.serviceID]).c_str(),
+                     svcLen - 1 ) ;
       }
    done:
       _mtx.release_shared() ;
@@ -171,7 +174,8 @@ namespace engine
       }
       if ( 0 != ossStrcmp( host, node._host ) )
       {
-         clsStrcpy( host, node._host, sizeof( node._host ) ) ;
+         ossMemset( node._host, 0, sizeof( node._host ) ) ;
+         ossStrncpy( node._host, host, sizeof( node._host ) - 1 ) ;
          rc = SDB_OK ;
       }
       if ( 0 != ossStrcmp( service,
@@ -252,7 +256,8 @@ namespace engine
       }
       if ( 0 != ossStrcmp( node._host, update._host ) )
       {
-         clsStrcpy( node._host, update._host, sizeof( update._host ) ) ;
+         ossMemset( update._host, 0, sizeof( update._host ) ) ;
+         ossStrncpy( update._host, node._host, sizeof( update._host ) -1 ) ;
          rc = SDB_OK ;
       }
       for ( UINT32 i = 0; i < MSG_ROUTE_SERVICE_TYPE_MAX; i++ )

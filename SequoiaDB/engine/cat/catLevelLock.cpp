@@ -38,6 +38,7 @@
 #include "catLevelLock.hpp"
 #include "catalogueCB.hpp"
 #include "catCommon.hpp"
+#include "rtn.hpp"
 
 namespace engine
 {
@@ -538,7 +539,7 @@ namespace engine
       INT32 rc = SDB_OK ;
       CHAR csName[ DMS_COLLECTION_SPACE_NAME_SZ + 1 ] = {0} ;
 
-      rc = catResolveCollectionSpaceName( clFullName.c_str(),
+      rc = rtnResolveCollectionSpaceName( clFullName.c_str(),
                                           clFullName.size(),
                                           csName,
                                           DMS_COLLECTION_SPACE_NAME_SZ ) ;

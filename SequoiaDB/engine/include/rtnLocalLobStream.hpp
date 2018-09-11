@@ -35,6 +35,7 @@
 #define RTN_LOCALLOBSTREAM_HPP_
 
 #include "rtnLobStream.hpp"
+#include "rtnLobAccessManager.hpp"
 
 namespace engine
 {
@@ -61,7 +62,9 @@ namespace engine
                               _pmdEDUCB *cb ) ;
 
       virtual INT32 _queryLobMeta( _pmdEDUCB *cb,
-                                   _dmsLobMeta &meta ) ;
+                                   _dmsLobMeta &meta,
+                                   BOOLEAN allowUncompleted = FALSE,
+                                   _rtnLobPiecesInfo* piecesInfo = NULL ) ;
 
       virtual INT32 _ensureLob( _pmdEDUCB *cb,
                                 _dmsLobMeta &meta,
@@ -70,9 +73,17 @@ namespace engine
       virtual INT32 _getLobPageSize( INT32 &pageSize ) ;
 
       virtual INT32 _write( const _rtnLobTuple &tuple, 
-                            _pmdEDUCB *cb ) ;
+                            _pmdEDUCB *cb,
+                            BOOLEAN orUpdate = FALSE ) ;
 
       virtual INT32 _writev( const RTN_LOB_TUPLES &tuples,
+                             _pmdEDUCB *cb,
+                             BOOLEAN orUpdate = FALSE ) ;
+
+      virtual INT32 _update( const _rtnLobTuple &tuple,
+                             _pmdEDUCB *cb ) ;
+
+      virtual INT32 _updatev( const RTN_LOB_TUPLES &tuples,
                              _pmdEDUCB *cb ) ;
 
       virtual INT32 _completeLob( const _rtnLobTuple &tuple,
@@ -81,7 +92,8 @@ namespace engine
       virtual INT32 _rollback( _pmdEDUCB *cb ) ;
 
       virtual INT32 _readv( const RTN_LOB_TUPLES &tuples,
-                            _pmdEDUCB *cb ) ;
+                            _pmdEDUCB *cb,
+                            const _rtnLobPiecesInfo* piecesInfo = NULL ) ;
 
       virtual INT32 _queryAndInvalidateMetaData( _pmdEDUCB *cb,
                                                  _dmsLobMeta &meta ) ;
@@ -89,21 +101,33 @@ namespace engine
       virtual INT32 _removev( const RTN_LOB_TUPLES &tuples,
                               _pmdEDUCB *cb ) ;
 
+      virtual INT32 _lock( _pmdEDUCB *cb,
+                           INT64 offset,
+                           INT64 length ) ;
+
       virtual INT32 _close( _pmdEDUCB *cb ) ;
 
       INT32 _read( const _rtnLobTuple &tuple,
                    _pmdEDUCB *cb,
                    CHAR *buf ) ;
 
+      INT32 _getAccessPrivilege( const CHAR *fullName,
+                                 const bson::OID &oid,
+                                 INT32 mode ) ;
+
    private:
       void        _closeInner( _pmdEDUCB *cb ) ;
+      INT32       _queryLobMeta4Write( _pmdEDUCB *cb,
+                                   _dmsLobMeta &meta,
+                                   _rtnLobPiecesInfo* piecesInfo ) ;
 
    private:
-      _dmsMBContext     *_mbContext ;
-      _dmsStorageUnit   *_su ;
-      _SDB_DMSCB        *_dmsCB ;
-      BOOLEAN           _writeDMS ;
-
+      _dmsMBContext*       _mbContext ;
+      _dmsStorageUnit*     _su ;
+      _SDB_DMSCB*          _dmsCB ;
+      _rtnLobAccessInfo*   _accessInfo ;
+      BOOLEAN              _writeDMS ;
+      BOOLEAN              _hasLobPrivilege ;
    } ;
    typedef class _rtnLocalLobStream rtnLocalLobStream ;
 }

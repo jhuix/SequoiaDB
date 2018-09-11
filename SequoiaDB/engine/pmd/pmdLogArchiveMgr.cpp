@@ -50,11 +50,10 @@ namespace engine
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB_PMDLOGARCHIVINGENTPNT );
 
-      EDUID myEDUID = cb->getID () ;
       pmdEDUMgr* eduMgr = cb->getEDUMgr() ;
       SDB_DPSCB* dpsCB = ( SDB_DPSCB* )pData ;
 
-      rc = eduMgr->activateEDU ( myEDUID ) ;
+      rc = eduMgr->activateEDU ( cb ) ;
       if ( rc )
       {
          PD_LOG ( PDERROR, "Failed to activate EDU" ) ;
@@ -80,5 +79,9 @@ namespace engine
    error :
       goto done ;
    }
+
+   PMD_DEFINE_ENTRYPOINT( EDU_TYPE_LOGARCHIVEMGR, TRUE,
+                          pmdLogArchiveMgrEntryPoint,
+                          "LogArchiveMgr" ) ;
 
 }

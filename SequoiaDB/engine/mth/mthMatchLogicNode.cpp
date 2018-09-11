@@ -42,10 +42,10 @@ using namespace bson ;
 
 namespace engine
 {
-   _mthMatchLogicNode::_mthMatchLogicNode( _mthNodeAllocator *allocator )
-                      :_mthMatchNode( allocator )
+   _mthMatchLogicNode::_mthMatchLogicNode( _mthNodeAllocator *allocator,
+                                           const mthNodeConfig *config )
+                      :_mthMatchNode( allocator, config )
    {
-      
    }
 
    _mthMatchLogicNode::~_mthMatchLogicNode()
@@ -53,14 +53,14 @@ namespace engine
       clear() ;
    }
 
-   INT32 _mthMatchLogicNode::init( const CHAR *fieldName, 
+   INT32 _mthMatchLogicNode::init( const CHAR *fieldName,
                                    const BSONElement &element )
    {
       INT32 rc = SDB_OK ;
       rc = _mthMatchNode::init( fieldName, element ) ;
       if ( SDB_OK != rc )
       {
-         PD_LOG( PDERROR, "setFieldName failed:fieldName=%s,rc=%d", 
+         PD_LOG( PDERROR, "setFieldName failed:fieldName=%s,rc=%d",
                  fieldName, rc ) ;
          goto error ;
       }
@@ -79,7 +79,7 @@ namespace engine
       goto done ;
    }
 
-   INT32 _mthMatchLogicNode::_init( const CHAR *fieldName, 
+   INT32 _mthMatchLogicNode::_init( const CHAR *fieldName,
                                     const BSONElement &element )
    {
       return SDB_OK ;
@@ -127,8 +127,25 @@ namespace engine
       return builder.obj() ;
    }
 
-   _mthMatchLogicAndNode::_mthMatchLogicAndNode( _mthNodeAllocator *allocator )
-                         :_mthMatchLogicNode( allocator )
+   BSONObj _mthMatchLogicNode::toParamBson ( const rtnParamList &toParamBson )
+   {
+      BSONObjBuilder builder ;
+      BSONArrayBuilder sub( builder.subarrayStart( getOperatorStr() ) ) ;
+      MATCHNODE_VECTOR::iterator iter = _children.begin() ;
+      while ( iter != _children.end() )
+      {
+         sub << ( *iter )->toParamBson( toParamBson ) ;
+         iter++ ;
+      }
+
+      sub.doneFast() ;
+
+      return builder.obj() ;
+   }
+
+   _mthMatchLogicAndNode::_mthMatchLogicAndNode( _mthNodeAllocator *allocator,
+                                                 const mthNodeConfig *config )
+                         :_mthMatchLogicNode( allocator, config )
    {
    }
 
@@ -147,7 +164,7 @@ namespace engine
       return MTH_OPERATOR_STR_AND ;
    }
 
-   INT32 _mthMatchLogicAndNode::execute( const BSONObj &obj, 
+   INT32 _mthMatchLogicAndNode::execute( const BSONObj &obj,
                                          _mthMatchTreeContext &context,
                                          BOOLEAN &result )
    {
@@ -200,8 +217,34 @@ namespace engine
       }
    }
 
-   _mthMatchLogicOrNode::_mthMatchLogicOrNode( _mthNodeAllocator *allocator )
-                        :_mthMatchLogicNode( allocator )
+   void _mthMatchLogicAndNode::evalEstimation ( const optCollectionStat *pCollectionStat,
+                                                double &selectivity,
+                                                UINT32 &cpuCost )
+   {
+      selectivity = 1.0 ;
+      cpuCost = 0 ;
+
+      MATCHNODE_VECTOR::iterator iter = _children.begin() ;
+      while ( iter != _children.end() )
+      {
+         double tmpSelectivity = OPT_MTH_DEFAULT_SELECTIVITY ;
+         UINT32 tmpCPUCost = OPT_MTH_DEFAULT_CPU_COST ;
+
+         (*iter)->evalEstimation( pCollectionStat, tmpSelectivity, tmpCPUCost ) ;
+
+         selectivity *= tmpSelectivity ;
+         cpuCost += tmpCPUCost ;
+
+         iter++ ;
+      }
+
+      selectivity = OPT_ROUND_SELECTIVITY( selectivity ) ;
+      cpuCost += OPT_MTH_OPTR_BASE_CPU_COST ;
+   }
+
+   _mthMatchLogicOrNode::_mthMatchLogicOrNode( _mthNodeAllocator *allocator,
+                                               const mthNodeConfig *config )
+                        :_mthMatchLogicNode( allocator, config )
    {
    }
 
@@ -209,7 +252,7 @@ namespace engine
    {
       clear() ;
    }
-   
+
    INT32 _mthMatchLogicOrNode::getType()
    {
       return ( INT32 ) EN_MATCH_OPERATOR_LOGIC_OR ;
@@ -220,7 +263,7 @@ namespace engine
       return MTH_OPERATOR_STR_OR ;
    }
 
-   INT32 _mthMatchLogicOrNode::execute( const BSONObj &obj, 
+   INT32 _mthMatchLogicOrNode::execute( const BSONObj &obj,
                                         _mthMatchTreeContext &context,
                                         BOOLEAN &result )
    {
@@ -264,12 +307,14 @@ namespace engine
       goto done ;
    }
 
-   INT32 _mthMatchLogicOrNode::calcPredicate( _rtnPredicateSet &predicateSet )
+   INT32 _mthMatchLogicOrNode::calcPredicate( rtnPredicateSet &predicateSet,
+                                              const rtnParamList * paramList )
    {
       return SDB_OK ;
    }
 
-   INT32 _mthMatchLogicOrNode::extraEqualityMatches( BSONObjBuilder &builder )
+   INT32 _mthMatchLogicOrNode::extraEqualityMatches( BSONObjBuilder &builder,
+                                                     const rtnParamList *parameters )
    {
       return SDB_OK ;
    }
@@ -286,8 +331,34 @@ namespace engine
       }
    }
 
-   _mthMatchLogicNotNode::_mthMatchLogicNotNode( _mthNodeAllocator *allocator )
-                         :_mthMatchLogicAndNode( allocator )
+   void _mthMatchLogicOrNode::evalEstimation ( const optCollectionStat *pCollectionStat,
+                                               double &selectivity,
+                                               UINT32 &cpuCost )
+   {
+      selectivity = 1.0 ;
+      cpuCost = 0 ;
+
+      MATCHNODE_VECTOR::iterator iter = _children.begin() ;
+      while ( iter != _children.end() )
+      {
+         double tmpSelectivity = OPT_MTH_DEFAULT_SELECTIVITY ;
+         UINT32 tmpCPUCost = OPT_MTH_DEFAULT_CPU_COST ;
+
+         (*iter)->evalEstimation( pCollectionStat, tmpSelectivity, tmpCPUCost ) ;
+
+         selectivity *= ( 1.0 - tmpSelectivity ) ;
+         cpuCost += tmpCPUCost ;
+
+         iter++ ;
+      }
+
+      selectivity = 1.0 - OPT_ROUND_SELECTIVITY( selectivity ) ;
+      cpuCost += OPT_MTH_OPTR_BASE_CPU_COST ;
+   }
+
+   _mthMatchLogicNotNode::_mthMatchLogicNotNode( _mthNodeAllocator *allocator,
+                                                 const mthNodeConfig *config )
+                         :_mthMatchLogicAndNode( allocator, config )
    {
    }
 
@@ -306,7 +377,7 @@ namespace engine
       return MTH_OPERATOR_STR_NOT ;
    }
 
-   INT32 _mthMatchLogicNotNode::execute( const BSONObj &obj, 
+   INT32 _mthMatchLogicNotNode::execute( const BSONObj &obj,
                                          _mthMatchTreeContext &context,
                                          BOOLEAN &result )
    {
@@ -335,12 +406,14 @@ namespace engine
       goto done ;
    }
 
-   INT32 _mthMatchLogicNotNode::calcPredicate( _rtnPredicateSet &predicateSet )
+   INT32 _mthMatchLogicNotNode::calcPredicate( rtnPredicateSet &predicateSet,
+                                               const rtnParamList * paramList )
    {
       return SDB_OK ;
    }
 
-   INT32 _mthMatchLogicNotNode::extraEqualityMatches( BSONObjBuilder &builder )
+   INT32 _mthMatchLogicNotNode::extraEqualityMatches( BSONObjBuilder &builder,
+                                                      const rtnParamList *parameters )
    {
       return SDB_OK ;
    }
@@ -360,6 +433,31 @@ namespace engine
       {
          delete this ;
       }
+   }
+
+   void _mthMatchLogicNotNode::evalEstimation ( const optCollectionStat *pCollectionStat,
+                                                double &selectivity,
+                                                UINT32 &cpuCost )
+   {
+      selectivity = 1.0 ;
+      cpuCost = 0 ;
+
+      MATCHNODE_VECTOR::iterator iter = _children.begin() ;
+      while ( iter != _children.end() )
+      {
+         double tmpSelectivity = OPT_MTH_DEFAULT_SELECTIVITY ;
+         UINT32 tmpCPUCost = OPT_MTH_DEFAULT_CPU_COST ;
+
+         (*iter)->evalEstimation( pCollectionStat, tmpSelectivity, tmpCPUCost ) ;
+
+         selectivity *= ( 1.0 - tmpSelectivity ) ;
+         cpuCost += tmpCPUCost ;
+
+         iter++ ;
+      }
+
+      selectivity = OPT_ROUND_SELECTIVITY( selectivity ) ;
+      cpuCost += OPT_MTH_OPTR_BASE_CPU_COST ;
    }
 }
 

@@ -143,10 +143,11 @@ namespace engine
                        "Exception handled when parsing split request: %s",
                        e.what() ) ;
       }
-      PD_TRACE3 ( SDB__CLSSPLIT_INIT,
+      PD_TRACE4 ( SDB__CLSSPLIT_INIT,
                   PD_PACK_STRING ( pCollectionName ),
                   PD_PACK_STRING ( pTargetName ),
-                  PD_PACK_STRING ( pSourceName ) ) ;
+                  PD_PACK_STRING ( pSourceName ),
+                  PD_PACK_BSON ( _splitKey ) ) ;
 
    done:
       PD_TRACE_EXITRC ( SDB__CLSSPLIT_INIT, rc ) ;
@@ -320,7 +321,12 @@ namespace engine
          pCatAgent->clear( _subCLName ) ;
          pCatAgent->release_w() ;
       }
-      sdbGetClsCB()->invalidateCata( _collectionName ) ;
+
+      rtnCB->getAPM()->invalidateCLPlans( _collectionName ) ;
+
+      sdbGetClsCB()->invalidateCache ( _collectionName,
+                                       DPS_LOG_INVALIDCATA_TYPE_CATA |
+                                       DPS_LOG_INVALIDCATA_TYPE_PLAN ) ;
       sdbGetClsCB()->invalidateCata( _subCLName ) ;
       return SDB_OK ;
    }
@@ -360,8 +366,12 @@ namespace engine
       pCatAgent->lock_w() ;
       pCatAgent->clear( _collectionName ) ;
       pCatAgent->release_w() ;
-      
-      sdbGetClsCB()->invalidateCata( _collectionName ) ;
+
+      rtnCB->getAPM()->invalidateCLPlans( _collectionName ) ;
+
+      sdbGetClsCB()->invalidateCache( _collectionName,
+                                      DPS_LOG_INVALIDCATA_TYPE_CATA |
+                                      DPS_LOG_INVALIDCATA_TYPE_PLAN ) ;
       sdbGetClsCB()->invalidateCata( _subCLName ) ;
       return SDB_OK ;
    }

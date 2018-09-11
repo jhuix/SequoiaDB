@@ -456,6 +456,28 @@ namespace engine
       return isNormal ;
    }
 
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__CLSREPSET_GETPRIMARYINFO, "_clsReplicateSet::getPrimaryInfo" )
+   BOOLEAN _clsReplicateSet::getPrimaryInfo( _clsSharingStatus &primaryInfo )
+   {
+      PD_TRACE_ENTRY ( SDB__CLSREPSET_GETPRIMARYINFO );
+      BOOLEAN isOk = FALSE ;
+      _MsgRouteID primary ;
+
+      ossScopedRWLock lock( &_info.mtx, SHARED ) ;
+
+      primary = _info.primary ;
+      map<UINT64, _clsSharingStatus>::iterator itr =
+                                             _info.info.find( primary.value ) ;
+      if ( itr != _info.info.end() )
+      {
+         primaryInfo = itr->second ;
+         isOk = TRUE ;
+      }
+
+      PD_TRACE_EXIT ( SDB__CLSREPSET_GETPRIMARYINFO );
+      return isOk ;
+   }
+
    // PD_TRACE_DECLARE_FUNCTION ( SDB__CLSREPSET_GETGPINFO, "_clsReplicateSet::getGroupInfo" )
    void _clsReplicateSet::getGroupInfo( _MsgRouteID &primary,
                                         vector<_netRouteNode> &group )
@@ -594,7 +616,7 @@ namespace engine
          case MSG_CLS_BEAT :
          {
             CLS_REPL_ACTIVE_CHECK( rc ) ;
-            rc = _handleSharingBeat( ( const _MsgClsBeat *)msg ) ;
+            rc = _handleSharingBeat( handle, ( const _MsgClsBeat *)msg ) ;
             break ;
          }
          case MSG_CAT_PAIMARY_CHANGE_RES:
@@ -894,7 +916,8 @@ namespace engine
    }
 
    // PD_TRACE_DECLARE_FUNCTION ( SDB__CLSREPSET__HNDSHRBEAT, "_clsReplicateSet::_handleSharingBeat" )
-   INT32 _clsReplicateSet::_handleSharingBeat( const _MsgClsBeat *msg )
+   INT32 _clsReplicateSet::_handleSharingBeat( NET_HANDLE handle,
+                                               const _MsgClsBeat *msg )
    {
       SDB_ASSERT( NULL != msg, "msg should not be NULL" ) ;
       INT32 rc = SDB_OK ;
@@ -975,8 +998,9 @@ namespace engine
       {
          _alive( beat.identity ) ;
          _MsgClsBeatRes res ;
+         res.header.header.requestID = msg->header.requestID ;
          res.identity = _info.local ;
-         _agent->syncSend( msg->header.routeID, &res ) ;
+         _agent->syncSend( handle, &res ) ;
       }
    done:
       PD_TRACE_EXITRC ( SDB__CLSREPSET__HNDSHRBEAT, rc );
@@ -1156,11 +1180,6 @@ namespace engine
       return _agent->netOut() ;
    }
 
-   void _clsReplicateSet::resetMon()
-   {
-      return _agent->resetMon() ;
-   }
-
    // PD_TRACE_DECLARE_FUNCTION (SDB__CLSREPSET_REELECT, "_clsReplicateSet::reelect" )
    INT32 _clsReplicateSet::reelect( CLS_REELECTION_LEVEL lvl,
                                     UINT32 seconds,
@@ -1235,7 +1254,7 @@ namespace engine
       else if ( !_active )
       {
          rc = SDB_CLS_NODE_INFO_EXPIRED ;
-         PD_LOG( PDERROR, "can not step up before local's node download group info") ;
+         PD_LOG( PDERROR, "can not step up before local's node download group info" ) ;
          goto error ;
       }
 

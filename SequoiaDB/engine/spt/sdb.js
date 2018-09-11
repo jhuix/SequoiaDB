@@ -1,50 +1,52 @@
 // Global Constants
-var SDB_PAGESIZE_4K              = 4096 ;
-var SDB_PAGESIZE_8K              = 8192 ;
-var SDB_PAGESIZE_16K             = 16384 ;
-var SDB_PAGESIZE_32K             = 32768 ;
-var SDB_PAGESIZE_64K             = 65536 ;
-var SDB_PAGESIZE_DEFAULT         = SDB_PAGESIZE_64K ;
+const SDB_PAGESIZE_4K              = 4096 ;
+const SDB_PAGESIZE_8K              = 8192 ;
+const SDB_PAGESIZE_16K             = 16384 ;
+const SDB_PAGESIZE_32K             = 32768 ;
+const SDB_PAGESIZE_64K             = 65536 ;
+const SDB_PAGESIZE_DEFAULT         = SDB_PAGESIZE_64K ;
 
-var SDB_SNAP_CONTEXTS            = 0 ;
-var SDB_SNAP_CONTEXTS_CURRENT    = 1 ;
-var SDB_SNAP_SESSIONS            = 2 ;
-var SDB_SNAP_SESSIONS_CURRENT    = 3 ;
-var SDB_SNAP_COLLECTIONS         = 4 ;
-var SDB_SNAP_COLLECTIONSPACES    = 5 ;
-var SDB_SNAP_DATABASE            = 6 ;
-var SDB_SNAP_SYSTEM              = 7 ;
-var SDB_SNAP_CATALOG             = 8 ;
-var SDB_SNAP_TRANSACTIONS         = 9 ;
-var SDB_SNAP_TRANSACTIONS_CURRENT = 10 ;
+const SDB_SNAP_CONTEXTS            = 0 ;
+const SDB_SNAP_CONTEXTS_CURRENT    = 1 ;
+const SDB_SNAP_SESSIONS            = 2 ;
+const SDB_SNAP_SESSIONS_CURRENT    = 3 ;
+const SDB_SNAP_COLLECTIONS         = 4 ;
+const SDB_SNAP_COLLECTIONSPACES    = 5 ;
+const SDB_SNAP_DATABASE            = 6 ;
+const SDB_SNAP_SYSTEM              = 7 ;
+const SDB_SNAP_CATALOG             = 8 ;
+const SDB_SNAP_TRANSACTIONS        = 9 ;
+const SDB_SNAP_TRANSACTIONS_CURRENT= 10 ;
+const SDB_SNAP_ACCESSPLANS         = 11 ;
+const SDB_SNAP_HEALTH              = 12 ;
 
-var SDB_LIST_CONTEXTS            = 0 ;
-var SDB_LIST_CONTEXTS_CURRENT    = 1 ;
-var SDB_LIST_SESSIONS            = 2 ;
-var SDB_LIST_SESSIONS_CURRENT    = 3 ;
-var SDB_LIST_COLLECTIONS         = 4 ;
-var SDB_LIST_COLLECTIONSPACES    = 5 ;
-var SDB_LIST_STORAGEUNITS        = 6 ;
-var SDB_LIST_GROUPS              = 7 ;
-var SDB_LIST_STOREPROCEDURES     = 8 ;
-var SDB_LIST_DOMAINS             = 9 ;
-var SDB_LIST_TASKS               = 10 ;
-var SDB_LIST_TRANSACTIONS        = 11 ;
-var SDB_LIST_TRANSACTIONS_CURRENT = 12 ;
+const SDB_LIST_CONTEXTS            = 0 ;
+const SDB_LIST_CONTEXTS_CURRENT    = 1 ;
+const SDB_LIST_SESSIONS            = 2 ;
+const SDB_LIST_SESSIONS_CURRENT    = 3 ;
+const SDB_LIST_COLLECTIONS         = 4 ;
+const SDB_LIST_COLLECTIONSPACES    = 5 ;
+const SDB_LIST_STORAGEUNITS        = 6 ;
+const SDB_LIST_GROUPS              = 7 ;
+const SDB_LIST_STOREPROCEDURES     = 8 ;
+const SDB_LIST_DOMAINS             = 9 ;
+const SDB_LIST_TASKS               = 10 ;
+const SDB_LIST_TRANSACTIONS        = 11 ;
+const SDB_LIST_TRANSACTIONS_CURRENT = 12 ;
 
-var SDB_INSERT_CONTONDUP         = 1 ;
-var SDB_INSERT_RETURN_ID         = 2 ; // only available when inserting only one document
+const SDB_INSERT_CONTONDUP         = 1 ;
+const SDB_INSERT_RETURN_ID         = 2 ; // only available when inserting only one document
 
-var SDB_TRACE_FLW                = 0 ;
-var SDB_TRACE_FMT                = 1 ;
+const SDB_TRACE_FLW                = 0 ;
+const SDB_TRACE_FMT                = 1 ;
 
-var SDB_COORD_GROUP_NAME         = "SYSCoord" ;
-var SDB_CATALOG_GROUP_NAME       = "SYSCatalogGroup" ;
-var SDB_SPARE_GROUP_NAME         = "SYSSpare" ;
+const SDB_COORD_GROUP_NAME         = "SYSCoord" ;
+const SDB_CATALOG_GROUP_NAME       = "SYSCatalogGroup" ;
+const SDB_SPARE_GROUP_NAME         = "SYSSpare" ;
 
-var SDB_PRINT_JSON_FORMAT        = true ;
+var SDB_PRINT_JSON_FORMAT          = true ;
 
-var SDB_JSON_PARSE               = JSON.parse ;
+const SDB_JSON_PARSE               = JSON.parse ;
 // end Global Constants
 
 // Global functions
@@ -603,7 +605,8 @@ SdbQuery.prototype._exec = function() {
                                                this._hint,
                                                this._skip,
                                                this._limit,
-                                               this._flags );
+                                               this._flags,
+                                               this._options );
    }
    return this._cursor;
 }
@@ -657,12 +660,15 @@ SdbQuery.prototype.close = function() {
    return this._cursor.close();
 }
 
-SdbQuery.prototype.update = function( rule, returnNew ) {
+SdbQuery.prototype.update = function( rule, returnNew, options ) {
    if ((typeof rule) != "object" || isEmptyObject(rule)) {
       throw "SdbQuery.update(): the 1st param should be non-empty object";
    }
    if (undefined != returnNew && (typeof returnNew) != "boolean") {
       throw "SdbQuery.update(): the 2nd param should be boolean";
+   }
+   if (undefined != options && (typeof options) != "object") {
+      throw "SdbQuery.update(): the 3rd param should be object";
    }
 
    this._checkExecuted();
@@ -678,6 +684,10 @@ SdbQuery.prototype.update = function( rule, returnNew ) {
    modify.Update = rule;
    modify.ReturnNew = (returnNew != undefined) ? returnNew : false;
    this._hint.$Modify = modify;
+
+   if (undefined != options) {
+      this._options = options;
+   }
 
    return this;
 }
@@ -736,6 +746,7 @@ SdbQuery.prototype.explain = function( options ) {
                                     this._hint,
                                     this._skip,
                                     this._limit,
+                                    this._flags,
                                     options ) ;
 }
 
@@ -817,6 +828,7 @@ SdbCS.prototype.toString = function() {
 SdbCS.prototype._resolveCL = function(clName) {
    this.getCL(clName) ;
 }
+
 // end SdbCS
 
 
@@ -905,7 +917,6 @@ Sdb.prototype.stopRG = function() {
       }
    }
 }
-
 // end Sdb
 
 function printCallStack()

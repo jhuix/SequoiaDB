@@ -46,8 +46,9 @@
 #include "../bson/bson.h"
 #include "../bson/bsonobj.h"
 #include "mthCommon.hpp"
-using namespace bson ;
+#include "ixmIndexKey.hpp"
 
+using namespace bson ;
 
 namespace engine
 {
@@ -184,6 +185,8 @@ namespace engine
       vector<ModifierElement> _modifierElements ;
       UINT32  _modifierBits ;
 
+      _ixmIndexKeyGen *_shardingKeyGen ;
+
       set<string>    _keepKeys ;
       BOOLEAN        _isReplaceID ;
       BOOLEAN        _isReplace ;
@@ -191,6 +194,7 @@ namespace engine
       vector<INT64> *_dollarList ;
       _compareFieldNames1  _fieldCompare ;
       BOOLEAN        _ignoreTypeError ;
+      BOOLEAN        _strictDataMode ;
 
       INT32 _addModifier ( const BSONElement &ele, ModType type ) ;
       INT32 _parseElement ( const BSONElement &ele ) ;
@@ -322,20 +326,27 @@ namespace engine
          _modifierBits  = 0 ;
          _isReplace     = FALSE ;
          _isReplaceID   = FALSE ;
+         _shardingKeyGen = NULL ;
+         _strictDataMode = FALSE ;
       }
       ~_mthModifier()
       {
          _modifierElements.clear() ;
+         SAFE_OSS_DELETE( _shardingKeyGen ) ;
       }
       INT32 loadPattern ( const BSONObj &modifierPattern,
                           vector<INT64> *dollarList = NULL,
-                          BOOLEAN ignoreTypeError = TRUE ) ;
+                          BOOLEAN ignoreTypeError = TRUE,
+                          const BSONObj* shardingKey = NULL,
+                          BOOLEAN strictDataMode = FALSE ) ;
       void modifierSort() ;
       INT32 modify ( const BSONObj &source, BSONObj &target,
                      BSONObj *srcID = NULL,
                      BSONObj *srcChange = NULL,
                      BSONObj *dstID = NULL,
-                     BSONObj *dstChange = NULL ) ;
+                     BSONObj *dstChange = NULL,
+                     BSONObj *srcShardingKey = NULL,
+                     BSONObj *dstShardingKey = NULL ) ;
       OSS_INLINE BOOLEAN isInitialized () { return _initialized ; }
    } ;
    typedef _mthModifier mthModifier ;

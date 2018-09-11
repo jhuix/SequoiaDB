@@ -63,6 +63,17 @@ const char *OSSTRUELIST[]={
    "t",
    "1"};
 
+const char *OSSFALSELIST[]={
+   "NO",
+   "no",
+   "N",
+   "n",
+   "FALSE",
+   "false",
+   "F",
+   "f",
+   "0"};
+
 CHAR *ossStrdup ( const CHAR * str )
 {
    size_t siz ;
@@ -131,6 +142,23 @@ size_t ossSnprintf(char* pBuffer, size_t iLength, const char* pFormat, ...)
       n=iLength-1;
    pBuffer[n]='\0';
    return n;
+}
+
+BOOLEAN ossIsInteger( const CHAR *pStr )
+{
+   UINT32 i = 0 ;
+   while( pStr[i] )
+   {
+      if ( pStr[i] < '0' || pStr[i] > '9' )
+      {
+         if ( 0 != i || ( '-' != pStr[i] && '+' != pStr[i] ) )
+         {
+            return FALSE ;
+         }
+      }
+      ++i ;
+   }
+   return TRUE ;
 }
 
 BOOLEAN ossIsUTF8 ( CHAR *pzInfo )
@@ -295,24 +323,43 @@ CHAR *ossStrnchr(const CHAR *pString, UINT32 c, UINT32 n)
    return NULL;
 }
 
-void ossStrToBoolean(const char* pString, BOOLEAN* pBoolean)
+INT32 ossStrToBoolean(const char* pString, BOOLEAN* pBoolean)
 {
-   UINT32 i = 0 ;
-   size_t len = ossStrlen(pString);
+   INT32  rc           = SDB_OK ;
+   UINT32 i            = 0 ;
+   size_t len          = ossStrlen(pString) ;
+
    if (0 == len)
    {
-      *pBoolean=FALSE;
-      return;
+      *pBoolean=FALSE ;
+      rc = SDB_INVALIDARG ;
+      goto error ;
    }
    for(; i < sizeof(OSSTRUELIST)/sizeof(ossValuePtr); i++)
    {
       if(ossStrncasecmp(pString, OSSTRUELIST[i], len) == 0)
       {
-         *pBoolean = TRUE;
-         return;
+         *pBoolean = TRUE ;
+         goto done ;
       }
    }
-   *pBoolean = FALSE;
+   for(i = 0; i < sizeof(OSSFALSELIST)/sizeof(ossValuePtr); i++)
+   {
+      if(ossStrncasecmp(pString, OSSFALSELIST[i], len) == 0)
+      {
+         *pBoolean = FALSE ;
+         goto done ;
+      }
+   }
+
+   *pBoolean = FALSE ;
+   rc = SDB_INVALIDARG ;
+   goto error ;
+
+done :
+   return rc ;
+error :
+   goto done ;
 }
 
 size_t ossVsnprintf
@@ -420,6 +467,27 @@ INT32 ossDup2( int oldFd, int newFd )
 #endif // _WINDOWS
    return SDB_OK ;
 }
+
+INT32 ossResetTty()
+{
+   INT32 rc     = SDB_OK ;
+   FILE *stream = NULL ;
+#if defined(_WINDOWS)
+   stream = freopen( "CON", "w", stdout ) ;
+#else
+   stream = freopen( "/dev/tty", "w", stdout ) ;
+#endif
+   if ( NULL == stream )
+   {
+      rc = SDB_SYS ;
+      goto error ;
+   }
+done:
+   return rc ;
+error:
+   goto done ;
+}
+
 
 BOOLEAN ossIsTimestampValid( INT64 tm )
 {

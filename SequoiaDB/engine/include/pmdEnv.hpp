@@ -38,6 +38,7 @@
 
 #include "utilCommon.hpp"
 #include "ossAtomic.hpp"
+#include "ossUtil.hpp"
 
 using namespace bson ;
 
@@ -60,6 +61,19 @@ namespace engine
    /*
       pmd system info define
    */
+
+   typedef struct _pmdOccurredErr
+   {
+      UINT64 _oom ;
+      UINT64 _noSpc ;
+      UINT64 _tooManyOpenFD ;
+
+      _pmdOccurredErr()
+      : _oom( 0 ), _noSpc( 0 ), _tooManyOpenFD( 0 )
+      {
+      }
+   } pmdOccurredErr ;
+
    typedef struct _pmdSysInfo
    {
       SDB_ROLE                      _dbrole ;
@@ -77,6 +91,10 @@ namespace engine
       volatile UINT64               _validationTick ;
 
       ossAtomic64                   _globalID ;
+
+      ossProcLimits                 _limitInfo ;
+
+      pmdOccurredErr                _numErr ;
 
       _pmdSysInfo()
       :_isPrimary( 0 ), _globalID( 1 )
@@ -128,6 +146,12 @@ namespace engine
    BOOLEAN        pmdDBIsAbnormal() ;
 
    UINT64         pmdAcquireGlobalID() ;
+
+   ossProcLimits* pmdGetLimit() ;
+
+   void           pmdIncErrNum( INT32 rc ) ;
+   void           pmdResetErrNum() ;
+   pmdOccurredErr pmdGetOccurredErr() ;
 
    pmdSysInfo*    pmdGetSysInfo () ;
 

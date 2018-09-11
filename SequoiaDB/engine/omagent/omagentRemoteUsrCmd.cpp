@@ -33,7 +33,7 @@
 #include "omagentRemoteUsrCmd.hpp"
 #include "omagentMgr.hpp"
 #include "omagentDef.hpp"
-#include "ossCmdRunner.hpp"
+#include "sptUsrCmdCommon.hpp"
 #include <boost/algorithm/string.hpp>
 
 #define SPT_USER_CMD_ONCE_SLEEP_TIME            ( 2 )
@@ -66,10 +66,10 @@ namespace engine
       string ev ;
       UINT32 timeout = 0 ;
       UINT32 useShell = 1 ;
-      ossCmdRunner runner ;
-      string strOut = "" ;
-      UINT32 retCode = 0 ;
+      string err ;
+      string strOut ;
       BSONObjBuilder builder ;
+      _sptUsrCmdCommon _cmdCommon ;
 
       if ( FALSE == _valueObj.hasField( "command" ) )
       {
@@ -127,39 +127,13 @@ namespace engine
          }
       }
 
-      utilStrTrim( command ) ;
-      if( !ev.empty() )
+      rc = _cmdCommon.exec( command, ev, timeout, useShell, err, strOut ) ;
+      if( SDB_OK != rc )
       {
-         command += " " + ev ;
-      }
-
-      rc = runner.exec( command.c_str(), retCode, FALSE,
-                        0 == timeout ? -1 : (INT64)timeout,
-                        FALSE, NULL, useShell ? TRUE : FALSE ) ;
-      if ( SDB_OK != rc )
-      {
-         stringstream ss ;
-         ss << "run[" << command << "] failed" ;
-         PD_LOG_MSG( PDERROR, ss.str().c_str() ) ;
+         PD_LOG_MSG( PDERROR, err.c_str() ) ;
          goto error ;
       }
-      else
-      {
-         rc = runner.read( strOut ) ;
-         if ( rc )
-         {
-            stringstream ss ;
-            ss << "read run command[" << command << "] result failed" ;
-            PD_LOG_MSG( PDERROR, ss.str().c_str() ) ;
-            goto error ;
-         }
-         else if ( SDB_OK != retCode )
-         {
-            PD_LOG( PDERROR, strOut.c_str() ) ;
-         }
-      }
-      builder.append( "retCode", retCode ) ;
-      builder.append( "strOut", strOut.c_str() ) ;
+      builder.append( "strOut", strOut ) ;
       retObj = builder.obj() ;
    done:
       return rc ;
@@ -191,20 +165,12 @@ namespace engine
       BSONObjBuilder builder ;
       string command ;
       string ev ;
-      ossCmdRunner runner ;
-      string strOut = "" ;
-      UINT32 retCode = 0 ;
       UINT32 useShell = 1 ;
       UINT32 timeout  = 100 ;
-      OSSHANDLE processHandle = (OSSHANDLE)0 ;
-#if defined( _LINUX )
-      struct sigaction    ignore ;
-      struct sigaction    savechild ;
-      sigset_t            childmask ;
-      sigset_t            savemask ;
-      BOOLEAN             restoreSigMask         = FALSE ;
-      BOOLEAN             restoreSIGCHLDHandling = FALSE ;
-#endif // _LINUX
+      string strOut ;
+      string err ;
+      INT32 pid ;
+      _sptUsrCmdCommon _cmdCommon ;
 
       if ( FALSE == _valueObj.hasField( "command" ) )
       {
@@ -220,8 +186,6 @@ namespace engine
       }
       command = _valueObj.getStringField( "command" ) ;
 
-      utilStrTrim( command ) ;
-
       if ( TRUE == _valueObj.hasField( "args" ) )
       {
          if ( String != _valueObj.getField( "args" ).type() )
@@ -231,12 +195,6 @@ namespace engine
             goto error ;
          }
          ev = _valueObj.getStringField( "args" ) ;
-         if ( !ev.empty() )
-         {
-            command += " " ;
-            command += ev ;
-            utilStrTrim( command ) ;
-         }
       }
 
       if ( TRUE == _optionObj.hasField( "timeout" ) )
@@ -261,111 +219,17 @@ namespace engine
          useShell = _optionObj.getIntField( "useShell" ) ;
       }
 
-      rc = SDB_OK ;
-
-#if defined( _LINUX )
-      sigemptyset ( &childmask ) ;
-      sigaddset ( &childmask, SIGCHLD ) ;
-      rc = pthread_sigmask( SIG_BLOCK, &childmask, &savemask ) ;
-      if ( rc )
+      rc = _cmdCommon.start( command, ev, useShell, timeout, err, pid, strOut ) ;
+      if( SDB_OK != rc )
       {
-         PD_LOG ( PDERROR, "Failed to block sigchld, err=%d", rc ) ;
-         rc = SDB_SYS ;
+         PD_LOG_MSG( PDERROR, err.c_str() ) ;
          goto error ;
       }
-      restoreSigMask = TRUE ;
+      builder.append( "pid", pid ) ;
+      builder.append( "strOut", strOut ) ;
 
-      ignore.sa_handler = SIG_DFL ;
-      sigemptyset ( &ignore.sa_mask ) ;
-      ignore.sa_flags = 0 ;
-      rc = sigaction ( SIGCHLD, &ignore, &savechild ) ;
-      if ( rc < 0 )
-      {
-         PD_LOG ( PDERROR, "Failed to run sigaction, err = %d", rc ) ;
-         rc = SDB_SYS ;
-         goto error ;
-      }
-      restoreSIGCHLDHandling = TRUE ;
-#endif //_LINUX
-
-
-      rc = runner.exec( command.c_str(), retCode, TRUE, -1, FALSE,
-                        timeout > 0 ? &processHandle : NULL,
-                        useShell ? TRUE : FALSE,
-                        timeout > 0 ? TRUE : FALSE ) ;
-      if ( SDB_OK != rc )
-      {
-         stringstream ss ;
-         ss << "run[" << command << "] failed" ;
-         PD_LOG_MSG( PDERROR, ss.str().c_str() ) ;
-         goto error ;
-      }
-      else
-      {
-         OSSPID pid = runner.getPID() ;
-         if ( 0 != processHandle )
-         {
-            UINT32 times = 0 ;
-            while ( times < timeout )
-            {
-               if ( ossIsProcessRunning( pid ) )
-               {
-                  ossSleep( SPT_USER_CMD_ONCE_SLEEP_TIME ) ;
-                  times += SPT_USER_CMD_ONCE_SLEEP_TIME ;
-               }
-               else
-               {
-                  rc = ossGetExitCodeProcess( processHandle, retCode ) ;
-                  if ( rc )
-                  {
-                     stringstream ss ;
-                     ss << "get exit code from process[ " << runner.getPID()
-                        << " ] failed" ;
-                     PD_LOG_MSG( PDERROR, ss.str().c_str() ) ;
-                     goto error ;
-                  }
-                  rc = runner.read( strOut ) ;
-                  if ( rc )
-                  {
-                     stringstream ss ;
-                     ss << "read run command[" << command
-                        << "] result failed" ;
-                     PD_LOG_MSG( PDERROR, ss.str().c_str() ) ;
-                     goto error ;
-                  }
-
-                  if ( SDB_OK != retCode )
-                  {
-                     builder.append( "retCode", retCode ) ;
-                     builder.append( "strOut", strOut ) ;
-                     retObj = builder.obj() ;
-                     goto done ;
-                  }
-                  break ;
-               }
-            }
-         }
-         builder.append( "retCode", retCode ) ;
-         builder.append( "strOut", strOut ) ;
-         builder.append( "pid", (UINT32) pid ) ;
-         retObj = builder.obj() ;
-      }
-
+      retObj = builder.obj() ;
    done:
-      if ( 0 != processHandle )
-      {
-         ossCloseProcessHandle( processHandle ) ;
-      }
-#if defined( _LINUX )
-      if ( restoreSIGCHLDHandling )
-      {
-         sigaction ( SIGCHLD, &savechild, NULL ) ;
-      }
-      if ( restoreSigMask )
-      {
-         pthread_sigmask ( SIG_SETMASK, &savemask, NULL ) ;
-      }
-#endif // _LINUX
       return rc ;
    error:
       goto done ;
@@ -436,7 +300,7 @@ namespace engine
       BSONObj rval ;
 
       rc = _jsScope->eval( _code.c_str(), _code.size(),
-                           "", 1, SPT_EVAL_FLAG_PRINT, &pRval ) ;
+                           "", 1, SPT_EVAL_FLAG_NONE, &pRval ) ;
       if ( rc )
       {
          errmsg = _jsScope->getLastErrMsg() ;

@@ -51,10 +51,7 @@
 #include "sdbInterface.hpp"
 #include "pmdMemPool.hpp"
 #include "pmdSyncMgr.hpp"
-
-#if defined ( SDB_ENGINE )
 #include "monCB.hpp"
-#endif // SDB_ENGINE
 
 namespace engine
 {
@@ -119,8 +116,6 @@ namespace engine
       INT32 init () ;
       void  destroy () ;
 
-      BOOLEAN isActive() const { return _isActive ; }
-
       void    setIsRestore( BOOLEAN isRestore ) { _isRestore = isRestore ; }
       BOOLEAN isRestore() const { return _isRestore ; }
 
@@ -129,12 +124,15 @@ namespace engine
       virtual IControlBlock*     getCBByType( SDB_CB_TYPE type ) ;
       virtual void*              getOrgPointByType( SDB_CB_TYPE type ) ;
       virtual BOOLEAN            isCBValue( SDB_CB_TYPE type ) const ;
+      virtual IExecutorMgr*      getExecutorMgr() ;
+      virtual IContextMgr*       getContextMgr() ;
 
       virtual SDB_DB_STATUS      getDBStatus() const ;
       virtual const CHAR*        getDBStatusDesp() const ;
       virtual BOOLEAN            isShutdown() const ;
       virtual BOOLEAN            isNormal() const ;
       virtual BOOLEAN            isAvailable( INT32 *pCode = NULL ) const ;
+      virtual BOOLEAN            isActive() const { return _isActive ; }
       virtual INT32              getShutdownCode() const ;
 
       virtual UINT32             getDBMode() const ;
@@ -219,10 +217,8 @@ namespace engine
 
       pmdEDUCB*      _mainEDU ;
 
-#if defined ( SDB_ENGINE )
       monConfigCB    _monCfgCB ;
       monDBCB        _monDBCB ;
-#endif // SDB_ENGINE
 
    public :
       pmdEDUMgr* getEDUMgr ()
@@ -253,7 +249,6 @@ namespace engine
       {
          return ( _SDB_RTNCB* )getOrgPointByType( SDB_CB_RTN ) ;
       }
-#if defined ( SDB_ENGINE )
       OSS_INLINE monConfigCB * getMonCB()
       {
          return & _monCfgCB ;
@@ -274,7 +269,6 @@ namespace engine
       {
           _monCfgCB.timestampON = flag ;
       }
-#endif // SDB_ENGINE
       OSS_INLINE _clsMgr *getClsCB ()
       {
          return ( _clsMgr* )getOrgPointByType( SDB_CB_CLS ) ;

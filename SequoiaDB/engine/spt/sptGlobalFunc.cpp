@@ -35,13 +35,10 @@
 #include "ossProc.hpp"
 #include "utilStr.hpp"
 #include "pdTrace.hpp"
-#include "sptParseTroff.hpp"
-
-#if defined (_WINDOWS)
-   #define TF_REL_PATH "..\\doc\\manual\\"
-#else
-   #define TF_REL_PATH "../doc/manual/"
-#endif // _WINDOWS
+#include "sptHelp.hpp"
+#include "sptUsrFileCommon.hpp"
+#include "sptSPScope.hpp"
+#include "pdTraceAnalysis.hpp"
 
 using namespace bson ;
 
@@ -57,9 +54,13 @@ JS_GLOBAL_FUNC_DEFINE_NORESET( _sptGlobalFunc, print )
 JS_GLOBAL_FUNC_DEFINE_NORESET( _sptGlobalFunc, showClass )
 JS_GLOBAL_FUNC_DEFINE_NORESET( _sptGlobalFunc, showClassfull)
 JS_GLOBAL_FUNC_DEFINE_NORESET( _sptGlobalFunc, forceGC )
+JS_GLOBAL_FUNC_DEFINE_NORESET( _sptGlobalFunc, displayManual )
+JS_GLOBAL_FUNC_DEFINE_NORESET( _sptGlobalFunc, displayMethod )
 JS_GLOBAL_FUNC_DEFINE( _sptGlobalFunc, sleep )
 JS_GLOBAL_FUNC_DEFINE( _sptGlobalFunc, traceFmt )
 JS_GLOBAL_FUNC_DEFINE( _sptGlobalFunc, globalHelp )
+JS_GLOBAL_FUNC_DEFINE( _sptGlobalFunc, importJSFile )
+JS_GLOBAL_FUNC_DEFINE( _sptGlobalFunc, importJSFileOnce )
 
 JS_BEGIN_MAPPING( _sptGlobalFunc, "" )
    JS_ADD_GLOBAL_FUNC( "getLastErrMsg", getLastErrorMsg )
@@ -71,10 +72,14 @@ JS_BEGIN_MAPPING( _sptGlobalFunc, "" )
    JS_ADD_GLOBAL_FUNC( "sleep", sleep )
    JS_ADD_GLOBAL_FUNC( "print", print )
    JS_ADD_GLOBAL_FUNC( "traceFmt", traceFmt )
-   JS_ADD_GLOBAL_FUNC( "man", globalHelp )
+   JS_ADD_GLOBAL_FUNC( "globalHelp", globalHelp )
+   JS_ADD_GLOBAL_FUNC( "displayMethod", displayMethod )
+   JS_ADD_GLOBAL_FUNC( "displayManual", displayManual )
    JS_ADD_GLOBAL_FUNC( "showClass", showClass )
    JS_ADD_GLOBAL_FUNC( "showClassfull", showClassfull )
    JS_ADD_GLOBAL_FUNC( "forceGC", forceGC )
+   JS_ADD_GLOBAL_FUNC( "import", importJSFile )
+   JS_ADD_GLOBAL_FUNC( "importOnce", importJSFileOnce )
 JS_MAPPING_END()
 
    INT32 _sptGlobalFunc::getLastErrorMsg( const _sptArguments &arg,
@@ -225,6 +230,7 @@ JS_MAPPING_END()
       INT32 formatType = 0 ;
       string input ;
       string output ;
+      pdTraceParser traceParser ;
 
       rc = arg.getNative( 0, (void*)&formatType, SPT_NATIVE_INT32 ) ;
       if ( rc )
@@ -266,8 +272,15 @@ JS_MAPPING_END()
          goto error ;
       }
 
-      rc = pdTraceCB::format( input.c_str(), output.c_str(),
-                              (_pdTraceFormatType)formatType ) ;
+      rc = traceParser.init( input.c_str(),
+                             output.c_str(),
+                             (pdTraceFormatType)formatType ) ;
+      if ( rc )
+      {
+         goto error ;
+      }
+
+      rc = traceParser.parse() ;
       if ( rc )
       {
          goto error ;
@@ -284,43 +297,124 @@ JS_MAPPING_END()
                                      BSONObj &detail )
    {
       INT32 rc = SDB_OK ;
-      string cata ;
-      string cmd ;
-      CHAR cmdPath[ OSS_MAX_PATHSIZE + 1 ] = { 0 } ;
 
-      rc = arg.getString( 0, cata ) ;
-      if ( rc )
+      if ( arg.argc() == 0 )
       {
-         detail = BSON( SPT_ERR << "The 1st param must be string" ) ;
-         goto error ;
-      }
-
-      if ( arg.argc() >= 2 )
-      {
-         rc = arg.getString( 1, cmd ) ;
+         rc = sptHelp::getInstance().displayGlobalMethod() ;
          if ( rc )
          {
-            detail = BSON( SPT_ERR << "The 2nd param should be string" ) ;
+            goto error ;
+         }
+      }
+      else if ( arg.argc() >= 1 )
+      {
+         string fuzzyFuncName ;
+         rc = arg.getString( 0, fuzzyFuncName ) ;
+         if ( rc )
+         {
+            detail = BSON( SPT_ERR << "The 1st param must be a function name" ) ;
+            goto error ;
+         }
+         rc = sptHelp::getInstance().displayManual( fuzzyFuncName, "", FALSE ) ;
+         if ( rc )
+         {
             goto error ;
          }
       }
 
-      rc = ossGetEWD( cmdPath, OSS_MAX_PATHSIZE ) ;
-      if ( rc )
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _sptGlobalFunc::displayMethod( const _sptArguments &arg,
+                                        _sptReturnVal &rval,
+                                        BSONObj &detail )
+   {
+      INT32 rc = SDB_OK ;
+
+      if ( arg.argc() < 2 )
       {
+         rc = SDB_INVALIDARG ;
          goto error ;
       }
-      rc = utilCatPath( cmdPath, OSS_MAX_PATHSIZE, TF_REL_PATH ) ;
-      if ( rc )
+      else
       {
+         string className ;
+         INT32 isInstance = 0 ;
+
+         rc = arg.getString( 0, className ) ;
+         if ( rc )
+         {
+            detail = BSON( SPT_ERR << "The 1st param must be the class name" ) ;
+            goto error ;
+         }
+         rc = arg.getNative( 1, (void *)(&isInstance), SPT_NATIVE_INT32 ) ;
+         if ( rc )
+         {
+            detail = BSON( SPT_ERR << "The 2nd param must be a bool value" ) ;
+            goto error ;
+         }
+         rc = sptHelp::getInstance().displayMethod( className,
+                                                    (BOOLEAN)isInstance ) ;
+         if ( rc )
+         {
+            goto error ;
+         }
+      }
+
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _sptGlobalFunc::displayManual( const _sptArguments &arg,
+                                        _sptReturnVal &rval,
+                                        BSONObj &detail )
+   {
+      INT32 rc = SDB_OK ;
+
+      if ( arg.argc() < 3 )
+      {
+         rc = SDB_INVALIDARG ;
          goto error ;
       }
-      rc = manHelp::getInstance( cmdPath ).getFileHelp( cata.c_str(),
-                                                        cmd.empty() ?
-                                                        NULL : cmd.c_str() ) ;
-      if ( rc )
+      else
       {
-         goto error ;
+         string fuzzyFuncName ;
+         string matcher ;
+         INT32 isInstance = 0 ;
+
+         rc = arg.getString( 0, fuzzyFuncName ) ;
+         if ( rc )
+         {
+            detail = BSON( SPT_ERR <<
+                           "The 1st param must be the name of the function" ) ;
+            goto error ;
+         }
+         rc = arg.getString( 1, matcher ) ;
+         if ( rc )
+         {
+            detail = BSON( SPT_ERR <<
+                           "The 2nd param must be the name of the class" ) ;
+            goto error ;
+         }
+         rc = arg.getNative( 2, (void *)(&isInstance), SPT_NATIVE_INT32 ) ;
+         if ( rc )
+         {
+            detail = BSON( SPT_ERR << "The 3rd param must be a bool value" ) ;
+            goto error ;
+         }
+
+         rc = sptHelp::getInstance().displayManual( fuzzyFuncName,
+                                                    matcher,
+                                                    (INT32)isInstance ) ;
+         if ( rc )
+         {
+            goto error ;
+         }
       }
 
    done:
@@ -335,7 +429,7 @@ JS_MAPPING_END()
    {
       string className ;
       arg.getString( 0, className ) ;
-      return _showClassInner( className, FALSE, rval, detail ) ;
+      return _showClassInner( arg, className, FALSE, rval, detail ) ;
    }
 
    INT32 _sptGlobalFunc::showClassfull( const _sptArguments &arg,
@@ -344,20 +438,42 @@ JS_MAPPING_END()
    {
       string className ;
       arg.getString( 0, className ) ;
-      return _showClassInner( className, TRUE, rval, detail ) ;
+      return _showClassInner( arg, className, TRUE, rval, detail ) ;
    }
 
-   INT32 _sptGlobalFunc::_showClassInner( const string &className,
+   INT32 _sptGlobalFunc::_showClassInner( const _sptArguments &arg,
+                                          const string &className,
                                           BOOLEAN showHide,
                                           _sptReturnVal &rval,
                                           BSONObj &detail )
    {
+      INT32 rc = SDB_OK ;
       set<string> names ;
       stringstream ss ;
+      sptPrivateData *privateData = NULL ;
+      sptSPScope *spScope = NULL ;
+      JSContext *context = NULL ;
 
+      privateData = arg.getPrivateData() ;
+      if( NULL == privateData )
+      {
+         rc = SDB_SYS ;
+         detail = BSON( SPT_ERR << "Failed to get privateData" ) ;
+         goto error ;
+      }
+
+      spScope = dynamic_cast< sptSPScope* >( privateData->getScope() ) ;
+      if( NULL == spScope )
+      {
+         rc = SDB_SYS ;
+         detail = BSON( SPT_ERR << "Failed to get scope" ) ;
+         goto error ;
+      }
+
+      context = spScope->getContext() ;
       if ( !className.empty() )
       {
-         sptGetObjFactory()->getClassStaticFuncNames( (JSContext*)sdbGetThreadContext(),
+         sptGetObjFactory()->getClassStaticFuncNames( context,
                                                       className,
                                                       names,
                                                       showHide ) ;
@@ -372,7 +488,7 @@ JS_MAPPING_END()
             }
             names.clear() ;
          }
-         sptGetObjFactory()->getClassFuncNames( (JSContext*)sdbGetThreadContext(),
+         sptGetObjFactory()->getClassFuncNames( context,
                                                 className,
                                                 names,
                                                 showHide ) ;
@@ -389,31 +505,187 @@ JS_MAPPING_END()
             ++it ;
          }
          names.clear() ;
-         sptGetObjFactory()->getClassStaticFuncNames( (JSContext*)sdbGetThreadContext(),
+         sptGetObjFactory()->getClassStaticFuncNames( context,
                                                       "",
                                                       names,
                                                       showHide ) ;
          ss << "Global functions:" << endl ;
       }
 
-      set<string>::iterator it = names.begin() ;
-      while( it != names.end() )
       {
-         ss << "   " << *it << "()" << endl ;
-         ++it ;
+         set<string>::iterator it = names.begin() ;
+         while( it != names.end() )
+         {
+            ss << "   " << *it << "()" << endl ;
+            ++it ;
+         }
       }
 
       rval.getReturnVal().setValue( ss.str() ) ;
-      return SDB_OK ;
+   done:
+      return rc ;
+   error:
+      goto done ;
    }
 
    INT32 _sptGlobalFunc::forceGC( const _sptArguments &arg,
                                   _sptReturnVal &rval,
                                   BSONObj &detail )
    {
-      JS_GC( (JSContext*)sdbGetThreadContext() ) ;
-      return SDB_OK ;
+      INT32 rc = SDB_OK ;
+      sptPrivateData *privateData = NULL ;
+      sptSPScope *spScope = NULL ;
+
+      privateData = arg.getPrivateData() ;
+      if( NULL == privateData )
+      {
+         rc = SDB_SYS ;
+         detail = BSON( SPT_ERR << "Failed to get privateData" ) ;
+         goto error ;
+      }
+
+      spScope = dynamic_cast< sptSPScope* >( privateData->getScope() ) ;
+      if( NULL == spScope )
+      {
+         rc = SDB_SYS ;
+         detail = BSON( SPT_ERR << "Failed to get scope" ) ;
+         goto error ;
+      }
+      JS_GC( spScope->getContext() ) ;
+   done:
+      return rc ;
+   error:
+      goto done ;
    }
 
+   INT32 _sptGlobalFunc::importJSFile( const _sptArguments &arg,
+                                       _sptReturnVal &rval,
+                                       bson::BSONObj &detail )
+   {
+      return _evalFile( FALSE, arg, rval, detail ) ;
+   }
+
+   INT32 _sptGlobalFunc::importJSFileOnce( const _sptArguments &arg,
+                                           _sptReturnVal &rval,
+                                           bson::BSONObj &detail )
+   {
+      return _evalFile( TRUE, arg, rval, detail ) ;
+   }
+
+   INT32 _sptGlobalFunc::_evalFile( BOOLEAN importOnce,
+                                    const _sptArguments &arg,
+                                    _sptReturnVal &rval,
+                                    bson::BSONObj &detail )
+   {
+      INT32 rc = SDB_OK ;
+      string filename ;
+      string fullPath ;
+      sptScope *pScope = NULL ;
+      CHAR* buf = NULL ;
+      string err ;
+      string content ;
+      const sptResultVal *pResultVal = NULL ;
+      CHAR realPath[ OSS_MAX_PATHSIZE + 1 ] = { 0 } ;
+
+      rc = arg.getString( 0, filename ) ;
+      if( SDB_OUT_OF_BOUND == rc )
+      {
+         detail = BSON( SPT_ERR << "filename must be config" ) ;
+         goto error ;
+      }
+      else if( SDB_OK != rc )
+      {
+         detail = BSON( SPT_ERR << "filename must be string" ) ;
+         goto error ;
+      }
+
+      if( NULL == ossGetRealPath( filename.c_str(), realPath, OSS_MAX_PATHSIZE ) )
+      {
+         rc = SDB_INVALIDARG ;
+         detail = BSON( SPT_ERR << "Failed to get full path of file" ) ;
+         goto error ;
+      }
+      fullPath = realPath ;
+
+      {
+         sptPrivateData *pPivateData = arg.getPrivateData() ;
+         if( NULL == pPivateData )
+         {
+            detail = BSON( SPT_ERR << "Failed to get private data" ) ;
+            goto error ;
+         }
+         pScope = pPivateData->getScope() ;
+         if( NULL == pScope )
+         {
+            detail = BSON( SPT_ERR << "Failed to get scope" ) ;
+            goto error ;
+         }
+      }
+
+      if( TRUE == importOnce )
+      {
+         if( pScope->isJSFileNameExistInList( fullPath ) )
+         {
+            goto done ;
+         }
+      }
+      else
+      {
+         if( pScope->isJSFileNameExistInStack( fullPath ) )
+         {
+            goto done ;
+         }
+      }
+
+      {
+         INT64 readLen = 0 ;
+         rc = _sptUsrFileCommon::readFile( fullPath, err, &buf, readLen ) ;
+         if( SDB_OK != rc )
+         {
+            detail = BSON( SPT_ERR <<
+                           ( "Failed to read file content, filename: " + filename ) ) ;
+            goto error ;
+         }
+         if ( readLen >= 3 && (UINT8)buf[0] == 0xEF &&
+              (UINT8)buf[1] == 0xBB && (UINT8)buf[2] == 0xBF )
+         {
+            content = &buf[3] ;
+         }
+         else
+         {
+            content = buf;
+         }
+      }
+
+      pScope->addJSFileNameToList( fullPath ) ;
+      pScope->pushJSFileNameToStack( fullPath ) ;
+
+      {
+         INT32 evalFlags = SPT_EVAL_FLAG_NONE ;
+         if( TRUE == sdbNeedIgnoreErrorPrefix() )
+         {
+            evalFlags |= SPT_EVAL_FLAG_IGNORE_ERR_PREFIX ;
+         }
+         BOOLEAN saveOldPrintFlag = sdbNeedPrintError() ;
+         BOOLEAN saveOldIgnoreFlag = sdbNeedIgnoreErrorPrefix() ;
+         rc = pScope->eval( content.c_str(), ( UINT32 )content.length(),
+                            fullPath.c_str(), 1, evalFlags, &pResultVal ) ;
+         sdbSetPrintError( saveOldPrintFlag ) ;
+         sdbSetIgnoreErrorPrefix( saveOldIgnoreFlag ) ;
+      }
+      pScope->popJSFileNameFromStack() ;
+
+      if( SDB_OK != rc )
+      {
+         sdbClearErrorInfo() ;
+         detail = BSON( SPT_ERR << pResultVal->getErrrInfo() ) ;
+         goto error ;
+      }
+      rval.getReturnVal().setValue( pResultVal ) ;
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
 }
 

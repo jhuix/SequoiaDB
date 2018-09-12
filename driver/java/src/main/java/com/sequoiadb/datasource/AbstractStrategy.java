@@ -7,27 +7,31 @@ import java.util.concurrent.locks.ReentrantLock;
 
 abstract class AbstractStrategy implements IConnectStrategy {
 
-    protected ArrayDeque<ConnItem> _activeConnItemDeque = new ArrayDeque<ConnItem>();
-    protected ArrayDeque<ConnItem> _newlyCreatedConnItemDeque = new ArrayDeque<ConnItem>();
+    protected LinkedList<ConnItem> _idleConnItemList = new LinkedList<ConnItem>();
     protected ArrayList<String> _addrs = new ArrayList<String>();
-    protected Lock _opLock = new ReentrantLock();
-    protected Lock _addrLock = new ReentrantLock();
+    protected Lock _lockForConnItemList = new ReentrantLock();
+    protected Lock _lockForAddr = new ReentrantLock();
+
 
     @Override
-    public void init(List<String> addressList, List<Pair> _idleConnPairs, List<Pair> _usedConnPairs) {
+    public void init(Set<String> addresses, List<Pair> _idleConnPairs, List<Pair> _usedConnPairs) {
 
-        Iterator<String> addrListItr = addressList.iterator();
-        while (addrListItr.hasNext()) {
-            String addr = addrListItr.next();
-            _addAddress(addr);
+        Iterator<String> addrItr = addresses.iterator();
+        while (addrItr.hasNext()) {
+            String addr = addrItr.next();
+            if (!_addrs.contains(addr)) {
+                _addrs.add(addr);
+            }
         }
         if (_idleConnPairs != null) {
-            Iterator<Pair> idleConnPairItr = _idleConnPairs.iterator();
-            while (idleConnPairItr.hasNext()) {
-                Pair pair = idleConnPairItr.next();
+            Iterator<Pair> connPairItr = _idleConnPairs.iterator();
+            while (connPairItr.hasNext()) {
+                Pair pair = connPairItr.next();
                 String addr = pair.first().getAddr();
-                _addConnItem(pair.first());
-                _addAddress(addr);
+                _idleConnItemList.add(pair.first());
+                if (!_addrs.contains(addr)) {
+                    _addrs.add(addr);
+                }
             }
         }
     }
@@ -37,131 +41,65 @@ abstract class AbstractStrategy implements IConnectStrategy {
 
 
     @Override
-    public ConnItem pollConnItemForGetting() {
-        _opLock.lock();
+    public ConnItem pollConnItem(Operation opt) {
+        _lockForConnItemList.lock();
         try {
-            ConnItem connItem = _activeConnItemDeque.pollFirst();
-            if (connItem == null) {
-                connItem = _newlyCreatedConnItemDeque.pollFirst();
-            }
-            return connItem;
+            return _idleConnItemList.poll();
         } finally {
-            _opLock.unlock();
+            _lockForConnItemList.unlock();
         }
-    }
-
-    @Override
-    public ConnItem pollConnItemForDeleting() {
-        _opLock.lock();
-        try {
-            ConnItem connItem = _newlyCreatedConnItemDeque.pollFirst();
-            if (connItem == null) {
-                connItem = _activeConnItemDeque.pollLast();
-            }
-            return connItem;
-        } finally {
-            _opLock.unlock();
-        }
-    }
-
-    @Override
-    public ConnItem peekConnItemForDeleting() {
-        _opLock.lock();
-        try {
-            ConnItem connItem = _newlyCreatedConnItemDeque.peekFirst();
-            if (connItem == null) {
-                connItem =  _activeConnItemDeque.peekLast();
-            }
-            return connItem;
-        } finally {
-            _opLock.unlock();
-        }
-    }
-
-    @Override
-    public void removeConnItemAfterCleaning(ConnItem connItem) {
-    }
-
-    @Override
-    public void updateUsedConnItemCount(ConnItem connItem, int change) {
     }
 
     @Override
     public void addAddress(String addr) {
-        _addAddress(addr);
-    }
-
-    @Override
-    public List<ConnItem> removeAddress(String addr) {
-        List<ConnItem> returnList = new ArrayList<ConnItem>();
-        _addrLock.lock();
-        try {
-            if (_addrs.contains(addr)) {
-                _addrs.remove(addr);
-            }
-        } finally {
-            _addrLock.unlock();
-        }
-        _opLock.lock();
-        try {
-            Iterator<ConnItem> iterator = _activeConnItemDeque.iterator();
-            while (iterator.hasNext()) {
-                ConnItem connItem = iterator.next();
-                if (addr.equals(connItem.getAddr())) {
-                	returnList.add(connItem);
-                    iterator.remove();
-                }
-            }
-            iterator = _newlyCreatedConnItemDeque.iterator();
-            while (iterator.hasNext()) {
-                ConnItem connItem = iterator.next();
-                if (addr.equals(connItem.getAddr())) {
-                    returnList.add(connItem);
-                    iterator.remove();
-                }
-            }
-        } finally {
-            _opLock.unlock();
-        }
-        return returnList;
-    }
-
-    @Override
-    public void addConnItemAfterCreating(ConnItem connItem) {
-        _addConnItem(connItem);
-    }
-
-    @Override
-    public void addConnItemAfterReleasing(ConnItem connItem) {
-        _releaseConnItem(connItem);
-    }
-
-    private void _addConnItem(ConnItem connItem) {
-        _opLock.lock();
-        try {
-            _newlyCreatedConnItemDeque.addLast(connItem);
-        } finally {
-            _opLock.unlock();
-        }
-    }
-
-    private void _releaseConnItem(ConnItem connItem) {
-        _opLock.lock();
-        try {
-            _activeConnItemDeque.addFirst(connItem);
-        } finally {
-            _opLock.unlock();
-        }
-    }
-
-    private void _addAddress(String addr) {
-        _addrLock.lock();
+        _lockForAddr.lock();
         try {
             if (!_addrs.contains(addr)) {
                 _addrs.add(addr);
             }
         } finally {
-            _addrLock.unlock();
+            _lockForAddr.unlock();
         }
     }
+
+    @Override
+    public List<ConnItem> removeAddress(String addr) {
+        List<ConnItem> list = new ArrayList<ConnItem>();
+        _lockForAddr.lock();
+        try {
+            if (_addrs.contains(addr)) {
+                _addrs.remove(addr);
+            }
+        } finally {
+            _lockForAddr.unlock();
+        }
+        _lockForConnItemList.lock();
+        try {
+            Iterator<ConnItem> itr = _idleConnItemList.iterator();
+            while (itr.hasNext()) {
+                ConnItem item = itr.next();
+                if (item.getAddr().equals(addr)) {
+                    list.add(item);
+                    itr.remove();
+                }
+            }
+        } finally {
+            _lockForConnItemList.unlock();
+        }
+        return list;
+    }
+
+    @Override
+    public void update(ItemStatus itemStatus, ConnItem connItem, int incDecItemCount) {
+        _lockForConnItemList.lock();
+        try {
+            if (itemStatus == ItemStatus.IDLE && incDecItemCount > 0) {
+                _idleConnItemList.add(connItem);
+            }
+        } finally {
+            _lockForConnItemList.unlock();
+        }
+        return;
+    }
+
 }

@@ -45,13 +45,15 @@
 #include "dms.hpp"
 #include "ossLatch.hpp"
 #include "monDMS.hpp"
-#include "dmsTempCB.hpp"
+#include "dmsTempSUMgr.hpp"
+#include "dmsStatSUMgr.hpp"
 #include "ossAtomic.hpp"
 #include "ossRWMutex.hpp"
 #include "dpsLogWrapper.hpp"
 #include "ossEvent.hpp"
 #include "sdbInterface.hpp"
 #include "dmsIxmKeySorter.hpp"
+#include "utilMap.hpp"
 #include "dmsStorageJob.hpp"
 #include <map>
 #include <set>
@@ -93,7 +95,7 @@ namespace engine
    #define DMS_STATE_READONLY          1
    #define DMS_STATE_ONLINE_BACKUP     2
    #define DMS_STATE_FULLSYNC          3
-   
+
    /*
       OTHER DEFINE
    */
@@ -147,8 +149,7 @@ namespace engine
       std::vector<SDB_DMS_CSCB*>          _delCscbVec ;
       std::vector<ossRWMutex*>            _latchVec ;
       std::vector<dmsStorageUnitID>       _freeList ;
-
-      std::vector< ossSpinXLatch* >       _vecCSMutex ;
+      std::vector< ossSpinRecursiveXLatch* >  _vecCSMutex ;
 
 #if defined (_WINDOWS)
       typedef std::map<const CHAR*,
@@ -185,7 +186,8 @@ namespace engine
       UINT8                   _dmsCBState;
       UINT32                  _logicalSUID ;
 
-      dmsTempCB               _tempCB ;
+      dmsTempSUMgr            _tempSUMgr ;
+      dmsStatSUMgr            _statSUMgr ;
 
       dmsIxmKeySorterCreator* _ixmKeySorterCreator ;
 
@@ -252,13 +254,18 @@ namespace engine
                               OSS_LATCH_MODE lockType = SHARED,
                               INT32 millisec = -1 ) ;
 
+      INT32 verifySUAndLock ( const dmsEventSUItem *pSUItem,
+                              _dmsStorageUnit **ppSU,
+                              OSS_LATCH_MODE lockType = SHARED,
+                              INT32 millisec = -1 ) ;
+
       _dmsStorageUnit *suLock ( dmsStorageUnitID suID ) ;
       void suUnlock ( dmsStorageUnitID suID,
                       OSS_LATCH_MODE lockType = SHARED ) ;
 
       INT32 addCollectionSpace ( const CHAR *pName, UINT32 topSequence,
                                  _dmsStorageUnit *su, _pmdEDUCB *cb,
-                                 SDB_DPSCB *dpsCB ) ;
+                                 SDB_DPSCB *dpsCB, BOOLEAN isCreate ) ;
       INT32 dropCollectionSpace ( const CHAR *pName, _pmdEDUCB *cb,
                                   SDB_DPSCB *dpsCB ) ;
       INT32 dropEmptyCollectionSpace( const CHAR *pName, _pmdEDUCB *cb,
@@ -270,23 +277,35 @@ namespace engine
                                    _pmdEDUCB *cb,
                                    SDB_DPSCB *dpsCB ) ;
 
-      void dumpInfo ( std::set<monCLSimple> &collectionList,
+      void dumpInfo ( MON_CL_SIM_LIST &collectionList,
                       BOOLEAN sys = FALSE ) ;
-      void dumpInfo ( std::set<monCSSimple> &csList,
-                      BOOLEAN sys = FALSE ) ;
+      void dumpInfo ( MON_CS_SIM_LIST &csList,
+                      BOOLEAN sys = FALSE,
+                      BOOLEAN dumpCL = FALSE,
+                      BOOLEAN dumpIdx = FALSE ) ;
 
-      void dumpInfo ( std::set<monCollection> &collectionList,
+      void dumpInfo ( MON_CL_LIST &collectionList,
                       BOOLEAN sys = FALSE ) ;
-      void dumpInfo ( std::set<monCollectionSpace> &csList,
+      void dumpInfo ( MON_CS_LIST &csList,
                       BOOLEAN sys = FALSE ) ;
-      void dumpInfo ( std::set<monStorageUnit> &storageUnitList,
+      void dumpInfo ( MON_SU_LIST &storageUnitList,
                       BOOLEAN sys = FALSE ) ;
 
       void dumpInfo ( INT64 &totalFileSize );
 
       void dumpPageMapCSInfo( MON_CSNAME_VEC &vecCS ) ;
 
-      dmsTempCB *getTempCB () ;
+      dmsTempSUMgr *getTempSUMgr () ;
+
+      dmsStatSUMgr *getStatSUMgr () ;
+
+      void clearSUCaches ( UINT32 mask ) ;
+
+      void clearSUCaches ( const MON_CS_SIM_LIST &monCSList, UINT32 mask ) ;
+
+      void changeSUCaches ( UINT32 mask ) ;
+
+      void changeSUCaches ( const MON_CS_SIM_LIST &monCSList, UINT32 mask ) ;
 
       INT32 dropCollectionSpaceP1 ( const CHAR *pName, _pmdEDUCB *cb,
                                     SDB_DPSCB *dpsCB );
@@ -295,7 +314,7 @@ namespace engine
                                           SDB_DPSCB *dpsCB );
 
       INT32 dropCollectionSpaceP2 ( const CHAR *pName, _pmdEDUCB *cb,
-                                    SDB_DPSCB *dpsCB );
+                                    SDB_DPSCB *dpsCB ) ;
 
       BOOLEAN dispatchDictJob( dmsDictJob &job ) ;
       void pushDictJob( dmsDictJob job ) ;

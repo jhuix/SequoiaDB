@@ -144,11 +144,35 @@ public :
    time_t time ;     // tv_sec ,  seconds
    UINT32 microtm ;  // tv_usec,  microseconds
 
+   ossTimestamp ()
+   : time( 0 ),
+     microtm( 0 )
+   {
+   }
+
+   ossTimestamp ( UINT64 curTime )
+   : time( curTime / 1000 ),
+     microtm( ( curTime % 1000 ) * 1000 )
+   {
+   }
+
+   ossTimestamp ( const ossTimestamp & timestamp )
+   : time( timestamp.time ),
+     microtm( timestamp.microtm )
+   {
+   }
+
    ossTimestamp &operator= ( const ossTimestamp &rhs )
    {
       time    = rhs.time ;
       microtm = rhs.microtm ;
       return *this ;
+   }
+
+   void clear ()
+   {
+      time = 0 ;
+      microtm = 0 ;
    }
 } ;
 typedef class ossTimestamp ossTimestamp ;
@@ -158,11 +182,16 @@ typedef class ossTimestamp ossTimestamp ;
 
 void ossTimestampToString( ossTimestamp &Tm, CHAR * pStr ) ;
 
+void ossStringToTimestamp( const CHAR * pStr, ossTimestamp &Tm ) ;
+
 void ossLocalTime ( time_t &Time, struct tm &TM ) ;
 
 void ossGmtime ( time_t &Time, struct tm &TM ) ;
 
 void ossGetCurrentTime( ossTimestamp &TM ) ;
+
+UINT64 ossGetCurrentMicroseconds() ;
+UINT64 ossGetCurrentMilliseconds() ;
 
 SINT32 ossGetCPUUsage
 (
@@ -258,6 +287,15 @@ public :
       _value.QuadPart = 0 ;
 #else
       _value = 0 ;
+#endif
+   }
+
+   ossTickCore ( const ossTickCore & tick )
+   {
+#if defined (_WINDOWS)
+      _value.QuadPart = tick._value.QuadPart ;
+#else
+      _value = tick._value ;
 #endif
    }
 
@@ -411,6 +449,16 @@ class ossTickDelta : protected ossTickCore
    friend ossTick operator +  (const ossTick      &x, const ossTickDelta &y) ;
    friend ossTick operator +  (const ossTickDelta &x, const ossTick      &y) ;
 public :
+   ossTickDelta ()
+   : ossTickCore()
+   {
+   }
+
+   ossTickDelta ( const ossTickDelta & delta )
+   : ossTickCore( delta )
+   {
+   }
+
    OSS_INLINE void clear(void)
    {
       poke( 0 ) ;
@@ -469,6 +517,12 @@ public :
    OSS_INLINE ossTickDelta & operator += ( const ossTickDelta & x )
    {
       poke( ossTickCore::addOrSub( *this, x, OSS_TICKS_OP_ADD ) ) ;
+      return *this ;
+   } ;
+
+   OSS_INLINE ossTickDelta & operator -= ( const ossTickDelta & x )
+   {
+      poke( ossTickCore::addOrSub( *this, x, OSS_TICKS_OP_SUB ) ) ;
       return *this ;
    } ;
 
@@ -540,6 +594,16 @@ class ossTick : protected ossTickCore
    friend ossTick operator +  (const ossTickDelta &x, const ossTick &y ) ;
    friend ossTickDelta operator - (const ossTick &x, const ossTick &y ) ;
 public :
+   ossTick ()
+   : ossTickCore()
+   {
+   }
+
+   ossTick ( const ossTick & tick )
+   : ossTickCore( tick )
+   {
+   }
+
    OSS_INLINE void sample(void)
    {
    #if defined (_WINDOWS)
@@ -807,10 +871,21 @@ UINT32 ossHexDumpBuffer
 INT32 ossGetMemoryInfo ( INT32 &loadPercent,
                          INT64 &totalPhys,   INT64 &availPhys,
                          INT64 &totalPF,     INT64 &availPF,
+                         INT64 &totalVirtual, INT64 &availVirtual,
+                         INT32 &overCommitMode,
+                         INT64 &commitLimit,  INT64 &committedAS ) ;
+
+INT32 ossGetMemoryInfo ( INT32 &loadPercent,
+                         INT64 &totalPhys,   INT64 &availPhys,
+                         INT64 &totalPF,     INT64 &availPF,
                          INT64 &totalVirtual, INT64 &availVirtual ) ;
 
 INT32 ossGetDiskInfo ( const CHAR *pPath, INT64 &totalBytes, INT64 &freeBytes,
                        CHAR* fsName = NULL, INT32 fsNameSize = 0 ) ;
+
+INT32 ossGetFileDesp ( INT64 &usedNum ) ;
+
+INT32 ossGetProcessMemory( OSSPID pid, INT64 &vmRss, INT64 &vmSize ) ;
 
 typedef struct _ossDiskIOStat
 {
@@ -926,6 +1001,8 @@ private:
 class ossProcLimits
 {
 public:
+   ossProcLimits() ;
+
    std::string str() const ;
 
    INT32 init() ;

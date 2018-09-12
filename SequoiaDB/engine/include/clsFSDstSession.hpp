@@ -57,26 +57,29 @@ namespace engine
    class _clsShardMgr ;
 
    /*
-      _clsPageSzTuple define
+      _clsCSInfoTuple define
    */
-   struct _clsPageSzTuple
+   struct _clsCSInfoTuple
    {
       INT32 pageSize ;
       INT32 lobPageSize ;
+      DMS_STORAGE_TYPE type ;
 
-      _clsPageSzTuple( INT32 ps, INT32 lps )
+      _clsCSInfoTuple( INT32 ps, INT32 lps, DMS_STORAGE_TYPE sType )
       :pageSize( ps ),
-       lobPageSize( lps )
+       lobPageSize( lps ),
+       type( sType )
       {
       }
 
-      _clsPageSzTuple()
+      _clsCSInfoTuple()
       :pageSize( 0 ),
-       lobPageSize( 0 )
+       lobPageSize( 0 ),
+       type( DMS_STORAGE_NORMAL )
       {
       }
    } ;
-   typedef _clsPageSzTuple clsPageSzTuple ;
+   typedef _clsCSInfoTuple clsCSInfoTuple ;
 
    /*
       _clsDataDstBaseSession define
@@ -135,7 +138,9 @@ namespace engine
                                       UINT32 &pageSize,
                                       UINT32 &attributes,
                                       INT32 &lobPageSize,
-                                      UTIL_COMPRESSOR_TYPE &compType ) ;
+                                      DMS_STORAGE_TYPE &csType,
+                                      UTIL_COMPRESSOR_TYPE &compType,
+                                      BSONObj &extOptions ) ;
 
          INT32          _extractIndex( const CHAR *objdata,
                                        vector<BSONObj> &index,
@@ -184,7 +189,7 @@ namespace engine
    */
    class _clsFSDstSession : public _clsDataDstBaseSession
    {
-   typedef std::map<string, clsPageSzTuple>     CS_PS_TUPLES ;
+   typedef std::map<string, clsCSInfoTuple>     CS_INFO_TUPLES ;
 
    DECLARE_OBJ_MSG_MAP()
 
@@ -224,7 +229,7 @@ namespace engine
 
    private:
       CLS_FULLSYNC_STEP    _fsStep ;
-      CS_PS_TUPLES         _mapEmptyCS ;
+      CS_INFO_TUPLES       _mapEmptyCS ;
       vector<string>       _validCLs ;
       UINT32               _repeatCount ;
       BOOLEAN              _hasRegFullsyc ;

@@ -43,6 +43,8 @@
 namespace engine
 {
    #define DMS_BME_OFFSET        DMS_MME_OFFSET
+   #define DMS_LOBM_EYECATCHER               "SDBLOBM"
+   #define DMS_LOBM_EYECATCHER_LEN           8
 
    const UINT32 DMS_BUCKETS_NUM =   16777216 ; // 16MB
    #define DMS_BUCKETS_MODULO       16777215
@@ -77,7 +79,7 @@ namespace engine
       _dmsStorageLob( const CHAR *lobmFileName,
                       const CHAR *lobdFileName,
                       dmsStorageInfo *info,
-                      dmsStorageData *pDataSu,
+                      dmsStorageDataCommon *pDataSu,
                       utilCacheUnit* pCacheUnit ) ;
       virtual ~_dmsStorageLob() ;
 
@@ -120,6 +122,12 @@ namespace engine
                     _pmdEDUCB *cb,
                     SDB_DPSCB *dpscb ) ;
 
+      INT32 writeOrUpdate( const dmsLobRecord &record,
+                           dmsMBContext *mbContext,
+                           _pmdEDUCB *cb,
+                           SDB_DPSCB *dpscb,
+                           BOOLEAN *pHasUpdated = NULL ) ;
+
       INT32 remove( const dmsLobRecord &record,
                     dmsMBContext *mbContext,
                     _pmdEDUCB *cb,
@@ -156,6 +164,38 @@ namespace engine
       OSS_INLINE const CHAR*   _clFullName ( const CHAR *clName,
                                              CHAR *clFullName,
                                              UINT32 fullNameLen ) ;
+
+      /*
+         Caller must hold lock with EXCLUSIVE
+      */
+      INT32 _updateWithPage( const dmsLobRecord &record,
+                             DMS_LOB_PAGEID pageID,
+                             const CHAR *pFullName,
+                             dmsMBContext *mbContext,
+                             BOOLEAN canUnLock,
+                             _pmdEDUCB *cb,
+                             SDB_DPSCB *dpscb ) ;
+
+      /*
+         1. Caller must hold lock with EXCLUSIVE
+         2. pageID is taken by _writeWithPage no matter
+            whether it succeeds or not
+      */
+      INT32 _writeWithPage( const dmsLobRecord &record,
+                            DMS_LOB_PAGEID &pageID,
+                            const CHAR *pFullName,
+                            dmsMBContext *mbContext,
+                            BOOLEAN canUnLock,
+                            _pmdEDUCB *cb,
+                            dpsMergeInfo &info,
+                            SDB_DPSCB *dpscb ) ;
+
+      INT32 _writeInner( const dmsLobRecord &record,
+                         dmsMBContext *mbContext,
+                         _pmdEDUCB *cb,
+                         SDB_DPSCB *dpscb,
+                         BOOLEAN updateWhenExist,
+                         BOOLEAN *pHasUpdated ) ;
 
    private:
       virtual INT32  _onCreate( OSSFILE *file, UINT64 curOffSet ) ;
@@ -212,10 +252,6 @@ namespace engine
       INT32 _fillPage( const dmsLobRecord &record,
                        DMS_LOB_PAGEID page,
                        dmsMBContext *mbContext ) ;
-
-      INT32 _findPage( const dmsLobRecord &record,
-                      dmsMBContext *mbContext,
-                      DMS_LOB_PAGEID &page ) ;
 
       INT32 _releasePage( DMS_LOB_PAGEID page, dmsMBContext *mbContext ) ;
 

@@ -1371,7 +1371,11 @@ namespace bson {
             return;
         }
         case Bool: appendBool( fieldName , false); return;
-        case Date: appendDate( fieldName , 0); return;
+        case Date:
+        {
+            appendDate( fieldName , numeric_limits<INT64>::min() ) ;
+            return ;
+        }
         case jstNULL: appendNull( fieldName ); return;
         case Symbol:
         case String: append( fieldName , "" ); return;
@@ -1392,7 +1396,12 @@ namespace bson {
         }
         case Code: appendCode( fieldName , "" ); return;
         case CodeWScope: appendCodeWScope( fieldName , "" , BSONObj() ); return;
-        case Timestamp: appendTimestamp( fieldName , 0); return;
+        case Timestamp:
+        {
+            OpTime t( numeric_limits<SINT32>::min(), 0 ) ;
+            appendTimestamp( fieldName, t.asDate() ) ;
+            return ;
+        }
 
         };
         log() << "type not support for appendMinElementForType: " << t << endl;
@@ -1428,15 +1437,22 @@ namespace bson {
         case jstNULL:
             appendMinForType( fieldName , NumberInt );
         case Bool: appendBool( fieldName , true); break;
-        case Date: appendDate( fieldName , 0xFFFFFFFFFFFFFFFFLL ); break;
+        case Date:
+        {
+            appendDate( fieldName , numeric_limits<INT64>::max() ) ;
+            break;
+        }
         case Symbol:
         case String: append( fieldName , BSONObj() ); break;
         case Code:
         case CodeWScope:
             appendCodeWScope( fieldName , "ZZZ" , BSONObj() ); break;
         case Timestamp:
-          appendTimestamp(fieldName, numeric_limits<unsigned long long>::max());
+        {
+            OpTime t( numeric_limits<SINT32>::max(), 999999 ) ;
+            appendTimestamp( fieldName, t.asDate() ) ;
             break;
+        }
         default:
             appendMinForType( fieldName , t + 1 );
         }
@@ -1470,7 +1486,6 @@ namespace bson {
     {
         int rc = 0 ;
         bsonDecimal decimal ;
-
         rc = decimal.fromString( strDecimal.data() ) ;
         if ( 0 != rc )
         {

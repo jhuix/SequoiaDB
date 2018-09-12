@@ -37,6 +37,7 @@
 
 #include "pmdAsyncSession.hpp"
 #include "pmd.hpp"
+#include "pmdEntryPoint.hpp"
 #include "pdTrace.hpp"
 #include "pmdTrace.hpp"
 
@@ -56,10 +57,8 @@ namespace engine
       pmdBuffInfo *pBuffInfo = NULL ;
       MsgHeader *pMsg = NULL ;
       INT32 timeDiff = 0 ;
-#if defined ( SDB_ENGINE )
       pmdKRCB *krcb    = pmdGetKRCB() ;
       monDBCB *mondbcb = krcb->getMonDBCB () ;
-#endif // SDB_ENGINE
 
       pSession->attachIn ( cb ) ;
 
@@ -71,6 +70,7 @@ namespace engine
 
          if ( cb->waitEvent( event, OSS_ONE_SEC, TRUE ) )
          { 
+            cb->resetInterrupt() ;
             if ( PMD_EDU_EVENT_TERM == event._eventType )
             {
                PD_LOG ( PDDEBUG, "EDU[%lld, %s] is terminated", cb->getID(),
@@ -78,9 +78,8 @@ namespace engine
             }
             else if ( PMD_EDU_EVENT_MSG == event._eventType )
             {
-#if defined ( SDB_ENGINE )
-               mondbcb->addReceiveNum () ;
-#endif // SDB_ENGINE
+               mondbcb->addReceiveNum() ;
+
                if ( 0 == event._userData )
                {
                   pBuffInfo = ( pmdBuffInfo* )( event._Data ) ;
@@ -140,6 +139,26 @@ namespace engine
       PD_TRACE_EXIT ( SDB_PMDSYNCSESSIONAGENTEP );
       return SDB_OK ;
    }
+
+   PMD_DEFINE_ENTRYPOINT( EDU_TYPE_SHARDAGENT, FALSE,
+                          pmdAsyncSessionAgentEntryPoint,
+                          "ShardAgent" ) ;
+
+   PMD_DEFINE_ENTRYPOINT( EDU_TYPE_REPLAGENT, FALSE,
+                          pmdAsyncSessionAgentEntryPoint,
+                          "ReplAgent" ) ;
+
+   PMD_DEFINE_ENTRYPOINT( EDU_TYPE_OMAAGENT, FALSE,
+                          pmdAsyncSessionAgentEntryPoint,
+                          "OMAAgent" ) ;
+
+   PMD_DEFINE_ENTRYPOINT( EDU_TYPE_SE_INDEX, FALSE,
+                          pmdAsyncSessionAgentEntryPoint,
+                          "SeIndexAgent" ) ;
+
+   PMD_DEFINE_ENTRYPOINT( EDU_TYPE_SE_AGENT, FALSE,
+                          pmdAsyncSessionAgentEntryPoint,
+                          "SeAgent" ) ;
 
 }
 

@@ -227,15 +227,16 @@ namespace engine
                                &eduID ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to start cat main controller edu, "
                    "rc: %d", rc ) ;
-      pEDUMgr->regSystemEDU( EDU_TYPE_CATMGR, eduID ) ;
       rc = _catMainCtrl.getAttachEvent()->wait( CAT_WAIT_EDU_ATTACH_TIMEOUT ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to wait cat manager edu "
                    "attach, rc: %d", rc ) ;
 
-      pEDUMgr->startEDU ( EDU_TYPE_CATNETWORK, (netRouteAgent*)netWork(),
-                          &eduID ) ;
-      pEDUMgr->regSystemEDU ( EDU_TYPE_CATNETWORK, eduID ) ;
-      rc = pEDUMgr->waitUntil( EDU_TYPE_CATNETWORK, PMD_EDU_RUNNING ) ;
+      rc = pEDUMgr->startEDU ( EDU_TYPE_CATNETWORK,
+                               (netRouteAgent*)netWork(),
+                               &eduID ) ;
+      PD_RC_CHECK( rc, PDERROR, "Start CATNET failed, rc: %d", rc ) ;
+
+      rc = pEDUMgr->waitUntil( eduID, PMD_EDU_RUNNING ) ;
       PD_RC_CHECK( rc, PDERROR, "Wait CATNET active failed, rc: %d", rc ) ;
 
    done:
@@ -402,22 +403,57 @@ namespace engine
       return (INT32)vecNames.size() ;
    }
 
-   INT32 sdbCatalogueCB::getGroupsID( vector< UINT32 > &vecIDs )
+   INT32 sdbCatalogueCB::getGroupsID( vector< UINT32 > &vecIDs,
+                                      BOOLEAN isActiveOnly )
    {
+      GRP_ID_MAP::iterator it ;
+
       vecIDs.clear() ;
-      GRP_ID_MAP::iterator it = _grpIdMap.begin() ;
+
+      it = _grpIdMap.begin() ;
       while ( it != _grpIdMap.end() )
       {
          vecIDs.push_back( it->first ) ;
          ++it ;
       }
-      it = _deactiveGrpIdMap.begin() ;
-      while ( it != _deactiveGrpIdMap.end() )
+
+      if ( !isActiveOnly )
       {
-         vecIDs.push_back( it->first ) ;
-         ++it ;
+         it = _deactiveGrpIdMap.begin() ;
+         while ( it != _deactiveGrpIdMap.end() )
+         {
+            vecIDs.push_back( it->first ) ;
+            ++it ;
+         }
       }
       return (INT32)vecIDs.size() ;
+   }
+
+   INT32 sdbCatalogueCB::getGroupNameMap ( map<std::string, UINT32> & nameMap,
+                                           BOOLEAN isActiveOnly )
+   {
+      GRP_ID_MAP::iterator it ;
+
+      nameMap.clear() ;
+
+      it = _grpIdMap.begin() ;
+      while ( it != _grpIdMap.end() )
+      {
+         nameMap[ it->second ] = it->first ;
+         ++it ;
+      }
+
+      if ( !isActiveOnly )
+      {
+         it = _deactiveGrpIdMap.begin() ;
+         while ( it != _deactiveGrpIdMap.end() )
+         {
+            nameMap[ it->second ] = it->first ;
+            ++it ;
+         }
+      }
+
+      return (INT32)nameMap.size() ;
    }
 
    INT32 sdbCatalogueCB::makeGroupsObj( BSONObjBuilder &builder,

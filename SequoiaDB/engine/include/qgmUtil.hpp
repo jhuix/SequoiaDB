@@ -124,6 +124,8 @@ namespace engine
 
    BSONObj qgmUseIndexHintToBson( const qgmHint &h ) ;
 
+   INT32 qgmUseHintToFlag( const qgmHint &h, INT32 &flag ) ;
+
    const CHAR* qgmGetNodeTypeStr( INT32 type ) ;
 
    INT32    qgmBuildANodeItem( BSONObjBuilder &bb,
@@ -148,5 +150,5 @@ namespace engine
 
 }
 
-#endif
+#endif // QGMUTIL_HPP_
 

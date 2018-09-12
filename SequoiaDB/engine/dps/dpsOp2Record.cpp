@@ -178,6 +178,8 @@ namespace engine
                            const BSONObj &oldObj,
                            const BSONObj &newMatch,
                            const BSONObj &newObj,
+                           const BSONObj &oldShardingKey,
+                           const BSONObj &newShardingKey,
                            const DPS_TRANS_ID &transID,
                            const DPS_LSN_OFFSET &preTransLsn,
                            const DPS_LSN_OFFSET &relatedLSN,
@@ -241,6 +243,32 @@ namespace engine
          goto error ;
       }
 
+      if ( !oldShardingKey.isEmpty() && !newShardingKey.isEmpty() )
+      {
+         rc = record.push( DPS_LOG_UPDATE_OLDSHARDINGKEY,
+                           oldShardingKey.objsize(),
+                           oldShardingKey.objdata() ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "Failed to push oldShardingKey to record, rc: %d", rc ) ;
+            goto error ;
+         }
+
+         if ( newShardingKey.woCompare( oldShardingKey ) != 0 )
+         {
+            SDB_ASSERT( !oldShardingKey.isEmpty(), "must have old sharding key" ) ;
+
+            rc = record.push( DPS_LOG_UPDATE_NEWSHARDINGKEY,
+                              newShardingKey.objsize(),
+                              newShardingKey.objdata() ) ;
+            if ( SDB_OK != rc )
+            {
+               PD_LOG( PDERROR, "Failed to push newShardingKey to record, rc: %d", rc ) ;
+               goto error ;
+            }
+         }
+      }
+
       header._length = record.alignedLen() ;
 
    done:
@@ -256,7 +284,9 @@ namespace engine
                            BSONObj &oldMatch,
                            BSONObj &oldObj,
                            BSONObj &newMatch,
-                           BSONObj &newObj )
+                           BSONObj &newObj,
+                           BSONObj *oldShardingKey,
+                           BSONObj *newShardingKey )
    {
       PD_TRACE_ENTRY( SDB__DPS_RECORD2UPDATE ) ;
       SDB_ASSERT( NULL != logRecord, "Record can't be NULL" ) ;
@@ -317,6 +347,39 @@ namespace engine
       oldObj = BSONObj( itrOldObj.value() ) ;
       newMatch = BSONObj( itrNewM.value() ) ;
       newObj = BSONObj( itrNewObj.value() ) ;
+      }
+
+      if ( NULL != oldShardingKey )
+      {
+         dpsLogRecord::iterator itrOldSK ;
+         itrOldSK = record.find( DPS_LOG_UPDATE_OLDSHARDINGKEY ) ;
+         if ( itrOldSK.valid() )
+         {
+            *oldShardingKey = BSONObj( itrOldSK.value() ) ;
+         }
+      }
+
+      if ( NULL != newShardingKey )
+      {
+         dpsLogRecord::iterator itrNewSK ;
+         itrNewSK = record.find( DPS_LOG_UPDATE_NEWSHARDINGKEY ) ;
+         if ( itrNewSK.valid() )
+         {
+            *newShardingKey = BSONObj( itrNewSK.value() ) ;
+         }
+         else if ( NULL != oldShardingKey )
+         {
+            *newShardingKey = *oldShardingKey ;
+         }
+         else
+         {
+            dpsLogRecord::iterator itrOldSK ;
+            itrOldSK = record.find( DPS_LOG_UPDATE_OLDSHARDINGKEY ) ;
+            if ( itrOldSK.valid() )
+            {
+               *newShardingKey = BSONObj( itrOldSK.value() ) ;
+            }
+         }
       }
 
    done:
@@ -416,10 +479,94 @@ namespace engine
       goto done ;
    }
 
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DPS_POP2RECORD, "dpsPop2Record" )
+   INT32 dpsPop2Record( const CHAR *fullName, const dmsRecordID &firstRID,
+                        const INT64 &logicalID, const INT8 &direction,
+                        dpsLogRecord &record )
+   {
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY( SDB__DPS_POP2RECORD ) ;
+      dpsLogRecordHeader &header = record.head() ;
+      header._type = LOG_TYPE_DATA_POP ;
+
+      rc = record.push( DPS_LOG_PUBLIC_FULLNAME,
+                        ossStrlen( fullName ) + 1,
+                        fullName ) ;
+      PD_RC_CHECK( rc, PDERROR,
+                   "Failed to push fullname to record, rc: %d", rc ) ;
+
+      rc = record.push( DPS_LOG_POP_LID, sizeof( logicalID ),
+                        (CHAR *)( &logicalID ) ) ;
+      PD_RC_CHECK( rc, PDERROR,
+                   "Failed to push LogicalID object to record, rc: %d", rc ) ;
+
+      rc = record.push( DPS_LOG_POP_DIRECTION, sizeof( direction ),
+                        (CHAR *)( &direction ) ) ;
+      PD_RC_CHECK( rc, PDERROR,
+                   "Failed to push Direction object to record, rc: %d", rc ) ;
+
+      header._length = record.alignedLen() ;
+
+   done:
+      PD_TRACE_EXITRC( SDB__DPS_POP2RECORD, rc ) ;
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DPS_RECORD2POP, "dpsRecord2Pop" )
+   INT32 dpsRecord2Pop( const CHAR *logRecord, const CHAR **fullName,
+                        INT64 &logicalID, INT8 &direction )
+   {
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY( SDB__DPS_RECORD2POP ) ;
+      dpsLogRecord record ;
+      rc = record.load( logRecord ) ;
+      PD_RC_CHECK( rc, PDERROR, "Failed to load pop record, rc: %d", rc ) ;
+
+      {
+         dpsLogRecord::iterator itrName, itrLID, itrDirection ;
+         itrName = record.find( DPS_LOG_PUBLIC_FULLNAME ) ;
+         if ( !itrName.valid() )
+         {
+            PD_LOG( PDERROR, "Failed to find tag fullname in record" ) ;
+            rc = SDB_SYS ;
+            goto error ;
+         }
+
+         itrLID = record.find( DPS_LOG_POP_LID ) ;
+         if ( !itrLID.valid() )
+         {
+            PD_LOG( PDERROR, "Failed to find tag LogicalID in record" ) ;
+            rc = SDB_SYS ;
+            goto error ;
+         }
+
+         itrDirection = record.find( DPS_LOG_POP_DIRECTION ) ;
+         if ( !itrDirection.valid() )
+         {
+            PD_LOG( PDERROR, "Failed to find tag Direction in record" ) ;
+            rc = SDB_SYS ;
+            goto error ;
+         }
+
+         *fullName = itrName.value() ;
+         logicalID = *(INT64 *)( itrLID.value() ) ;
+         direction = *(INT8 *)( itrDirection.value() ) ;
+      }
+
+   done:
+      PD_TRACE_EXITRC( SDB__DPS_RECORD2POP, rc ) ;
+      return rc ;
+   error:
+      goto done ;
+   }
+
    // PD_TRACE_DECLARE_FUNCTION ( SDB__DPS_CSCRT2RECORD, "dpsCSCrt2Record" )
    INT32 dpsCSCrt2Record( const CHAR *csName,
                           const INT32 &pageSize,
                           const INT32 &lobPageSize,
+                          const INT32 &type,
                           dpsLogRecord &record )
    {
       PD_TRACE_ENTRY( SDB__DPS_CSCRT2RECORD ) ;
@@ -455,6 +602,15 @@ namespace engine
          goto error ;
       }
 
+      rc = record.push( DPS_LOG_CSCRT_CSTYPE,
+                        sizeof( type ),
+                        (CHAR *)( &type ) ) ;
+      if ( SDB_OK != rc )
+      {
+         PD_LOG( PDERROR, "Failed to push cs type to record, rc: %d", rc ) ;
+         goto error ;
+      }
+
       header._length = record.alignedLen() ;
    done:
       PD_TRACE_EXITRC( SDB__DPS_CSCRT2RECORD, rc ) ;
@@ -467,7 +623,8 @@ namespace engine
    INT32 dpsRecord2CSCrt( const CHAR *logRecord,
                           const CHAR **csName,
                           INT32 &pageSize,
-                          INT32 &lobPageSize )
+                          INT32 &lobPageSize,
+                          INT32 &type )
    {
       PD_TRACE_ENTRY( SDB__DPS_RECORD2CSCRT ) ;
       INT32 rc = SDB_OK ;
@@ -481,7 +638,7 @@ namespace engine
       }
 
       {
-      dpsLogRecord::iterator itrCsName, itrPageSize, itrLobPageSz ;
+      dpsLogRecord::iterator itrCsName, itrPageSize, itrLobPageSz, itrType ;
       itrCsName = record.find( DPS_LOG_CSCRT_CSNAME ) ;
       if ( !itrCsName.valid() )
       {
@@ -511,6 +668,18 @@ namespace engine
       else
       {
          lobPageSize = *(( INT32 *)itrLobPageSz.value()) ;
+      }
+
+      itrType = record.find( DPS_LOG_CSCRT_CSTYPE ) ;
+      if ( !itrType.valid() )
+      {
+         PD_LOG( PDWARNING, "Failed to find tag CS type in record, use normal "
+                 "type(0)" ) ;
+         type = 0 ;
+      }
+      else
+      {
+         type = *( ( INT32 *)itrType.value() ) ;
       }
       }
    done:
@@ -632,7 +801,7 @@ namespace engine
       rc = record.load( logRecord ) ;
       if ( SDB_OK != rc )
       {
-         PD_LOG( PDERROR, "Failed to load cs del record, rc: %d", rc ) ;
+         PD_LOG( PDERROR, "Failed to load cs rename record, rc: %d", rc ) ;
          goto error ;
       }
 
@@ -666,7 +835,8 @@ namespace engine
    // PD_TRACE_DECLARE_FUNCTION ( SDB__DPS_CLCRT2RECORD, "dpsCLCrt2Record" )
    INT32 dpsCLCrt2Record( const CHAR *fullName,
                           const UINT32 &attribute,
-                          UINT8 &compressorType,
+                          const UINT8 &compressorType,
+                          const BSONObj *extOptions,
                           dpsLogRecord &record )
    {
       PD_TRACE_ENTRY( SDB__DPS_CLCRT2RECORD ) ;
@@ -693,8 +863,29 @@ namespace engine
          goto error ;
       }
 
-      record.push( DPS_LOG_CLCRT_COMPRESS_TYPE, sizeof( UINT8 ),
-                   (const CHAR *)(&compressorType)) ;
+      rc = record.push( DPS_LOG_CLCRT_COMPRESS_TYPE, sizeof( compressorType ),
+                        (const CHAR *)(&compressorType)) ;
+      if ( SDB_OK != rc )
+      {
+         PD_LOG( PDERROR,
+                 "Failed to push compression type to record, rc: %d", rc ) ;
+         goto error ;
+      }
+
+      if ( extOptions )
+      {
+         if ( !extOptions->valid() )
+         {
+            PD_LOG( PDERROR, "Extend option object is invalid" ) ;
+            rc = SDB_SYS ;
+            goto error ;
+         }
+
+         rc = record.push( DPS_LOG_CLCRT_EXT_OPTIONS, extOptions->objsize(),
+                           extOptions->objdata() ) ;
+         PD_RC_CHECK( rc, PDERROR, "Failed to push extend options to record, "
+                      "rc: %d", rc ) ;
+      }
 
       header._length = record.alignedLen() ;
    done:
@@ -708,7 +899,8 @@ namespace engine
    INT32 dpsRecord2CLCrt( const CHAR *logRecord,
                           const CHAR **fullName,
                           UINT32 &attribute,
-                          UINT8 &compressorType )
+                          UINT8 &compressorType,
+                          BSONObj &extOptions )
    {
       PD_TRACE_ENTRY( SDB__DPS_RECORD2CLCRT ) ;
       INT32 rc = SDB_OK ;
@@ -718,32 +910,48 @@ namespace engine
       rc = record.load( logRecord ) ;
       if ( SDB_OK != rc )
       {
-         PD_LOG( PDERROR, "Failed to load delete record, rc: %d", rc ) ;
+         PD_LOG( PDERROR, "Failed to load cl create record, rc: %d", rc ) ;
          goto error ;
       }
 
       {
-      dpsLogRecord::iterator itrFullName, itrAttri, itrCompressorType ;
-      itrFullName = record.find( DPS_LOG_PUBLIC_FULLNAME ) ;
-      if ( !itrFullName.valid() )
+      dpsLogRecord::iterator recordItr ;
+      recordItr = record.find( DPS_LOG_PUBLIC_FULLNAME ) ;
+      if ( !recordItr.valid() )
       {
          PD_LOG( PDERROR, "failed to find tag fullname in record" ) ;
          rc = SDB_SYS ;
          goto error ;
       }
 
-      *fullName = itrFullName.value() ;
+      *fullName = recordItr.value() ;
 
-      itrAttri = record.find( DPS_LOG_CLCRT_ATTRIBUTE ) ;
-      if ( itrAttri.valid() )
+      recordItr = record.find( DPS_LOG_CLCRT_ATTRIBUTE ) ;
+      if ( recordItr.valid() )
       {
-         attribute = *((UINT32 *)itrAttri.value() ) ;
+         attribute = *((UINT32 *)recordItr.value() ) ;
       }
 
-      itrCompressorType = record.find( DPS_LOG_CLCRT_COMPRESS_TYPE ) ;
-      if ( itrCompressorType.valid() )
+      recordItr = record.find( DPS_LOG_CLCRT_COMPRESS_TYPE ) ;
+      if ( recordItr.valid() )
       {
-         compressorType = *((UINT8 *)itrCompressorType.value());
+         compressorType = *((UINT8 *)recordItr.value());
+      }
+
+      recordItr = record.find( DPS_LOG_CLCRT_EXT_OPTIONS ) ;
+      if ( recordItr.valid() )
+      {
+         try
+         {
+            extOptions = BSONObj( recordItr.value() ) ;
+         }
+         catch ( std::exception &e )
+         {
+            PD_LOG( PDERROR, "Exception occurred when fetching option "
+                    "object: %s", e.what() ) ;
+            rc = SDB_SYS ;
+            goto error ;
+         }
       }
 
       }
@@ -1250,26 +1458,55 @@ namespace engine
 
 */
    // PD_TRACE_DECLARE_FUNCTION( SDB__DPS_INVALIDCATA2RECORD, "dpsInvalidCata2Record" )
-   INT32 dpsInvalidCata2Record( const CHAR * clFullName,
+   INT32 dpsInvalidCata2Record( const UINT8 &type,
+                                const CHAR * clFullName,
+                                const CHAR * ixName,
                                 dpsLogRecord &record )
    {
-      PD_TRACE_ENTRY( SDB__DPS_INVALIDCATA2RECORD ) ;
       INT32 rc = SDB_OK ;
+
+      PD_TRACE_ENTRY( SDB__DPS_INVALIDCATA2RECORD ) ;
+
       SDB_ASSERT( NULL != clFullName, "Collection name can't be NULL" ) ;
+
       dpsLogRecordHeader &header = record.head() ;
       header._type = LOG_TYPE_INVALIDATE_CATA ;
 
-      rc = record.push( DPS_LOG_PUBLIC_FULLNAME,
-                        ossStrlen( clFullName ) + 1,
-                        clFullName ) ;
-
+      rc = record.push( DPS_LOG_INVALIDCATA_TYPE,
+                        sizeof( type ),
+                        (CHAR *)( &type ) ) ;
       if ( SDB_OK != rc )
       {
-         PD_LOG( PDERROR, "Failed to push fullname to record, rc: %d",rc ) ;
+         PD_LOG( PDERROR, "Failed to push type to record, rc: %d",rc ) ;
          goto error ;
       }
 
+      if ( clFullName )
+      {
+         rc = record.push( DPS_LOG_PUBLIC_FULLNAME,
+                           ossStrlen( clFullName ) + 1,
+                           clFullName ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "Failed to push fullname to record, rc: %d",rc ) ;
+            goto error ;
+         }
+      }
+
+      if ( ixName )
+      {
+         rc = record.push( DPS_LOG_INVALIDCATA_IXNAME,
+                           ossStrlen( ixName ) + 1,
+                           ixName ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "Failed to push ixname to record, rc: %d",rc ) ;
+            goto error ;
+         }
+      }
+
       header._length = record.alignedLen() ;
+
    done:
       PD_TRACE_EXITRC( SDB__DPS_INVALIDCATA2RECORD, rc ) ;
       return rc ;
@@ -1279,12 +1516,15 @@ namespace engine
 
    // PD_TRACE_DECLARE_FUNCTION( SDB__DPS_RECORD2INVALIDCATA, "dpsRecord2InvalidCata")
    INT32 dpsRecord2InvalidCata( const CHAR *logRecord,
-                                const CHAR **clFullName )
+                                UINT8 &type,
+                                const CHAR **clFullName,
+                                const CHAR **ixName )
    {
       PD_TRACE_ENTRY( SDB__DPS_RECORD2INVALIDCATA ) ;
       INT32 rc = SDB_OK ;
       SDB_ASSERT( NULL != logRecord, "Record can't be NULL" ) ;
       dpsLogRecord record ;
+
       rc = record.load( logRecord ) ;
       if ( SDB_OK != rc )
       {
@@ -1293,17 +1533,43 @@ namespace engine
       }
 
       {
-      dpsLogRecord::iterator itrFullName =
-                  record.find( DPS_LOG_PUBLIC_FULLNAME ) ;
-      if ( !itrFullName.valid() )
-      {
-         PD_LOG( PDERROR, "Failed to find tag fullname in record" ) ;
-         rc = SDB_SYS ;
-         goto error ;
+         dpsLogRecord::iterator itrType =
+                     record.find( DPS_LOG_INVALIDCATA_TYPE ) ;
+         if ( itrType.valid() )
+         {
+            type = *( ( UINT8 * )( itrType.value() ) ) ;
+         }
+         else
+         {
+            type = DPS_LOG_INVALIDCATA_TYPE_CATA ;
+         }
       }
 
-      *clFullName = itrFullName.value() ;
+      {
+         dpsLogRecord::iterator itrFullName =
+                     record.find( DPS_LOG_PUBLIC_FULLNAME ) ;
+         if ( !itrFullName.valid() )
+         {
+            PD_LOG( PDERROR, "Failed to find tag fullname in record" ) ;
+            rc = SDB_SYS ;
+            goto error ;
+         }
+         *clFullName = itrFullName.value() ;
       }
+
+      {
+         dpsLogRecord::iterator itrIXName =
+                     record.find( DPS_LOG_INVALIDCATA_IXNAME ) ;
+         if ( itrIXName.valid() )
+         {
+            *ixName = itrIXName.value() ;
+         }
+         else
+         {
+            *ixName = NULL ;
+         }
+      }
+
    done:
       PD_TRACE_EXITRC( SDB__DPS_RECORD2INVALIDCATA, rc ) ;
       return rc ;
@@ -1319,6 +1585,7 @@ namespace engine
                          const UINT32 &hash,
                          const UINT32 &len,
                          const CHAR *data,
+                         const UINT32 &pageSize,
                          const DMS_LOB_PAGEID &pageID,
                          const DPS_TRANS_ID &transID,
                          const DPS_LSN_OFFSET &preTransLsn,
@@ -1401,6 +1668,15 @@ namespace engine
          goto error ;
       }
 
+      rc = record.push( DPS_LOG_LOB_PAGE_SIZE,
+                        sizeof( UINT32 ),
+                        ( const CHAR * )( &pageSize ) ) ;
+      if ( SDB_OK != rc )
+      {
+         PD_LOG( PDERROR, "failed to push page size to record, rc:%d", rc ) ;
+         goto error ;
+      }
+
       rc = dpsPushTran( transID, preTransLsn, relatedLSN, record ) ;
       if ( SDB_OK != rc )
       {
@@ -1425,7 +1701,8 @@ namespace engine
                          UINT32 &len,
                          UINT32 &hash,
                          const CHAR **data,
-                         DMS_LOB_PAGEID &pageID )
+                         DMS_LOB_PAGEID &pageID,
+                         UINT32* pageSize )
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY( SDB__DPS_RECORD2LOBW ) ;
@@ -1526,6 +1803,19 @@ namespace engine
       }
       pageID = *( ( DMS_LOB_PAGEID * )( itr.value() ) ) ;
       }
+
+      if ( NULL != pageSize )
+      {
+         dpsLogRecord::iterator itr = record.find( DPS_LOG_LOB_PAGE_SIZE ) ;
+         if ( !itr.valid() )
+         {
+            PD_LOG( PDERROR, "failed to find page size tag in record" ) ;
+            rc = SDB_SYS ;
+            goto error ;
+         }
+         *pageSize = *( ( UINT32 * )( itr.value() ) ) ;
+      }
+      
    done:
       PD_TRACE_EXITRC( SDB__DPS_RECORD2LOBW, rc ) ;
       return rc ;
@@ -1543,6 +1833,7 @@ namespace engine
                           const CHAR *data,
                           const UINT32 &oldLen,
                           const CHAR *oldData,
+                          const UINT32 &pageSize,
                           const DMS_LOB_PAGEID &pageID,
                           const DPS_TRANS_ID &transID,
                           const DPS_LSN_OFFSET &preTransLsn,
@@ -1643,6 +1934,15 @@ namespace engine
          goto error ;
       }
 
+      rc = record.push( DPS_LOG_LOB_PAGE_SIZE,
+                        sizeof ( UINT32 ),
+                        (const CHAR*)( &pageSize ) ) ;
+      if ( SDB_OK != rc )
+      {
+         PD_LOG( PDERROR, "failed to push page size to record, rc:%d", rc ) ;
+         goto error ;
+      }
+
       rc = dpsPushTran( transID, preTransLsn, relatedLSN, record ) ;
       if ( SDB_OK != rc )
       {
@@ -1669,7 +1969,8 @@ namespace engine
                          const CHAR **data,
                          UINT32 &oldLen,
                          const CHAR **oldData,
-                         DMS_LOB_PAGEID &pageID )
+                         DMS_LOB_PAGEID &pageID,
+                         UINT32* pageSize )
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY( SDB__DPS_RECORD2LOBU ) ;
@@ -1790,6 +2091,19 @@ namespace engine
       }
       pageID = *( ( DMS_LOB_PAGEID * )( itr.value() ) ) ;
       }
+
+      if ( NULL != pageSize )
+      {
+         dpsLogRecord::iterator itr = record.find( DPS_LOG_LOB_PAGE_SIZE ) ;
+         if ( !itr.valid() )
+         {
+            PD_LOG( PDERROR, "failed to find page size tag in record" ) ;
+            rc = SDB_SYS ;
+            goto error ;
+         }
+         *pageSize = *( ( UINT32 * )( itr.value() ) ) ;
+      }
+
    done:
       PD_TRACE_EXITRC( SDB__DPS_RECORD2LOBU, rc ) ;
       return rc ;
@@ -1805,6 +2119,7 @@ namespace engine
                           const UINT32 &hash,
                           const UINT32 &len,
                           const CHAR *data,
+                          const UINT32 &pageSize,
                           const DMS_LOB_PAGEID &page,
                           const DPS_TRANS_ID &transID,
                           const DPS_LSN_OFFSET &preTransLsn,
@@ -1887,6 +2202,15 @@ namespace engine
          goto error ;
       }
 
+      rc = record.push( DPS_LOG_LOB_PAGE_SIZE,
+                        sizeof( UINT32 ),
+                        ( const CHAR * )( &pageSize ) ) ;
+      if ( SDB_OK != rc )
+      {
+         PD_LOG( PDERROR, "failed to push page size to record, rc:%d", rc ) ;
+         goto error ;
+      }
+
       rc = dpsPushTran( transID, preTransLsn, relatedLSN, record ) ;
       if ( SDB_OK != rc )
       {
@@ -1911,7 +2235,8 @@ namespace engine
                           UINT32 &len,
                           UINT32 &hash,
                           const CHAR **data,
-                          DMS_LOB_PAGEID &pageID )
+                          DMS_LOB_PAGEID &pageID,
+                          UINT32* pageSize )
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY( SDB__DPS_RECORD2LOBRM ) ;
@@ -2010,6 +2335,19 @@ namespace engine
       }
       pageID = *( ( DMS_LOB_PAGEID * )( itr.value() ) ) ;
       }
+
+      if ( NULL != pageSize )
+      {
+         dpsLogRecord::iterator itr = record.find( DPS_LOG_LOB_PAGE_SIZE ) ;
+         if ( !itr.valid() )
+         {
+            PD_LOG( PDERROR, "failed to find page size tag in record" ) ;
+            rc = SDB_SYS ;
+            goto error ;
+         }
+         *pageSize = *( ( UINT32 * )( itr.value() ) ) ;
+      }
+
    done:
       PD_TRACE_EXITRC( SDB__DPS_RECORD2LOBRM, rc ) ;
       return rc ;
@@ -2072,5 +2410,6 @@ namespace engine
    error:
       goto done ;
    }
+
 }
 

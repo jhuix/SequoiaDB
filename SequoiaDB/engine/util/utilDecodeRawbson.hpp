@@ -63,6 +63,7 @@ private:
    BOOLEAN _includeRegex ;
    BOOLEAN _kickNull ;
    BOOLEAN _isStrict ;
+   
 public:
    std::vector<fieldResolve *> _vFields ;
 

@@ -5067,7 +5067,6 @@ namespace engine
          _sendErrorRes2Web( rc, _errorDetail ) ;
          goto error ;
       }
-#endif
 
 
       rc = configTool.readBuzTemplate( businessType, operationType,
@@ -11424,8 +11423,6 @@ namespace engine
          obVersion.append ( FIELD_NAME_RELEASE, release ) ;
          obVersion.append ( FIELD_NAME_BUILD, pBuild ) ;
          systemInfo.append ( FIELD_NAME_VERSION, obVersion.obj () ) ;
-         systemInfo.append ( FIELD_NAME_EDITION, "Enterprise" ) ;
-#endif // SDB_ENTERPRISE
       }
       catch ( std::exception &e )
       {

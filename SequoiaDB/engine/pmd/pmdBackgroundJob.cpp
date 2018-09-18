@@ -48,6 +48,7 @@ namespace engine
       pmdEDUMgr *pEDUMgr = pmdGetKRCB()->getEDUMgr() ;
       rtnBaseJob *job = (rtnBaseJob*)pData ;
       INT32 rc = SDB_OK ;
+      BOOLEAN reuseEDU = job->reuseEDU() ;
 
       PD_LOG( PDINFO, "Start a background job[%s]", job->name() ) ;
 
@@ -69,6 +70,10 @@ namespace engine
       job->attachOut () ;
 
       jobMgr->_removeJob ( cb->getID(), rc ) ;
+      if ( !reuseEDU )
+      {
+         pEDUMgr->forceUserEDU( cb->getID() ) ;
+      }
 
       PD_TRACE_EXITRC ( SDB_PMDBGJOBENTPNT, rc );
       return SDB_OK ;

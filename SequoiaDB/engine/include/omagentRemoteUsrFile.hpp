@@ -75,9 +75,9 @@ namespace engine
          INT32 doit( BSONObj &retObj ) ;
 
       private:
-         string _filename ;
-         UINT32 _location ;
-         UINT32 _size ;
+         UINT32 _FID ;
+         SINT64 _size ;
+         BOOLEAN _isBinary ;
    } ;
 
    /*
@@ -98,10 +98,52 @@ namespace engine
          INT32 doit( BSONObj &retObj ) ;
 
       private:
-         string _filename ;
-         UINT32 _location ;
-         UINT32 _size ;
-         string _content ;
+         UINT32 _FID ;
+         SINT32 _size ;
+         const CHAR* _content ;
+   } ;
+
+   /*
+      _remoteFileSeek define
+   */
+   class _remoteFileSeek : public _remoteExec
+   {
+      DECLARE_OACMD_AUTO_REGISTER()
+      public:
+         _remoteFileSeek() ;
+
+         ~_remoteFileSeek() ;
+
+         INT32 init( const CHAR * pInfomation ) ;
+
+         const CHAR *name() ;
+
+         INT32 doit( BSONObj &retObj ) ;
+
+      private:
+         UINT32 _FID ;
+         INT64  _seekSize ;
+   } ;
+
+   /*
+      _remoteFileClose define
+   */
+   class _remoteFileClose : public _remoteExec
+   {
+      DECLARE_OACMD_AUTO_REGISTER()
+      public:
+         _remoteFileClose() ;
+
+         ~_remoteFileClose() ;
+
+         INT32 init( const CHAR * pInfomation ) ;
+
+         const CHAR *name() ;
+
+         INT32 doit( BSONObj &retObj ) ;
+
+      private:
+         UINT32 _FID ;
    } ;
 
    /*
@@ -366,19 +408,55 @@ namespace engine
    } ;
 
    /*
-      _remoteFileGetContentSize define
+      _remoteFileGetSize define
    */
-   class _remoteFileGetContentSize : public _remoteExec
+   class _remoteFileGetSize : public _remoteExec
    {
       DECLARE_OACMD_AUTO_REGISTER()
       public:
-         _remoteFileGetContentSize() ;
+         _remoteFileGetSize() ;
 
-         ~_remoteFileGetContentSize() ;
+         ~_remoteFileGetSize() ;
 
          const CHAR *name() ;
 
          INT32 doit( BSONObj &retObj ) ;
+   } ;
+
+   /*
+      _remoteFileGetPermission define
+   */
+   class _remoteFileGetPermission : public _remoteExec
+   {
+      DECLARE_OACMD_AUTO_REGISTER()
+      public:
+         _remoteFileGetPermission() ;
+
+         ~_remoteFileGetPermission() ;
+
+         const CHAR *name() ;
+
+         INT32 doit( BSONObj &retObj ) ;
+   } ;
+
+   /*
+      _remoteFileReadLine define
+   */
+   class _remoteFileReadLine : public _remoteExec
+   {
+      DECLARE_OACMD_AUTO_REGISTER()
+      public:
+         _remoteFileReadLine() ;
+
+         ~_remoteFileReadLine() ;
+
+         INT32 init( const CHAR * pInfomation ) ;
+
+         const CHAR *name() ;
+
+         INT32 doit( BSONObj &retObj ) ;
+      private:
+         UINT32 _FID ;
    } ;
 }
 #endif

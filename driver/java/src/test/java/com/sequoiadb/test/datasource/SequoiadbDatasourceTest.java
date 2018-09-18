@@ -1,20 +1,17 @@
 package com.sequoiadb.test.datasource;
 
 import com.sequoiadb.base.*;
-import com.sequoiadb.datasource.ConnectStrategy;
-import com.sequoiadb.datasource.DatasourceOptions;
+import com.sequoiadb.datasource.*;
+import com.sequoiadb.datasource.SequoiadbDatasource;
 import com.sequoiadb.exception.BaseException;
-import com.sequoiadb.net.ConfigOptions;
 import com.sequoiadb.test.common.Constants;
 import com.sequoiadb.test.common.Helper;
 import org.bson.BSONObject;
 import org.bson.BasicBSONObject;
 import org.junit.*;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Random;
+import java.io.IOException;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.Assert.assertEquals;
@@ -22,21 +19,21 @@ import static org.junit.Assert.assertFalse;
 
 public class SequoiadbDatasourceTest {
     private SequoiadbDatasource ds;
-    private static List<String> coords = new ArrayList<String>();
+    List<String> coords = new ArrayList<String>();
 
     @BeforeClass
     public static void setConnBeforeClass() throws Exception {
-        coords.add(Constants.COOR_NODE_CONN);
-        coords.add("192.168.20.166:50000");
+
     }
 
     @AfterClass
     public static void DropConnAfterClass() throws Exception {
-
     }
 
     @Before
     public void setUp() throws Exception {
+        coords.add(Constants.COOR_NODE_CONN);
+
         try {
             ds = new SequoiadbDatasource(coords, "", "", null, (DatasourceOptions) null);
         } catch (Exception e) {
@@ -46,32 +43,20 @@ public class SequoiadbDatasourceTest {
 
     @After
     public void tearDown() throws Exception {
-        if (ds != null) {
-            ds.close();
-        }
-    }
-
-    @Test
-    public void getLastReleaseConnection() throws InterruptedException {
-        Sequoiadb sdb1 = ds.getConnection();
-        ds.releaseConnection(sdb1);
-        Sequoiadb sdb2 = ds.getConnection();
-        ds.releaseConnection(sdb2);
-        System.out.println("hashcode of sdb1 is: " + sdb1.hashCode());
-        System.out.println("hashcode of sdb2 is: " + sdb2.hashCode());
-        Assert.assertEquals(sdb1, sdb2);
+        ds.close();
     }
 
     @Test
     public void setSessionAttrInDatasource() {
         int threadCount = 50;
         int maxCount = 50;
+        ConfigOptions configOptions = new ConfigOptions();
         DatasourceOptions options = new DatasourceOptions();
         options.setMaxCount(maxCount);
         options.setPreferedInstance(Arrays.asList("M", "m", "1", "2", "012"));
         options.setPreferedInstanceMode("ordered");
         options.setSessionTimeout(100);
-        SequoiadbDatasource sds = new SequoiadbDatasource(coords, "", "", null, options);
+        SequoiadbDatasource sds = new SequoiadbDatasource(coords, "", "", configOptions, options);
         Sequoiadb[] dbs = new Sequoiadb[threadCount];
         for(int i = 0; i < threadCount; i++) {
             try {
@@ -130,8 +115,7 @@ public class SequoiadbDatasourceTest {
         DBCollection cl = cs.createCollection("ds", conf);
 
         BSONObject obj = new BasicBSONObject();
-        Integer i1 = 10;
-        obj.put("Id", i1);
+        obj.put("Id", 10);
         obj.put("Age", 30);
 
         cl.insert(obj);
@@ -155,8 +139,8 @@ public class SequoiadbDatasourceTest {
         Random random = new Random();
         SequoiadbDatasource _ds;
 
-        ReleaseResourceTestTask(SequoiadbDatasource myds) {
-            _ds = myds;
+        ReleaseResourceTestTask(SequoiadbDatasource ds) {
+            _ds = ds;
         }
 
         @Override
@@ -170,16 +154,8 @@ public class SequoiadbDatasourceTest {
                         Thread.sleep(random.nextInt(10 * 1000));
                     } catch (InterruptedException e) {
                     }
-                    DBCursor cursor = sdb.listCollections();
-                    while(cursor.hasNext()) {
-                        cursor.getNext();
-                    }
                 } catch (Exception e) {
                     e.printStackTrace();
-                    if (!(e instanceof BaseException)) {
-                        System.out.println(String.format("thread[%d] exit!", Thread.currentThread().getId()));
-                        System.exit(-1);
-                    }
                 }
                 if (_ds != null) {
                     int abnormalAddrCount = _ds.getAbnormalAddrNum();
@@ -188,11 +164,7 @@ public class SequoiadbDatasourceTest {
                             ", abnormal address count is: " + abnormalAddrCount);
                 }
                 if (sdb != null) {
-                    try {
-                        _ds.releaseConnection(sdb);
-                    }catch (BaseException e) {
-                        e.printStackTrace();
-                    }
+                    _ds.releaseConnection(sdb);
                 }
             }
         }
@@ -204,25 +176,18 @@ public class SequoiadbDatasourceTest {
         List<String> list = new ArrayList<String>();
         list.add("192.168.20.166:11810");
         list.add("192.168.20.166:50000");
-        list.add("192.168.20.166:40000");
-        list.add("192.168.20.166:30000");
         DatasourceOptions options = new DatasourceOptions();
-        options.setConnectStrategy(ConnectStrategy.BALANCE);
-        options.setMaxCount(100);
-        options.setDeltaIncCount(10);
+        options.setConnectStrategy(ConnectStrategy.SERIAL);
+        options.setMaxCount(40);
         options.setCheckInterval(30 * 1000);
-        options.setKeepAliveTimeout(60 * 1000);
         options.setMaxIdleCount(10);
         options.setValidateConnection(true);
-        ConfigOptions configOptions = new ConfigOptions();
-        configOptions.setSocketTimeout(10);
-        SequoiadbDatasource myds = new SequoiadbDatasource(list, "", "", null, options);
-        myds.disableDatasource();
+        SequoiadbDatasource ds = new SequoiadbDatasource(list, "", "", null, options);
 
-        int threadCount = 120;
+        int threadCount = 50;
         Thread[] threads = new Thread[threadCount];
         for (int i = 0; i < threadCount; i++) {
-            threads[i] = new Thread(new ReleaseResourceTestTask(myds), "" + i);
+            threads[i] = new Thread(new ReleaseResourceTestTask(ds), "" + i);
         }
         for (int i = 0; i < threadCount; i++) {
             threads[i].start();
@@ -237,20 +202,23 @@ public class SequoiadbDatasourceTest {
     }
 
     @Test
-    public void jira_2863_missing_a_connection() {
+    public void jira_2863_missing_a_connection() throws IOException {
         ArrayList<Sequoiadb> dbs = new ArrayList<Sequoiadb>();
-        DatasourceOptions options = null;
         int poolSize = 0;
         try {
-            options = (DatasourceOptions) ds.getDatasourceOptions();
+            DatasourceOptions options = new DatasourceOptions();
+            options.setConnectStrategy(ConnectStrategy.BALANCE);
+            SequoiadbDatasource datasource = new SequoiadbDatasource(coords, "", "", null, options);
+            options = (DatasourceOptions) datasource.getDatasourceOptions();
             poolSize = options.getMaxCount();
             for (int i = 0; i < poolSize; ++i) {
-                Sequoiadb db = ds.getConnection();
+                Sequoiadb db = datasource.getConnection();
                 Assert.assertEquals(db.isValid(), true);
                 dbs.add(db);
             }
-            for(Sequoiadb db : dbs) {
-                ds.releaseConnection(db);
+            System.out.println("go on.");
+            for (Sequoiadb db : dbs) {
+                datasource.releaseConnection(db);
             }
         } catch (InterruptedException e) {
             System.out.println("current get connection number " + dbs.size());
@@ -265,7 +233,7 @@ public class SequoiadbDatasourceTest {
 
     @Test
     @Ignore
-    public void  getConnectionsPerformanceTesting() throws InterruptedException {
+    public void getConnectionsPerformanceTesting() throws InterruptedException {
         String addr = Constants.COOR_NODE_CONN;
         int connNum = 500;
 

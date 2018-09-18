@@ -244,5 +244,11 @@ namespace engine
 
       return hashCode ;
    }
+
+   UINT32 _utilBSONHasher::hashCombine ( UINT32 x, UINT32 y )
+   {
+      HASH_COMBINE( x, y ) ;
+      return x ;
+   }
 }
 

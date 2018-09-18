@@ -36,8 +36,9 @@
 #include "omagent.hpp"
 #include "pmdAsyncSession.hpp"
 #include "netRouteAgent.hpp"
-
+#include <map>
 #include "../bson/bson.h"
+#include "sptUsrFileCommon.hpp"
 using namespace bson ;
 
 namespace engine
@@ -69,6 +70,9 @@ namespace engine
 
          virtual void    onTimer ( UINT64 timerID, UINT32 interval ) ;
 
+         virtual INT32 newFileObj( UINT32 &fID, sptUsrFileCommon** fileObj ) ;
+         virtual void releaseFileObj( UINT32 fID ) ;
+         virtual sptUsrFileCommon* getFileObjByID( UINT32 fID ) ;
       protected:
          virtual void   _onDetach () ;
          virtual void   _onAttach () ;
@@ -93,6 +97,9 @@ namespace engine
          INT32 _buildReplyHeader( MsgHeader *pMsg ) ;
 
       private:
+         void _clearFileObjMap() ;
+
+      private:
          MsgOpReply       _replyHeader ;
          BSONObj          _errorInfo ;
 
@@ -101,6 +108,8 @@ namespace engine
          ossTimestamp         _lastRecvTime ;
          CHAR                 _detailName[SESSION_NAME_LEN+1] ;
 
+         std::map< UINT32, sptUsrFileCommon* > _fileObjMap ;
+         UINT32                                _maxFileObjID ;
    } ;
 
    typedef _omaSession omaSession ;

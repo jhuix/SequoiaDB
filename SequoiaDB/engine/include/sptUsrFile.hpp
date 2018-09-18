@@ -35,7 +35,7 @@
 
 #include "sptApi.hpp"
 #include "ossIO.hpp"
-
+#include "sptUsrFileCommon.hpp"
 namespace engine
 {
    class _sptUsrFile : public SDBObject
@@ -57,9 +57,21 @@ namespace engine
                   _sptReturnVal &rval,
                   bson::BSONObj &detail ) ;
 
+      INT32 readLine( const _sptArguments &arg,
+                      _sptReturnVal &rval,
+                      bson::BSONObj &detail ) ;
+
       INT32 write( const _sptArguments &arg,
                    _sptReturnVal &rval,
                    bson::BSONObj &detail ) ;
+
+      INT32 readContent( const _sptArguments &arg,
+                         _sptReturnVal &rval,
+                         bson::BSONObj &detail ) ;
+
+      INT32 writeContent( const _sptArguments &arg,
+                          _sptReturnVal &rval,
+                          bson::BSONObj &detail ) ;
 
       INT32 seek( const _sptArguments &arg,
                   _sptReturnVal &rval,
@@ -157,17 +169,30 @@ namespace engine
                                 _sptReturnVal &rval,
                                 bson::BSONObj &detail ) ;
 
-   private:
-      static INT32 _extractListInfo( const CHAR* buf,
-                                     bson::BSONObjBuilder &builder,
-                                     BOOLEAN showDetail ) ;
+      static INT32 getPermission( const _sptArguments &arg,
+                                   _sptReturnVal &rval,
+                                   bson::BSONObj &detail ) ;
 
-      static INT32 _extractFindInfo( const CHAR* buf,
-                                     bson::BSONObjBuilder &builder ) ;
-
+      static INT32 getFileSize( const _sptArguments &arg,
+                                _sptReturnVal &rval,
+                                bson::BSONObj &detail ) ;
    private:
-      OSSFILE _file ;
-      string  _filename ;
+
+      INT32 _readContentLocal( const _sptArguments &arg,
+                               bson::BSONObj &detail,
+                               CHAR** buf, SINT64 &len ) ;
+
+      INT32 _readContentRemote( const _sptArguments &arg,
+                                bson::BSONObj &detail,
+                                CHAR** buf, SINT64 &len ) ;
+
+      INT32 _writeContentLocal( const _sptArguments &arg,
+                                bson::BSONObj &detail ) ;
+
+      INT32 _writeContentRemote( const _sptArguments &arg,
+                                 bson::BSONObj &detail ) ;
+   private:
+      _sptUsrFileCommon _fileCommon ;
    } ;
 }
 

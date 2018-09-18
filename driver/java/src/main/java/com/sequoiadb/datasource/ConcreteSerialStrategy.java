@@ -7,14 +7,16 @@ class ConcreteSerialStrategy extends AbstractStrategy {
     @Override
     public String getAddress() {
         String addr = null;
-        _addrLock.lock();
+        _lockForAddr.lock();
         try {
-            if (1 <= _addrs.size()) {
+            if (_addrs.size() >= 1) {
                 addr = _addrs.get((0x7fff & (_counter++)) % (_addrs.size()));
             }
         } finally {
-            _addrLock.unlock();
+            _lockForAddr.unlock();
         }
         return addr;
     }
+
+
 }

@@ -60,17 +60,18 @@ namespace engine
       virtual void clear() ;
 
    public:
-      INT32 load( const bson::BSONObj &obj ) ;
+      INT32 load( const bson::BSONObj &obj, BOOLEAN strictDataMode = FALSE ) ;
 
       INT32 select( const bson::BSONObj &obj,
                     bson::BSONObj &selected ) ;
 
    private:
-      INT32 _load( const bson::BSONElement &e ) ;
+      INT32 _load( const bson::BSONElement &e, BOOLEAN strictDataMode ) ;
 
       INT32 _loadObj( _mthSColumn *column,
                       const bson::BSONObj &obj,
-                      UINT32 &actionNum ) ;
+                      UINT32 &actionNum,
+                      BOOLEAN strictDataMode ) ;
 
       INT32 _loadDefaultValue( const bson::BSONElement &e ) ;
 

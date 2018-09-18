@@ -47,6 +47,7 @@ PHP_METHOD( SecuresDB, __construct )
       rc = SDB_INVALIDARG ;
       goto error ;
    }
+
    if( argsNum > 0 )
    {
       rc = driver_batch_connect( pAddress,

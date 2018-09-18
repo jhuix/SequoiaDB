@@ -51,7 +51,8 @@ namespace replay
       ~Filter();
       INT32 init(const BSONObj& filterObj);
       BOOLEAN isFiltered(engine::dpsArchiveFile& file);
-      BOOLEAN isFiltered(const engine::dpsLogRecord& log);
+      BOOLEAN isFiltered(engine::dpsLogFile& file);
+      BOOLEAN isFiltered(const engine::dpsLogRecord& log, BOOLEAN dump = FALSE);
       BOOLEAN lessThanMinLSN(DPS_LSN_OFFSET lsn);
       BOOLEAN largerThanMaxLSN(DPS_LSN_OFFSET lsn);
 

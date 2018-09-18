@@ -91,7 +91,7 @@ namespace replay
       return valid;
    }
 
-   static BOOLEAN isValidFilterOP(const string& op)
+   static BOOLEAN isValidOPName(const string& op)
    {
       static const CHAR* ops[] =
       {
@@ -99,6 +99,23 @@ namespace replay
          RPL_LOG_OP_UPDATE,
          RPL_LOG_OP_DELETE,
          RPL_LOG_OP_TRUNCATE_CL,
+         RPL_LOG_OP_CREATE_CS,
+         RPL_LOG_OP_DELETE_CS,
+         RPL_LOG_OP_CREATE_CL,
+         RPL_LOG_OP_DELETE_CL,
+         RPL_LOG_OP_CREATE_IX,
+         RPL_LOG_OP_DELETE_IX,
+         RPL_LOG_OP_LOB_WRITE,
+         RPL_LOG_OP_LOB_REMOVE,
+         RPL_LOG_OP_LOB_UPDATE,
+         RPL_LOG_OP_LOB_TRUNCATE,
+         RPL_LOG_OP_DUMMY,
+         RPL_LOG_OP_CL_RENAME,
+         RPL_LOG_OP_TS_COMMIT,
+         RPL_LOG_OP_TS_ROLLBACK,
+         RPL_LOG_OP_INVALIDATE_CATA,
+         RPL_LOG_OP_CS_RENAME,
+         RPL_LOG_OP_POP
       };
 
       const INT32 opNum = sizeof(ops) / sizeof(ops[0]);
@@ -125,6 +142,7 @@ namespace replay
       case LOG_TYPE_DATA_UPDATE:
       case LOG_TYPE_DATA_DELETE:
       case LOG_TYPE_CL_TRUNC:
+      case LOG_TYPE_DATA_POP:
          return TRUE;
       default:
          return FALSE;
@@ -193,6 +211,7 @@ namespace replay
          _op.insert(RPL_LOG_OP_UPDATE);
          _op.insert(RPL_LOG_OP_DELETE);
          _op.insert(RPL_LOG_OP_TRUNCATE_CL);
+         _op.insert(RPL_LOG_OP_POP);
       }
 
       value = DPS_INVALID_LSN_OFFSET;
@@ -246,13 +265,46 @@ namespace replay
       return FALSE;
    }
 
-   BOOLEAN Filter::isFiltered(const dpsLogRecord& log)
+   BOOLEAN Filter::isFiltered(engine::dpsLogFile& file)
+   {
+      string fileName = engine::ossFile::getFileName(file.path());
+
+      if (_isFileFiltered(fileName))
+      {
+         return TRUE;
+      }
+
+      if (DPS_INVALID_LSN_OFFSET != _minLSN)
+      {
+         dpsLogHeader& header = file.header();
+         if (DPS_INVALID_LOG_FILE_ID != header._logID)
+         {
+            DPS_LSN_OFFSET endLSN = header._fileSize * (header._logID + 1);
+            if (endLSN <= _minLSN)
+            {
+               return TRUE;
+            }
+         }
+      }
+
+      if (DPS_INVALID_LSN_OFFSET != _maxLSN)
+      {
+         if (file.getFirstLSN().compareOffset(_maxLSN) > 0)
+         {
+            return TRUE;
+         }
+      }
+
+      return FALSE;
+   }
+
+   BOOLEAN Filter::isFiltered(const dpsLogRecord& log, BOOLEAN dump)
    {
       const dpsLogRecordHeader& head = log.head();
       DPS_LSN_OFFSET lsn = head._lsn;
       string op;
 
-      if (!isValidFilterOP(head._type))
+      if (!dump && !isValidFilterOP(head._type))
       {
          return TRUE;
       }
@@ -473,7 +525,7 @@ namespace replay
       for (; it != ops.end(); it++)
       {
          string op = *it;
-         if (!isValidFilterOP(op))
+         if (!isValidOPName(op))
          {
             rc = SDB_INVALIDARG;
             PD_LOG(PDERROR, "Invalid filter op: %s", op.c_str());
@@ -506,7 +558,7 @@ namespace replay
       {
          rc = SDB_INVALIDARG;
          PD_LOG(PDERROR, "Filter[%s] should be Array", fieldName.c_str());
-         std::cerr << "Filter[" 
+         std::cerr << "Filter["
                    << fieldName
                    << "] should be Array"
                    << std::endl;
@@ -523,8 +575,8 @@ namespace replay
                rc = SDB_INVALIDARG;
                PD_LOG(PDERROR, "Element should be String in %s",
                       fieldName.c_str());
-               std::cerr << "Element should be String in " 
-                         << fieldName 
+               std::cerr << "Element should be String in "
+                         << fieldName
                          << std::endl;
                goto error;
             }
@@ -555,7 +607,7 @@ namespace replay
       {
          rc = SDB_INVALIDARG;
          PD_LOG(PDERROR, "Filter[%s] should be integer", fieldName.c_str());
-         std::cerr << "Filter[" 
+         std::cerr << "Filter["
                    << fieldName
                    << "] should be integer"
                    << std::endl;

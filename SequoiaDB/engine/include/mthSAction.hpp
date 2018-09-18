@@ -39,12 +39,14 @@
 #include "mthDef.hpp"
 #include "mthSActionFunc.hpp"
 #include "ossUtil.hpp"
-#include "mthMatchTree.hpp"
+#include "mthMatchRuntime.hpp"
 #include <boost/noncopyable.hpp>
 
 namespace engine
 {
-   class _mthSAction : public SDBObject, boost::noncopyable
+   class _mthSAction : public SDBObject,
+                       public boost::noncopyable,
+                       public _mthMatchTreeHolder
    {
    public:
       _mthSAction() ;
@@ -92,6 +94,17 @@ namespace engine
          return _attribute ;
       }
 
+      OSS_INLINE void setStrictDataMode( BOOLEAN strictDataMode )
+      {
+         _strictDataMode = strictDataMode ;
+         return ;
+      }
+
+      OSS_INLINE BOOLEAN getStrictDataMode() const
+      {
+         return _strictDataMode ;
+      }
+
       OSS_INLINE const bson::BSONObj &getObj()const
       {
          return _obj ;
@@ -119,7 +132,7 @@ namespace engine
          _value = bson::BSONElement() ;
          _name = NULL ;
          _attribute = MTH_S_ATTR_NONE ;
-         SAFE_OSS_DELETE( _matcher ) ;
+         deleteMatchTree() ;
          return ;
       }
 
@@ -128,16 +141,6 @@ namespace engine
          return !MTH_ATTR_IS_VALID( _attribute ) ;
       }
 
-      INT32 createMatcher () ;
-
-      OSS_INLINE _mthMatchTree * getMatcher()
-      {
-         if ( NULL == _matcher )
-         {
-            _matcher = SDB_OSS_NEW _mthMatchTree() ;
-         }
-         return _matcher ;
-      }
    public:
       INT32 build( const CHAR *name,
                    const bson::BSONElement &e,
@@ -155,10 +158,9 @@ namespace engine
       bson::BSONElement _value ;
       const CHAR *_name ;
       MTH_S_ATTRIBUTE _attribute ;
+      BOOLEAN     _strictDataMode ;
 
       bson::BSONObj _obj ;
-      _mthMatchTree *_matcher ;
-
       bson::BSONObj _arg ;
    } ;
    typedef class _mthSAction mthSAction ;

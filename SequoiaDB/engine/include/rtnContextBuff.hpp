@@ -44,7 +44,6 @@
 #include "ossMem.hpp"
 #include "ossLatch.hpp"
 #include "ossRWMutex.hpp"
-#include "msg.h"
 #include "ossAtomic.hpp"
 #include "../bson/bsonobj.h"
 
@@ -137,6 +136,7 @@ namespace engine
    class _rtnContextBuf : public rtnObjBuff
    {
       friend class _rtnContextBase ;
+      friend class _rtnContextStoreBuf ;
 
       private:
          void  _reference( INT32 *pCounter, ossRWMutex *pMutex ) ;

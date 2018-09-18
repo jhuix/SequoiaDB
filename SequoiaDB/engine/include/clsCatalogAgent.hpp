@@ -47,6 +47,7 @@
 #include "../bson/ordering.h"
 #include "msgCatalogDef.h"
 #include "utilCompression.hpp"
+#include "utilSet.hpp"
 
 using namespace bson ;
 
@@ -95,24 +96,26 @@ namespace engine
    {
       public:
          _clsCatalogItem ( BOOLEAN saveName = TRUE,
-                           BOOLEAN isSubCl = FALSE ) ;
+                           BOOLEAN hasSubCl = FALSE ) ;
          ~_clsCatalogItem () ;
 
       public:
          UINT32    getID() const { return _ID ; }
          UINT32    getGroupID () const ;
-         const string &getGroupName() const { return _groupName ;}
          BSONObj&  getLowBound () ;
          BSONObj&  getUpBound () ;
 
          clsCataItemKey getLowBoundKey ( const Ordering* ordering ) ;
          clsCataItemKey getUpBoundKey ( const Ordering* ordering ) ;
 
-         INT32    updateItem ( const BSONObj &obj, BOOLEAN isSharding,
+         INT32    updateItem ( const BSONObj &obj,
+                               BOOLEAN isSharding,
                                BOOLEAN isHash ) ;
          BSONObj  toBson () ;
-         std::string getSubClName(){ return _subCLName; } ;
          BOOLEAN  isLast() const { return _isLast ; }
+
+         const string&  getGroupName() const { return _groupName ; }
+         const string&  getSubClName() const { return _subCLName ; }
 
       private:
          BSONObj           _lowBound ;
@@ -122,7 +125,7 @@ namespace engine
          BOOLEAN           _saveName ;
          string            _groupName ;
          string            _subCLName ;
-         BOOLEAN           _isSubCl ;
+         BOOLEAN           _hasSubCl ;
          UINT32            _ID ;
 
          BOOLEAN           _isLast ;
@@ -154,6 +157,9 @@ namespace engine
 
    class _clsShardingKeySite ;
 
+   /*
+      _clsCatalogSet define
+   */
    class _clsCatalogSet : public SDBObject
    {
       friend class _clsCatalogAgent ;
@@ -177,14 +183,14 @@ namespace engine
          bool              ensureShardingIndex() const { return _ensureShardingIndex ; }
          const CHAR        *name () const ;
          VEC_GROUP_ID      *getAllGroupID () ;
-         UINT32            getAllGroupID ( VEC_GROUP_ID &vecGroup ) ;
+         UINT32            getAllGroupID ( VEC_GROUP_ID &vecGroup ) const ;
          UINT32            groupCount () const ;
          Ordering*         getOrdering () ;
-         BSONObj&          getShardingKey () ;
-         BSONObj           OwnedShardingKey () ;
+         const BSONObj&    getShardingKey () const  ;
+         BSONObj           OwnedShardingKey () const ;
          BOOLEAN           isWholeRange () const ;
          BOOLEAN           isSharding () const ;
-         BOOLEAN           isIncludeShardingKey( const bson::BSONObj &record ) const;
+         BOOLEAN           isIncludeShardingKey( const BSONObj &record ) const;
 
          INT32             genKeyObj ( const BSONObj &obj, BSONObj &keyObj ) ;
          INT32             findItem ( const BSONObj & obj,
@@ -196,14 +202,16 @@ namespace engine
          INT32             findGroupIDS ( const BSONObj &matcher,
                                           VEC_GROUP_ID &vecGroup );
          INT32             findSubCLName ( const BSONObj &obj,
-                                           std::string &subCLName );
-         INT32             findSubCLNames( const bson::BSONObj &matcher,
-                                           std::vector< std::string > &subCLList,
+                                           string &subCLName ) ;
+         INT32             findSubCLNames( const BSONObj &matcher,
+                                           vector< string > &subCLList,
                                            CLS_SUBCL_SORT_TYPE sortType =
                                            SUBCL_SORT_BY_ID );
 
-         INT32             getGroupLowBound( UINT32 groupID, BSONObj &lowBound ) const;
-         INT32             getGroupUpBound( UINT32 groupID, BSONObj &upBound ) const;
+         INT32             getGroupLowBound( UINT32 groupID,
+                                             BSONObj &lowBound ) const;
+         INT32             getGroupUpBound( UINT32 groupID,
+                                            BSONObj &upBound ) const;
 
          INT32             updateCatSet ( const BSONObj & catSet,
                                           UINT32 groupID = 0 ) ;
@@ -219,18 +227,18 @@ namespace engine
          BOOLEAN           isHashSharding() const ;
          BOOLEAN           isRangeSharding() const ;
 
-         UINT32            getItemNum() ;
+         UINT32            getItemNum() const ;
          POSITION          getFirstItem() ;
          clsCatalogItem*   getNextItem( POSITION &pos ) ;
          UINT32            getAttribute() const { return _attribute ; }
 
-         BOOLEAN           isMainCL();
-         INT32             getSubCLList( std::vector<std::string> &subCLLst,
+         BOOLEAN           isMainCL() const ;
+         INT32             getSubCLList( vector< string > &subCLLst,
                                          CLS_SUBCL_SORT_TYPE sortType =
-                                         SUBCL_SORT_BY_ID );
-         BOOLEAN           isContainSubCL( const std::string &subCLName );
-         INT32             getSubCLCount () ;
-         std::string       getMainCLName();
+                                         SUBCL_SORT_BY_ID ) ;
+         BOOLEAN           isContainSubCL( const string &subCLName ) const ;
+         INT32             getSubCLCount () const ;
+         const string&     getMainCLName() const ;
          INT32             addSubCL ( const CHAR *subCLName,
                                       const BSONObj &lowBound,
                                       const BSONObj &upBound,
@@ -238,7 +246,7 @@ namespace engine
 
          INT32 delSubCL ( const CHAR *subCLName ) ;
 
-         INT32 getSubCLBounds ( const std::string &subCLName,
+         INT32 getSubCLBounds ( const string &subCLName,
                                 BSONObj &lowBound,
                                 BSONObj &upBound ) const ;
 
@@ -246,7 +254,9 @@ namespace engine
          UINT32 getShardingKeySiteID() const { return _skSiteID ; }
 
          UTIL_COMPRESSOR_TYPE getCompressType() const { return _compressType ; }
-
+         INT64 getMaxSize() const { return _maxSize ; }
+         INT64 getMaxRecNum() const { return _maxRecNum ; }
+         BOOLEAN getOverWrite() const { return _overwrite; }
       protected:
          _clsCatalogSet    *next () ;
          INT32             next ( _clsCatalogSet * next ) ;
@@ -311,7 +321,9 @@ namespace engine
          UINT32            _skSiteID ;
          _clsShardingKeySite *_pSite ;
          UTIL_COMPRESSOR_TYPE _compressType ;
-
+         INT64             _maxSize ;
+         INT64             _maxRecNum ;
+         BOOLEAN           _overwrite ;
    };
    typedef class _clsCatalogSet clsCatalogSet ;
 
@@ -336,9 +348,10 @@ namespace engine
          INT32   updateCatalog ( INT32 version, UINT32 groupID,
                                  const CHAR* objdata, UINT32 length,
                                  _clsCatalogSet **ppSet = NULL ) ;
-         INT32   clear ( const CHAR* name ) ;
+         INT32   clear ( const CHAR* name, CHAR * mainCL = NULL ) ;
          INT32   clearBySpaceName ( const CHAR* name,
-                                    vector< string > *pRelatedCLs = NULL ) ;
+                                    vector< string > *pRelatedCLs = NULL,
+                                    _utilSet< string > * pMainCLs = NULL ) ;
          INT32   clearAll () ;
 
          INT32   lock_r ( INT32 millisec = -1 ) ;
@@ -376,6 +389,9 @@ namespace engine
    } ;
    typedef _clsShardingKeySite clsShardingKeySite ;
 
+   /*
+      _clsGroupItem define
+    */
    typedef _netRouteNode clsNodeItem ;
 
    class _clsNodeMgrAgent ;

@@ -67,7 +67,7 @@ namespace engine
       UINT32 len = ossStrlen( name ) + 1 ; /// +1 for '\0'
       if ( len < MTH_SCOLUMN_STATIC_NAME_BUF_LEN )
       {
-         ossMemcpy( _staticName, name, len ) ;
+         ossStrcpy( _staticName, name ) ;
       }
       else
       {
@@ -79,7 +79,7 @@ namespace engine
             goto error ;
          }
 
-         ossMemcpy( _dynamicName, name, len ) ;
+         ossStrcpy( _dynamicName, name ) ;
          _name = _dynamicName ;
       }
    done:
@@ -115,11 +115,12 @@ namespace engine
          PD_LOG( PDERROR, "failed to add action:%d", rc ) ;
          goto error ;
       }
+
    done:
       PD_TRACE_EXITRC( SDB__MTHSCOLUMN_ADDACTION, rc ) ;
       return rc ;
    error:
-      goto done ;   
+      goto done ;
    }
 
    ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHSCOLUMN_CLEAR, "_mthSColumn::clear" )
@@ -161,7 +162,8 @@ namespace engine
       {
          PD_LOG( PDERROR, "failed to build column:%d", rc ) ;
          goto error ;
-      }            
+      }
+
    done:
       PD_TRACE_EXITRC( SDB__MTHSCOLUMN_BUILD, rc ) ;
       return rc ;
@@ -184,12 +186,16 @@ namespace engine
          if ( MTH_S_IS_LAST_ACTION( i ) )
          {
             rc = _actions[i]->build( _name, input, builder ) ;
-            if ( SDB_OK != rc )
+            if ( SDB_OK == rc )
+            {
+               goto done ;
+            }
+            else
             {
                PD_LOG( PDERROR, "failed to build column:%d", rc ) ;
                goto error ;
             }
-            goto done ;
+
          }
          else
          {
@@ -201,6 +207,7 @@ namespace engine
             }
             input = output ;
          }
+
       }
 
       if ( !_subColumns.empty() )
@@ -212,6 +219,7 @@ namespace engine
             goto error ;
          }
       }
+
    done:
       PD_TRACE_EXITRC( SDB__MTHSCOLUMN__BUILD, rc ) ;
       return rc ;
@@ -355,7 +363,7 @@ namespace engine
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "failed to copy array:%d", rc ) ;
-         goto error ;      
+         goto error ;
       }
 
       {
@@ -527,5 +535,7 @@ namespace engine
    error:
       goto done ;
    }
+
+
 }
 

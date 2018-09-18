@@ -37,13 +37,21 @@
 #include "rtn.hpp"
 #include "dmsLobDef.hpp"
 
+using namespace bson ;
+
 namespace engine
 {
+   class _rtnLobStream ;
+
+
+   /*
+      Note: The pStream will be takeover in cases both failed and succed
+   */
    INT32 rtnOpenLob( const BSONObj &lob,
                      SINT32 flags,
-                     BOOLEAN isLocal,
                      _pmdEDUCB *cb,
                      SDB_DPSCB *dpsCB,
+                     _rtnLobStream *pStream,
                      SINT16 w,
                      SINT64 &contextID,
                      rtnContextBuf &buffObj ) ;
@@ -52,6 +60,7 @@ namespace engine
                       pmdEDUCB *cb,
                       UINT32 len,
                       const CHAR *buf,
+                      INT64 lobOffset,
                       rtnContextBuf *errBuf = NULL ) ;
 
    INT32 rtnReadLob( SINT64 contextID,
@@ -62,9 +71,15 @@ namespace engine
                      UINT32 &read,
                      rtnContextBuf *errBuf = NULL ) ;
 
+   INT32 rtnLockLob( SINT64 contextID,
+                     pmdEDUCB *cb,
+                     INT64 offset,
+                     INT64 length,
+                     rtnContextBuf *errBuf = NULL ) ;
+
    INT32 rtnCloseLob( SINT64 contextID,
                       pmdEDUCB *cb,
-                      rtnContextBuf *errBuf = NULL ) ;
+                      rtnContextBuf *bufObj = NULL ) ;
 
    INT32 rtnRemoveLob( const BSONObj &lob,
                        INT32 flags,
@@ -72,12 +87,19 @@ namespace engine
                        _pmdEDUCB *cb,
                        SDB_DPSCB *dpsCB ) ;
 
+   INT32 rtnTruncateLob( const BSONObj &lob,
+                         INT32 flags,
+                         SINT16 w,
+                         _pmdEDUCB *cb,
+                         SDB_DPSCB *dpsCB ) ;
+
    INT32 rtnGetLobMetaData( SINT64 contextID,
                             pmdEDUCB *cb,
                             BSONObj &meta ) ;
 
    INT32 rtnCreateLob( const CHAR *fullName,
                        const bson::OID &oid,
+                       _dmsLobMeta &meta,
                        pmdEDUCB *cb,
                        SINT16 w,
                        SDB_DPSCB *dpsCB,
@@ -89,7 +111,8 @@ namespace engine
                             pmdEDUCB *cb,
                             dmsLobMeta &meta,
                             dmsStorageUnit *su = NULL,
-                            dmsMBContext *mbContext = NULL ) ;
+                            dmsMBContext *mbContext = NULL,
+                            BOOLEAN allowUncompleted = FALSE ) ;
 
    INT32 rtnWriteLob( const CHAR *fullName,
                       const bson::OID &oid,
@@ -102,6 +125,19 @@ namespace engine
                       SDB_DPSCB *dpsCB,
                       dmsStorageUnit *su = NULL,
                       dmsMBContext *mbContext = NULL ) ;
+
+   INT32 rtnWriteOrUpdateLob( const CHAR *fullName,
+                              const bson::OID &oid,
+                              UINT32 sequence,
+                              UINT32 offset,
+                              UINT32 len,
+                              const CHAR *data,
+                              pmdEDUCB *cb,
+                              SINT16 w,
+                              SDB_DPSCB *dpsCB,
+                              dmsStorageUnit *su = NULL,
+                              dmsMBContext *mbContext = NULL,
+                              BOOLEAN* hasUpdated = NULL ) ;
 
    INT32 rtnUpdateLob( const CHAR *fullName,
                        const bson::OID &oid,
@@ -152,7 +188,8 @@ namespace engine
                                    SDB_DPSCB *dpsCB,
                                    dmsLobMeta &meta,
                                    dmsStorageUnit *su = NULL,
-                                   dmsMBContext *mbContext = NULL ) ;
+                                   dmsMBContext *mbContext = NULL,
+                                   BOOLEAN allowUncompleted = FALSE ) ;
 
 
 }

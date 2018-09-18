@@ -664,7 +664,8 @@ typedef SQL_CONTAINER::const_iterator SQL_CON_ITR ;
                      >> dbattr
                      >> SQL_BLANK
                      >> set
-                     >> !( SQL_BLANK >> where ) ;
+                     >> !( SQL_BLANK >> where )
+                     >> !( SQL_BLANK >> hint ) ;
 
             del = no_node_d[as_lower_d[str_p("delete")]]
                   >> SQL_BLANK

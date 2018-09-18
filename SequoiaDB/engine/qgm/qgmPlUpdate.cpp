@@ -38,9 +38,11 @@
 #include "qgmPlUpdate.hpp"
 #include "qgmConditionNodeHelper.hpp"
 #include "pmd.hpp"
-#include "pmdCB.hpp"
+#include "dmsCB.hpp"
+#include "dpsLogWrapper.hpp"
+#include "coordCB.hpp"
 #include "rtn.hpp"
-#include "rtnCoordUpdate.hpp"
+#include "coordUpdateOperator.hpp"
 #include "msgMessage.hpp"
 #include "utilStr.hpp"
 #include "qgmUtil.hpp"
@@ -53,10 +55,12 @@ namespace engine
 {
    _qgmPlUpdate::_qgmPlUpdate( const _qgmDbAttr &collection,
                                const BSONObj &modifer,
-                               _qgmConditionNode *condition )
+                               _qgmConditionNode *condition,
+                               INT32 flag )
    :_qgmPlan( QGM_PLAN_TYPE_UPDATE, _qgmField() ),
     _collection( collection ),
-    _updater( modifer )
+    _updater( modifer ),
+    _flag( flag )
    {
       try
       {
@@ -91,31 +95,42 @@ namespace engine
       SDB_ROLE role = krcb->getDBRole() ;
       BSONObj hint ;
 
+      CHAR *pMsg = NULL ;
+      INT32 msgSize = 0 ;
+
       if ( SDB_ROLE_COORD == role )
       {
-         rtnCoordUpdate update ;
-         CHAR *msg = NULL ;
-         INT32 size = 0 ;
+         CoordCB *pCoord = krcb->getCoordCB() ;
+         coordUpdateOperator opr ;
          INT64 contextID = -1 ;
-         rc = msgBuildUpdateMsg( &msg, &size,
+         rtnContextBuf buff ;
+
+         rc = opr.init( pCoord->getResource(), eduCB ) ;
+         if ( rc )
+         {
+            PD_LOG( PDERROR, "Init operator[%s] failed, rc: %d",
+                    opr.getName(), rc ) ;
+            goto error ;
+         }
+         rc = msgBuildUpdateMsg( &pMsg, &msgSize,
                                  _collection.toString().c_str(),
-                                 0, 0,
+                                 _flag, 0,
                                  &_condition,
                                  &_updater,
-                                 &hint ) ;
+                                 &hint,
+                                 eduCB ) ;
 
-         if ( SDB_OK != rc )
+         if ( rc )
          {
-            SDB_OSS_FREE( msg ) ;
-            msg = NULL ;
+            PD_LOG( PDERROR, "Build message failed, rc: %d", rc ) ;
             goto error ;
          }
 
-         rc = update.execute( (MsgHeader*)msg, eduCB, contextID, NULL ) ;
-         SDB_OSS_FREE( msg ) ;
-         msg = NULL ;
-         if ( SDB_OK != rc )
+         rc = opr.execute( (MsgHeader*)pMsg, eduCB, contextID, &buff ) ;
+         if ( rc )
          {
+            PD_LOG( PDERROR, "Execute operator[%s] failed, rc: %d",
+                    opr.getName(), rc ) ;
             goto error ;
          }
       }
@@ -132,13 +147,17 @@ namespace engine
                          _condition,
                          _updater,
                          hint,
-                         0, eduCB, dmsCB, dpsCB ) ;
+                         _flag, eduCB, dmsCB, dpsCB ) ;
          if( SDB_OK != rc )
          {
             goto error ;
          }
       }
    done:
+      if ( pMsg )
+      {
+         msgReleaseBuffer( pMsg, eduCB ) ;
+      }
       PD_TRACE_EXITRC( SDB__QGMPLUPDATE__EXEC, rc ) ;
       return rc ;
    error:

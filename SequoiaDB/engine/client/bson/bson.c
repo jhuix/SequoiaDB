@@ -29,6 +29,7 @@
  */
 #include "ossFeat.h"
 #include "ossTypes.h"
+#include "oss.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -217,33 +218,35 @@ struct bson_machine_pid {
    unsigned short _pid ;
 } ;
 static struct bson_machine_pid bson_ourMachineAndPid ;
-int bson_oid_initialized = 0 ;
 #pragma pack()
+
+static void _initOid( void )
+{
+    unsigned long long n = 0 ;
+    unsigned short pid = 0 ;
+    srand ( (unsigned int)time(NULL) ) ;
+#if defined (_WIN32)
+    {
+       unsigned int a=0, b=0 ;
+       pid = (unsigned short) GetCurrentProcessId () ;
+       rand_s ( &a ) ;
+       rand_s ( &b ) ;
+       n = (((unsigned long long)a)<<32) | b ;
+    }
+#elif defined (__linux__) || defined (_AIX)
+    pid = (unsigned short) getpid () ;
+    n = (((unsigned long long)random())<<32) | random() ;
+#endif
+    memcpy ( &bson_ourMachineAndPid, &n, sizeof(struct bson_machine_pid) ) ;
+    bson_ourMachineAndPid._pid = pid ;
+}
+
 SDB_EXPORT void bson_oid_gen( bson_oid_t *oid ) {
     static int incr = 0;
     int i;
     int t = time( NULL );
-    if ( !bson_oid_initialized )
-    {
-       unsigned long long n = 0 ;
-       unsigned short pid = 0 ;
-       bson_oid_initialized = 1 ;
-       srand ( (unsigned int)time(NULL) ) ;
-#if defined (_WIN32)
-       {
-          unsigned int a=0, b=0 ;
-          pid = (unsigned short) GetCurrentProcessId () ;
-          rand_s ( &a ) ;
-          rand_s ( &b ) ;
-          n = (((unsigned long long)a)<<32) | b ;
-       }
-#elif defined (__linux__) || defined (_AIX)
-       pid = (unsigned short) getpid () ;
-       n = (((unsigned long long)random())<<32) | random() ;
-#endif
-       memcpy ( &bson_ourMachineAndPid, &n, sizeof(struct bson_machine_pid) ) ;
-       bson_ourMachineAndPid._pid = pid ;
-    }
+    static ossOnce initOnce = OSS_ONCE_INIT ;
+    ossOnceRun( &initOnce, _initOid );
     if( oid_inc_func )
         i = oid_inc_func();
 #if defined(_WIN32)
@@ -338,7 +341,7 @@ static int strlen_a ( const char *data )
          ++len ;
       }
       ++len ;
-      ++data ;  
+      ++data ;
    }
    return len ;
 }
@@ -416,6 +419,8 @@ static void bson_sprint_raw_concat ( char **pbuf, int *left, const char *data, i
     *pbuf += tempsize ;
 }
 
+/* Comment unused function to clean compile warning. If you want to use it, just
+ * remove this comment.
 static void bson_sprint_hex_concat ( char **pbuf, int *left, const char *data, unsigned int size )
 {
    unsigned int tempsize = size * 2 ;
@@ -428,6 +433,7 @@ static void bson_sprint_hex_concat ( char **pbuf, int *left, const char *data, u
       tempsize -= 2 ;
    }
 }
+*/
 
 SDB_EXPORT int bson_sprint_iterator ( char **pbuf, int *left, bson_iterator *i,
                                       char delChar )
@@ -507,7 +513,7 @@ SDB_EXPORT int bson_sprint_iterator ( char **pbuf, int *left, bson_iterator *i,
          struct tm psr;
          LocalTime ( &timer, &psr ) ;
          if ( (psr.tm_year + 1900) >= 0 && (psr.tm_year + 1900) <= 9999 )
-         {         
+         {
             sprintf ( temp, "{ \"$date\": \"%04d-%02d-%02d\" }", psr.tm_year + 1900, psr.tm_mon + 1, psr.tm_mday ) ;
          }
          else
@@ -650,7 +656,7 @@ SDB_EXPORT int bson_sprint_iterator ( char **pbuf, int *left, bson_iterator *i,
          int tmpRC   = 0 ;
 
          bson_iterator_decimal( i, &decimal ) ;
-         decimal_to_jsonstr_len( decimal.sign, decimal.weight, decimal.dscale, 
+         decimal_to_jsonstr_len( decimal.sign, decimal.weight, decimal.dscale,
                                  decimal.typemod, &tmpSize ) ;
 
          temp = (char *)malloc( tmpSize ) ;
@@ -704,6 +710,24 @@ SDB_EXPORT int bson_sprint_iterator ( char **pbuf, int *left, bson_iterator *i,
             return  0 ;
          CHECK_LEFT ( left )
          break;
+      }
+      case BSON_DBREF:
+      {
+         char oidhex[25] ;
+         bson_oid_to_string( bson_iterator_dbref_oid( i ), oidhex ) ;
+
+         bson_sprint_raw_concat ( pbuf, left, "{ \"$db\" : \"", 0 ) ;
+         CHECK_LEFT ( left )
+         bson_sprint_raw_concat ( pbuf, left, bson_iterator_dbref( i ), 1 ) ;
+         CHECK_LEFT ( left )
+         bson_sprint_raw_concat ( pbuf, left, "\", \"$id\" : \"", 0 ) ;
+         CHECK_LEFT ( left )
+         bson_sprint_raw_concat ( pbuf, left, oidhex, 0 ) ;
+         CHECK_LEFT ( left )
+         bson_sprint_raw_concat ( pbuf, left, "\" }", 0 ) ;
+         CHECK_LEFT ( left )
+
+         break ;
       }
       default:
          return 0 ;
@@ -822,8 +846,9 @@ SDB_EXPORT int bson_sprint_length_iterator ( bson_iterator *i )
       total += 5 ;
       break ;
    case BSON_DATE :
-      /* { "$date": "YYYY-MM-DD" } */
-      total += 26 ;
+      /* { "$date": "YYYY-MM-DD" } or */
+      /* { "$date": +/-number } +/-number max length 20 */
+      total += 34 ;
       break ;
    case BSON_BINDATA :
       /* { "$binary" : "<bin data>", "$type" : "<type>" } */
@@ -853,7 +878,7 @@ SDB_EXPORT int bson_sprint_length_iterator ( bson_iterator *i )
       {
          total += 32 ;
       }
-      else 
+      else
       {
          total += 64 ;
       }
@@ -878,6 +903,12 @@ SDB_EXPORT int bson_sprint_length_iterator ( bson_iterator *i )
       int len = bson_sprint_length_raw ( bson_iterator_value ( i ), 0 ) ;
       if ( 0 == len ) return 0 ;
       total += len ;
+      break ;
+   }
+   case BSON_DBREF :
+   {
+      /* { "$db" : "xxxx", "$id" : "<24-digits oid>" } */
+      total += ( 64 + strlen ( bson_iterator_dbref ( i ) ) * 2 ) ;
       break ;
    }
    default :
@@ -1279,7 +1310,7 @@ SDB_EXPORT double bson_iterator_double( const bson_iterator *i ) {
     }
 }
 
-SDB_EXPORT int bson_iterator_decimal_weight( const bson_iterator *i, 
+SDB_EXPORT int bson_iterator_decimal_weight( const bson_iterator *i,
                                              int *weight )
 {
    const char *value = NULL ;
@@ -1301,7 +1332,7 @@ SDB_EXPORT int bson_iterator_decimal_weight( const bson_iterator *i,
    return BSON_OK ;
 }
 
-SDB_EXPORT int bson_iterator_decimal_size( const bson_iterator *i, 
+SDB_EXPORT int bson_iterator_decimal_size( const bson_iterator *i,
                                            int *size )
 {
    const char *value = NULL ;
@@ -1316,7 +1347,7 @@ SDB_EXPORT int bson_iterator_decimal_size( const bson_iterator *i,
    return BSON_OK ;
 }
 
-SDB_EXPORT int bson_iterator_decimal_typemod( const bson_iterator *i, 
+SDB_EXPORT int bson_iterator_decimal_typemod( const bson_iterator *i,
                                               int *typemod )
 {
    const char *value = NULL ;
@@ -1334,7 +1365,7 @@ SDB_EXPORT int bson_iterator_decimal_typemod( const bson_iterator *i,
 }
 
 
-SDB_EXPORT int bson_iterator_decimal_scale( const bson_iterator *i, 
+SDB_EXPORT int bson_iterator_decimal_scale( const bson_iterator *i,
                                             int *sign, int *scale )
 {
    const char *value = NULL ;
@@ -1356,7 +1387,7 @@ SDB_EXPORT int bson_iterator_decimal_scale( const bson_iterator *i,
    return BSON_OK ;
 }
 
-SDB_EXPORT int bson_iterator_decimal( const bson_iterator *i, 
+SDB_EXPORT int bson_iterator_decimal( const bson_iterator *i,
                                       bson_decimal *decimal )
 {
    bson_type type ;
@@ -1539,6 +1570,15 @@ SDB_EXPORT const char *bson_iterator_regex_opts( const bson_iterator *i ) {
     const char *p = bson_iterator_value( i );
     return p + strlen( p ) + 1;
 
+}
+
+SDB_EXPORT const char *bson_iterator_dbref( const bson_iterator *i ) {
+    return bson_iterator_value( i ) + 4;
+}
+
+SDB_EXPORT bson_oid_t *bson_iterator_dbref_oid( const bson_iterator *i ) {
+    const char *p = bson_iterator_dbref( i );
+    return ( bson_oid_t * )( p + strlen( p ) + 1 );
 }
 
 SDB_EXPORT void bson_iterator_subobject( const bson_iterator *i, bson *sub ) {
@@ -1750,7 +1790,7 @@ SDB_EXPORT int bson_append_long( bson *b, const char *name, const int64_t i ) {
     return BSON_OK;
 }
 
-SDB_EXPORT int bson_append_decimal( bson *b, const char *name, 
+SDB_EXPORT int bson_append_decimal( bson *b, const char *name,
                                     const bson_decimal *decimal )
 {
    int i = 0 ;
@@ -1773,7 +1813,7 @@ SDB_EXPORT int bson_append_decimal( bson *b, const char *name,
    return BSON_OK ;
 }
 
-SDB_EXPORT int bson_append_decimal3( bson *b, const char *name, 
+SDB_EXPORT int bson_append_decimal3( bson *b, const char *name,
                                      const char *value )
 {
    int rc = 0 ;
@@ -1792,8 +1832,8 @@ SDB_EXPORT int bson_append_decimal3( bson *b, const char *name,
 }
 
 
-SDB_EXPORT int bson_append_decimal2( bson *b, const char *name, 
-                                     const char *value, int precision, 
+SDB_EXPORT int bson_append_decimal2( bson *b, const char *name,
+                                     const char *value, int precision,
                                      int scale )
 {
    int rc = 0 ;
@@ -2091,7 +2131,7 @@ SDB_EXPORT int bson_append_finish_object( bson *b ) {
     bson_append_byte( b , 0 );
 
     --b->stackPos ;
-    b->stackType[ b->stackPos ] = (char)(-1) ;    
+    b->stackType[ b->stackPos ] = (char)(-1) ;
     start = b->data + b->stack[ b->stackPos ];
     i = b->cur - start;
     bson_little_endian32( start, &i );

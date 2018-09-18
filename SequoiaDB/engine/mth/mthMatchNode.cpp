@@ -42,9 +42,30 @@ using namespace bson ;
 
 namespace engine
 {
+
    BOOLEAN mthCompareNode( _mthMatchNode * left, _mthMatchNode * right )
    {
-      return left->getWeight() < right->getWeight() ;
+      if ( left->getWeight() < right->getWeight() )
+      {
+         return TRUE ;
+      }
+      else if ( left->getWeight() > right->getWeight() )
+      {
+         return FALSE ;
+      }
+      else
+      {
+         INT32 res = ossStrcmp( left->getFieldName(), right->getFieldName() ) ;
+         if ( res < 0 )
+         {
+            return TRUE ;
+         }
+         else if ( res > 0 )
+         {
+            return FALSE ;
+         }
+      }
+      return left->getType() < right->getType() ;
    }
 
    void mthContextClearRecordInfoSafe( _mthMatchTreeContext *context )
@@ -66,6 +87,8 @@ namespace engine
       _hasReturnMatch        = FALSE ;
       _isUseElement          = FALSE ;
       _isDollarListEnabled   = FALSE ;
+
+      _parameters            = NULL ;
    }
 
    _mthMatchTreeContext::~_mthMatchTreeContext()
@@ -393,35 +416,21 @@ namespace engine
       return result.str() ;
    }
 
-   _mthNodeAllocator::_mthNodeAllocator()
+   BSONElement _mthMatchTreeContext::getParameter ( INT8 index )
    {
-      _offset = 0 ;
-   }
-
-   _mthNodeAllocator::~_mthNodeAllocator()
-   {
-      _offset = 0 ;
-   }
-
-   void* _mthNodeAllocator::allocate( size_t size )
-   {
-      void *p = NULL ;
-      if ( _offset + size <= MTH_ALLOCATOR_SIZE )
+      if ( NULL != _parameters )
       {
-         p = _mem + _offset ;
-         _offset += size ;
+         return _parameters->getParam( index ) ;
       }
-
-      return p ;
+      return BSONElement() ;
    }
 
-   BOOLEAN _mthNodeAllocator::isAllocatedByme( void *p )
+   BOOLEAN _mthMatchTreeContext::paramDoneByPred ( INT8 index )
    {
-      if ( p >= _mem && p < _mem + MTH_ALLOCATOR_SIZE )
+      if ( _parameters )
       {
-         return TRUE ;
+         return _parameters->isDoneByPred( index ) ;
       }
-
       return FALSE ;
    }
 
@@ -462,9 +471,61 @@ namespace engine
       return NULL ;
    }
 
-   _mthMatchNode::_mthMatchNode( _mthNodeAllocator *allocator )
-                 :_allocator( allocator ), _parent( NULL ),
-                 _idx_in_parent( -1 ), _isUnderLogicNot( FALSE )
+   const mthNodeConfig *mthGetDefaultNodeConfigPtr ()
+   {
+      static mthNodeConfig defaultConfig ;
+
+      return &defaultConfig ;
+   }
+
+   const mthNodeConfig &mthGetDefaultNodEConfig ()
+   {
+      return (*mthGetDefaultNodeConfigPtr()) ;
+   }
+
+   _mthMatchConfig::_mthMatchConfig ()
+   {
+      _matchConfig = mthGetDefaultNodeConfigPtr() ;
+   }
+
+   _mthMatchConfig::_mthMatchConfig ( const mthNodeConfig *configPtr )
+   {
+      if ( NULL == configPtr )
+      {
+         _matchConfig = mthGetDefaultNodeConfigPtr() ;
+      }
+      else
+      {
+         _matchConfig = configPtr ;
+      }
+   }
+
+   _mthMatchConfig::~_mthMatchConfig ()
+   {
+      _matchConfig = NULL ;
+   }
+
+   _mthMatchConfigHolder::_mthMatchConfigHolder ()
+   : _mthMatchConfig( &_stackMatchConfig )
+   {
+      setMatchConfig( mthGetDefaultNodEConfig() ) ;
+   }
+
+   _mthMatchConfigHolder::_mthMatchConfigHolder ( const mthNodeConfig &config )
+   : _mthMatchConfig( &_stackMatchConfig )
+   {
+      setMatchConfig( config ) ;
+   }
+
+   _mthMatchConfigHolder::~_mthMatchConfigHolder ()
+   {
+   }
+
+   _mthMatchNode::_mthMatchNode( _mthNodeAllocator *allocator,
+                                 const mthNodeConfig *config )
+                 :_mthMatchConfig( config ), _allocator( allocator ),
+                  _parent( NULL ), _idx_in_parent( -1 ),
+                  _isUnderLogicNot( FALSE )
    {
    }
 
@@ -640,25 +701,27 @@ namespace engine
       return FALSE ;
    }
 
-   INT32 _mthMatchNode::calcPredicate( _rtnPredicateSet &predicateSet )
+   INT32 _mthMatchNode::calcPredicate( rtnPredicateSet &predicateSet,
+                                       const rtnParamList * paramList )
    {
       UINT32 i = 0 ;
       for ( ; i < _children.size() ; i++ )
       {
          _mthMatchNode *child = _children[ i ] ;
-         child->calcPredicate( predicateSet ) ;
+         child->calcPredicate( predicateSet, paramList ) ;
       }
 
       return SDB_OK ;
    }
 
-   INT32 _mthMatchNode::extraEqualityMatches( BSONObjBuilder &builder )
+   INT32 _mthMatchNode::extraEqualityMatches( BSONObjBuilder &builder,
+                                              const rtnParamList *parameters )
    {
       UINT32 i = 0 ;
       for ( ; i < _children.size() ; i++ )
       {
          _mthMatchNode *child = _children[ i ] ;
-         child->extraEqualityMatches( builder ) ;
+         child->extraEqualityMatches( builder, parameters ) ;
       }
 
       return SDB_OK ;

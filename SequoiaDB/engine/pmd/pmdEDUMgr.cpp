@@ -1923,7 +1923,6 @@ namespace engine
                }
             }
             cb->assertLocks() ;
-            cb->clear() ;
          }
          else if ( PMD_EDU_EVENT_TERM != event._eventType )
          {

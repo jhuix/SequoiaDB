@@ -268,15 +268,14 @@ namespace engine
       }
 
       {
-         string user ;
-         string passwd ;
          string businessType ;
+         BSONObj authInfo ;
          BSONObj filter ;
          BSONObjBuilder fromBuilder ;
          BSONArrayBuilder configBuilder ;
          list<BSONObj>::iterator iter ;
 
-         rc = dbTool.getAuth( _fromBuzName, user, passwd ) ;
+         rc = dbTool.getAuth( _fromBuzName, authInfo ) ;
          if ( rc )
          {
             _errorMsg.setError( TRUE, "failed to get business auth: name=%s",
@@ -323,11 +322,7 @@ namespace engine
          }
          fromBuilder.append( OM_BSON_CONFIG, configBuilder.arr() ) ;
 
-         if ( 0 < user.length() )
-         {
-            fromBuilder.append( OM_BSON_USER,   user ) ;
-            fromBuilder.append( OM_BSON_PASSWD, passwd ) ;
-         }
+         fromBuilder.appendElements( authInfo ) ;
 
          requestBuilder.append( OM_BSON_FROM, fromBuilder.obj() ) ;
       }
@@ -342,15 +337,14 @@ namespace engine
       }
 
       {
-         string user ;
-         string passwd ;
          string businessType ;
+         BSONObj authInfo ;
          BSONObj filter ;
          BSONObjBuilder toBuilder ;
          BSONArrayBuilder configBuilder ;
          list<BSONObj>::iterator iter ;
 
-         rc = dbTool.getAuth( _toBuzName, user, passwd ) ;
+         rc = dbTool.getAuth( _toBuzName, authInfo ) ;
          if ( rc )
          {
             _errorMsg.setError( TRUE, "failed to get business auth: name=%s",
@@ -396,11 +390,7 @@ namespace engine
          }
          toBuilder.append( OM_BSON_CONFIG, configBuilder.arr() ) ;
 
-         if ( 0 < user.length() )
-         {
-            toBuilder.append( OM_BSON_USER,   user ) ;
-            toBuilder.append( OM_BSON_PASSWD, passwd ) ;
-         }
+         toBuilder.appendElements( authInfo ) ;
 
          requestBuilder.append( OM_BSON_TO, toBuilder.obj() ) ;
       }
@@ -625,15 +615,14 @@ namespace engine
       }
 
       {
-         string user ;
-         string passwd ;
          string businessType ;
+         BSONObj authInfo ;
          BSONObj filter ;
          BSONObjBuilder fromBuilder ;
          BSONArrayBuilder configBuilder ;
          list<BSONObj>::iterator iter ;
 
-         rc = dbTool.getAuth( _fromBuzName, user, passwd ) ;
+         rc = dbTool.getAuth( _fromBuzName, authInfo ) ;
          if ( rc )
          {
             _errorMsg.setError( TRUE, "failed to get business auth: name=%s",
@@ -680,11 +669,7 @@ namespace engine
          }
          fromBuilder.append( OM_BSON_CONFIG, configBuilder.arr() ) ;
 
-         if ( 0 < user.length() )
-         {
-            fromBuilder.append( OM_BSON_USER,   user ) ;
-            fromBuilder.append( OM_BSON_PASSWD, passwd ) ;
-         }
+         fromBuilder.appendElements( authInfo ) ;
 
          requestBuilder.append( OM_BSON_FROM, fromBuilder.obj() ) ;
       }
@@ -699,15 +684,14 @@ namespace engine
       }
 
       {
-         string user ;
-         string passwd ;
          string businessType ;
+         BSONObj authInfo ;
          BSONObj filter ;
          BSONObjBuilder toBuilder ;
          BSONArrayBuilder configBuilder ;
          list<BSONObj>::iterator iter ;
 
-         rc = dbTool.getAuth( _toBuzName, user, passwd ) ;
+         rc = dbTool.getAuth( _toBuzName, authInfo ) ;
          if ( rc )
          {
             _errorMsg.setError( TRUE, "failed to get business auth: name=%s",
@@ -753,11 +737,7 @@ namespace engine
          }
          toBuilder.append( OM_BSON_CONFIG, configBuilder.arr() ) ;
 
-         if ( 0 < user.length() )
-         {
-            toBuilder.append( OM_BSON_USER,   user ) ;
-            toBuilder.append( OM_BSON_PASSWD, passwd ) ;
-         }
+         toBuilder.appendElements( authInfo ) ;
 
          requestBuilder.append( OM_BSON_TO, toBuilder.obj() ) ;
       }

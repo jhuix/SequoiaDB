@@ -998,11 +998,19 @@ namespace engine
 
             if ( !toDestory )
             {
-               _mapIdles[ cb->getID() ] = cb ;
-               SDB_ASSERT( PMD_EDU_IDLE != cb->getStatus(),
-                           "Status can't be idle" ) ;
-               cb->setStatus( PMD_EDU_IDLE ) ;
-               cb->setType( PMD_EDU_UNKNOW ) ;
+               try
+               {
+                  _mapIdles[ cb->getID() ] = cb ;
+                  SDB_ASSERT( PMD_EDU_IDLE != cb->getStatus(),
+                              "Status can't be idle" ) ;
+                  cb->setStatus( PMD_EDU_IDLE ) ;
+                  cb->setType( PMD_EDU_UNKNOW ) ;
+               }
+               catch( std::exception &e )
+               {
+                  PD_LOG( PDERROR, "Occur exception: %s", e.what() ) ;
+                  toDestory = TRUE ;
+               }
             }
          }
          else if ( ( it = _mapIdles.find( cb->getID() ) ) != _mapIdles.end() )
@@ -1048,12 +1056,12 @@ namespace engine
 
       _latch.get() ;
 
-      if ( _mapIdles.end() != ( it = _mapIdles.find( cb->getID() ) ) )
+      if ( _mapIdles.end() != ( it = _mapIdles.find( eduID ) ) )
       {
          cb = it->second ;
          _mapIdles.erase( it ) ;
       }
-      else if ( _mapRuns.end() != ( it = _mapRuns.find( cb->getID() ) ) )
+      else if ( _mapRuns.end() != ( it = _mapRuns.find( eduID ) ) )
       {
          cb = it->second ;
          _mapRuns.erase( it ) ;
@@ -1198,12 +1206,13 @@ namespace engine
 
       cb->setStatus ( PMD_EDU_IDLE ) ;
 
-      _latch.get() ;
-      newID = _EDUID++ ;
-      cb->setID( newID ) ;
-      _mapIdles[ newID ] = cb ;
-      addMap = TRUE ;
-      _latch.release () ;
+      {
+         ossScopedLock lock( &_latch, EXCLUSIVE ) ;
+         newID = _EDUID++ ;
+         cb->setID( newID ) ;
+         _mapIdles[ newID ] = cb ;
+         addMap = TRUE ;
+      }
 
       try
       {
@@ -1239,14 +1248,12 @@ namespace engine
       }
 
    done :
-      PD_TRACE_EXITRC ( SDB__PMDEDUMGR_CRTNEWEDU, rc );
       return rc ;
    error :
       if ( addMap )
       {
-         _latch.get() ;
+         ossScopedLock lock( &_latch, EXCLUSIVE ) ;
          _mapIdles.erase( newID ) ;
-         _latch.release() ;
       }
       if ( cb )
       {
@@ -1301,20 +1308,21 @@ namespace engine
          cb->setName( pInitName ) ;
       }
 
-      _latch.get() ;
-      newID = _EDUID++ ;
-      cb->setID( newID ) ;
-      _mapRuns[ newID ] = cb ;
-      addMap = TRUE ;
-      if ( isSystem )
       {
-         _mapSystemEdu[ type ] = newID ;
-      }
+         ossScopedLock lock( &_latch, EXCLUSIVE ) ;
+         newID = _EDUID++ ;
+         cb->setID( newID ) ;
+         _mapRuns[ newID ] = cb ;
+         addMap = TRUE ;
+         if ( isSystem )
+         {
+            _mapSystemEdu[ type ] = newID ;
+         }
 
-      cb ->postEvent( pmdEDUEvent( PMD_EDU_EVENT_RESUME,
-                                   PMD_EDU_MEM_NONE,
-                                   arg ) ) ;
-      _latch.release () ;
+         cb ->postEvent( pmdEDUEvent( PMD_EDU_EVENT_RESUME,
+                                      PMD_EDU_MEM_NONE,
+                                      arg ) ) ;
+      }
 
       try
       {
@@ -1355,13 +1363,12 @@ namespace engine
    error :
       if ( addMap )
       {
-         _latch.get() ;
+         ossScopedLock lock( &_latch, EXCLUSIVE ) ;
          _mapRuns.erase( newID ) ;
          if ( isSystem )
          {
             _mapSystemEdu.erase( type ) ;
          }
-         _latch.release() ;
       }
       if ( cb )
       {
@@ -1502,9 +1509,8 @@ namespace engine
 
    void _pmdEDUMgr::setEDU( UINT32 tid, EDUID eduid )
    {
-      _latch.get() ;
+      ossScopedLock lock( &_latch, EXCLUSIVE ) ;
       _mapTid2Edu[ tid ] = eduid ;
-      _latch.release() ;
    }
 
    pmdEDUCB* _pmdEDUMgr::getEDU()

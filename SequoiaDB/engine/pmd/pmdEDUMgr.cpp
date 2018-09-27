@@ -1174,7 +1174,6 @@ namespace engine
    {
       INT32 rc       = SDB_OK ;
       pmdEDUCB *cb   = NULL ;
-      BOOLEAN addMap = FALSE ;
       EDUID newID = PMD_INVALID_EDUID ;
       ossEvent *pEvent = NULL ;
       pmdEventPtr ePtr ;
@@ -1211,7 +1210,6 @@ namespace engine
          newID = _EDUID++ ;
          cb->setID( newID ) ;
          _mapIdles[ newID ] = cb ;
-         addMap = TRUE ;
       }
 
       try
@@ -1228,6 +1226,11 @@ namespace engine
          PD_LOG ( PDSEVERE, "Failed to create new edu: %s",
                   e.what() ) ;
          rc = SDB_SYS ;
+         SDB_OSS_DEL cb ;
+
+         ossScopedLock lock( &_latch, EXCLUSIVE ) ;
+         _mapIdles.erase( newID ) ;
+
          goto error ;
       }
 
@@ -1250,15 +1253,6 @@ namespace engine
    done :
       return rc ;
    error :
-      if ( addMap )
-      {
-         ossScopedLock lock( &_latch, EXCLUSIVE ) ;
-         _mapIdles.erase( newID ) ;
-      }
-      if ( cb )
-      {
-         SDB_OSS_DEL cb ;
-      }
       goto done ;
    }
 
@@ -1272,7 +1266,6 @@ namespace engine
       INT32 rc       = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__PMDEDUMGR_CRTNEWEDU );
       pmdEDUCB *cb   = NULL ;
-      BOOLEAN addMap = FALSE ;
       EDUID newID = PMD_INVALID_EDUID ;
       ossEvent *pEvent = NULL ;
       pmdEventPtr ePtr ;
@@ -1313,7 +1306,6 @@ namespace engine
          newID = _EDUID++ ;
          cb->setID( newID ) ;
          _mapRuns[ newID ] = cb ;
-         addMap = TRUE ;
          if ( isSystem )
          {
             _mapSystemEdu[ type ] = newID ;
@@ -1338,6 +1330,15 @@ namespace engine
          PD_LOG ( PDSEVERE, "Failed to create new edu: %s",
                   e.what() ) ;
          rc = SDB_SYS ;
+         SDB_OSS_DEL cb ;
+
+         ossScopedLock lock( &_latch, EXCLUSIVE ) ;
+         _mapRuns.erase( newID ) ;
+         if ( isSystem )
+         {
+            _mapSystemEdu.erase( type ) ;
+         }
+
          goto error ;
       }
 
@@ -1361,19 +1362,6 @@ namespace engine
       PD_TRACE_EXITRC ( SDB__PMDEDUMGR_CRTNEWEDU, rc );
       return rc ;
    error :
-      if ( addMap )
-      {
-         ossScopedLock lock( &_latch, EXCLUSIVE ) ;
-         _mapRuns.erase( newID ) ;
-         if ( isSystem )
-         {
-            _mapSystemEdu.erase( type ) ;
-         }
-      }
-      if ( cb )
-      {
-         SDB_OSS_DEL cb ;
-      }
       goto done ;
    }
 

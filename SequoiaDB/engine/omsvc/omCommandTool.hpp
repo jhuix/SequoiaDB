@@ -206,8 +206,11 @@ namespace engine
 
       INT32 getAuth( const string &businessName,
                      string &authUser, string &authPasswd ) ;
+      INT32 getAuth( const string &businessName, BSONObj &authInfo ) ;
       INT32 upsertAuth( const string &businessName, const string &authUser,
                         const string &authPasswd ) ;
+      INT32 upsertAuth( const string &businessName, const string &authUser,
+                        const string &authPasswd, BSONObj &options ) ;
       INT32 removeAuth( const string &businessName ) ;
 
       INT32 upsertPackage( const string &hostName,

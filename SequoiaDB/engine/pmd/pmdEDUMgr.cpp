@@ -998,11 +998,19 @@ namespace engine
 
             if ( !toDestory )
             {
-               _mapIdles[ cb->getID() ] = cb ;
-               SDB_ASSERT( PMD_EDU_IDLE != cb->getStatus(),
-                           "Status can't be idle" ) ;
-               cb->setStatus( PMD_EDU_IDLE ) ;
-               cb->setType( PMD_EDU_UNKNOW ) ;
+               try
+               {
+                  _mapIdles[ cb->getID() ] = cb ;
+                  SDB_ASSERT( PMD_EDU_IDLE != cb->getStatus(),
+                              "Status can't be idle" ) ;
+                  cb->setStatus( PMD_EDU_IDLE ) ;
+                  cb->setType( PMD_EDU_UNKNOW ) ;
+               }
+               catch( std::exception &e )
+               {
+                  PD_LOG( PDERROR, "Occur exception: %s", e.what() ) ;
+                  toDestory = TRUE ;
+               }
             }
          }
          else if ( ( it = _mapIdles.find( cb->getID() ) ) != _mapIdles.end() )
@@ -1048,12 +1056,12 @@ namespace engine
 
       _latch.get() ;
 
-      if ( _mapIdles.end() != ( it = _mapIdles.find( cb->getID() ) ) )
+      if ( _mapIdles.end() != ( it = _mapIdles.find( eduID ) ) )
       {
          cb = it->second ;
          _mapIdles.erase( it ) ;
       }
-      else if ( _mapRuns.end() != ( it = _mapRuns.find( cb->getID() ) ) )
+      else if ( _mapRuns.end() != ( it = _mapRuns.find( eduID ) ) )
       {
          cb = it->second ;
          _mapRuns.erase( it ) ;
@@ -1166,7 +1174,6 @@ namespace engine
    {
       INT32 rc       = SDB_OK ;
       pmdEDUCB *cb   = NULL ;
-      BOOLEAN addMap = FALSE ;
       EDUID newID = PMD_INVALID_EDUID ;
       ossEvent *pEvent = NULL ;
       pmdEventPtr ePtr ;
@@ -1198,12 +1205,12 @@ namespace engine
 
       cb->setStatus ( PMD_EDU_IDLE ) ;
 
-      _latch.get() ;
-      newID = _EDUID++ ;
-      cb->setID( newID ) ;
-      _mapIdles[ newID ] = cb ;
-      addMap = TRUE ;
-      _latch.release () ;
+      {
+         ossScopedLock lock( &_latch, EXCLUSIVE ) ;
+         newID = _EDUID++ ;
+         cb->setID( newID ) ;
+         _mapIdles[ newID ] = cb ;
+      }
 
       try
       {
@@ -1219,6 +1226,11 @@ namespace engine
          PD_LOG ( PDSEVERE, "Failed to create new edu: %s",
                   e.what() ) ;
          rc = SDB_SYS ;
+         SDB_OSS_DEL cb ;
+
+         ossScopedLock lock( &_latch, EXCLUSIVE ) ;
+         _mapIdles.erase( newID ) ;
+
          goto error ;
       }
 
@@ -1239,19 +1251,8 @@ namespace engine
       }
 
    done :
-      PD_TRACE_EXITRC ( SDB__PMDEDUMGR_CRTNEWEDU, rc );
       return rc ;
    error :
-      if ( addMap )
-      {
-         _latch.get() ;
-         _mapIdles.erase( newID ) ;
-         _latch.release() ;
-      }
-      if ( cb )
-      {
-         SDB_OSS_DEL cb ;
-      }
       goto done ;
    }
 
@@ -1265,7 +1266,6 @@ namespace engine
       INT32 rc       = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__PMDEDUMGR_CRTNEWEDU );
       pmdEDUCB *cb   = NULL ;
-      BOOLEAN addMap = FALSE ;
       EDUID newID = PMD_INVALID_EDUID ;
       ossEvent *pEvent = NULL ;
       pmdEventPtr ePtr ;
@@ -1301,20 +1301,20 @@ namespace engine
          cb->setName( pInitName ) ;
       }
 
-      _latch.get() ;
-      newID = _EDUID++ ;
-      cb->setID( newID ) ;
-      _mapRuns[ newID ] = cb ;
-      addMap = TRUE ;
-      if ( isSystem )
       {
-         _mapSystemEdu[ type ] = newID ;
-      }
+         ossScopedLock lock( &_latch, EXCLUSIVE ) ;
+         newID = _EDUID++ ;
+         cb->setID( newID ) ;
+         _mapRuns[ newID ] = cb ;
+         if ( isSystem )
+         {
+            _mapSystemEdu[ type ] = newID ;
+         }
 
-      cb ->postEvent( pmdEDUEvent( PMD_EDU_EVENT_RESUME,
-                                   PMD_EDU_MEM_NONE,
-                                   arg ) ) ;
-      _latch.release () ;
+         cb ->postEvent( pmdEDUEvent( PMD_EDU_EVENT_RESUME,
+                                      PMD_EDU_MEM_NONE,
+                                      arg ) ) ;
+      }
 
       try
       {
@@ -1330,6 +1330,15 @@ namespace engine
          PD_LOG ( PDSEVERE, "Failed to create new edu: %s",
                   e.what() ) ;
          rc = SDB_SYS ;
+         SDB_OSS_DEL cb ;
+
+         ossScopedLock lock( &_latch, EXCLUSIVE ) ;
+         _mapRuns.erase( newID ) ;
+         if ( isSystem )
+         {
+            _mapSystemEdu.erase( type ) ;
+         }
+
          goto error ;
       }
 
@@ -1353,20 +1362,6 @@ namespace engine
       PD_TRACE_EXITRC ( SDB__PMDEDUMGR_CRTNEWEDU, rc );
       return rc ;
    error :
-      if ( addMap )
-      {
-         _latch.get() ;
-         _mapRuns.erase( newID ) ;
-         if ( isSystem )
-         {
-            _mapSystemEdu.erase( type ) ;
-         }
-         _latch.release() ;
-      }
-      if ( cb )
-      {
-         SDB_OSS_DEL cb ;
-      }
       goto done ;
    }
 
@@ -1502,9 +1497,8 @@ namespace engine
 
    void _pmdEDUMgr::setEDU( UINT32 tid, EDUID eduid )
    {
-      _latch.get() ;
+      ossScopedLock lock( &_latch, EXCLUSIVE ) ;
       _mapTid2Edu[ tid ] = eduid ;
-      _latch.release() ;
    }
 
    pmdEDUCB* _pmdEDUMgr::getEDU()
@@ -1923,7 +1917,6 @@ namespace engine
                }
             }
             cb->assertLocks() ;
-            cb->clear() ;
          }
          else if ( PMD_EDU_EVENT_TERM != event._eventType )
          {

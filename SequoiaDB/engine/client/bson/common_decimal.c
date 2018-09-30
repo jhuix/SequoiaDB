@@ -83,23 +83,23 @@ static int _decimal_apply_typmod( bson_decimal *decimal, int typmod ) ;
 static void _decimal_set_nan( bson_decimal *decimal ) ;
 static int _decimal_is_digit( const char value ) ;
 static void _decimal_trunc( bson_decimal *decimal, int rscale ) ;
-static int _decimal_sub_abs( const bson_decimal *left, 
+static int _decimal_sub_abs( const bson_decimal *left,
                              const bson_decimal *right, bson_decimal *result ) ;
-static int _decimal_add_abs( const bson_decimal *left, 
+static int _decimal_add_abs( const bson_decimal *left,
                              const bson_decimal *right, bson_decimal *result ) ;
-static int _decimal_cmp_abs( const bson_decimal *left, 
+static int _decimal_cmp_abs( const bson_decimal *left,
                              const bson_decimal *right ) ;
 
-static int _decimal_sub( const bson_decimal *left, const bson_decimal *right, 
+static int _decimal_sub( const bson_decimal *left, const bson_decimal *right,
                          bson_decimal *result ) ;
-static int _decimal_add( const bson_decimal *left, const bson_decimal *right, 
+static int _decimal_add( const bson_decimal *left, const bson_decimal *right,
                          bson_decimal *result ) ;
-static int _decimal_mul( const bson_decimal *left, const bson_decimal *right, 
+static int _decimal_mul( const bson_decimal *left, const bson_decimal *right,
                          bson_decimal *result, int dscale ) ;
-static int _decimal_get_div_scale( const bson_decimal *left, 
+static int _decimal_get_div_scale( const bson_decimal *left,
                                    const bson_decimal *right ) ;
 
-static int _decimal_div( const bson_decimal *left, const bson_decimal *right, 
+static int _decimal_div( const bson_decimal *left, const bson_decimal *right,
                          bson_decimal *result, int rscale, int isRound ) ;
 
 static int _decimal_sprint_len( int sign, int weight, int scale ) ;
@@ -328,7 +328,7 @@ void _decimal_trunc( bson_decimal *decimal, int rscale )
  *
  * ABS(left) MUST BE GREATER OR EQUAL ABS(right) !!!
  */
-int _decimal_sub_abs( const bson_decimal *left, const bson_decimal *right, 
+int _decimal_sub_abs( const bson_decimal *left, const bson_decimal *right,
                       bson_decimal *result )
 {
    short *res_buf    = NULL ;
@@ -349,7 +349,7 @@ int _decimal_sub_abs( const bson_decimal *left, const bson_decimal *right,
    int leftNdigits    = left->ndigits ;
    short *leftDigits  = left->digits ;
 
-   int rightNdigits   = right->ndigits ;   
+   int rightNdigits   = right->ndigits ;
    short *rightDigits = right->digits ;
 
    res_weight = left->weight ;
@@ -458,7 +458,7 @@ int _decimal_add_abs( const bson_decimal *left, const bson_decimal *right,
    int leftNdigits    = left->ndigits ;
    short *leftDigits  = left->digits ;
 
-   int rightNdigits   = right->ndigits ;   
+   int rightNdigits   = right->ndigits ;
    short *rightDigits = right->digits ;
 
    res_weight = Max( left->weight, right->weight ) + 1 ;
@@ -517,7 +517,7 @@ int _decimal_add_abs( const bson_decimal *left, const bson_decimal *right,
       /* else we failed to allow for carry out */
       rc = -6 ;
       goto error ;
-   }   
+   }
 
    decimal_free( result ) ;
    result->ndigits = res_ndigits ;
@@ -633,7 +633,7 @@ int _decimal_cmp_abs( const bson_decimal *left, const bson_decimal *right )
    return 0;
 }
 
-int _decimal_sub( const bson_decimal *left, const bson_decimal *right, 
+int _decimal_sub( const bson_decimal *left, const bson_decimal *right,
                   bson_decimal *result )
 {
    int rc = 0 ;
@@ -750,7 +750,7 @@ int _decimal_sub( const bson_decimal *left, const bson_decimal *right,
    return rc ;
 }
 
-int _decimal_add( const bson_decimal *left, const bson_decimal *right, 
+int _decimal_add( const bson_decimal *left, const bson_decimal *right,
                   bson_decimal *result )
 {
    int rc = 0 ;
@@ -863,7 +863,7 @@ int _decimal_add( const bson_decimal *left, const bson_decimal *right,
    return rc ;
 }
 
-int _decimal_mul( const bson_decimal *left, const bson_decimal *right, 
+int _decimal_mul( const bson_decimal *left, const bson_decimal *right,
                   bson_decimal *result, int rscale )
 {
    int res_ndigits   = 0 ;
@@ -915,7 +915,7 @@ int _decimal_mul( const bson_decimal *left, const bson_decimal *right,
     * or both inputs have fewer digits than they really do.
     */
    res_ndigits = leftNdigits + rightNdigits + 1 ;
-   maxdigits   = res_weight + 1 + ( rscale * DECIMAL_DEC_DIGITS ) + 
+   maxdigits   = res_weight + 1 + ( rscale * DECIMAL_DEC_DIGITS ) +
                  DECIMAL_MUL_GUARD_DIGITS ;
    if ( res_ndigits > maxdigits )
    {
@@ -1088,7 +1088,7 @@ error:
    goto done ;
 }
 
-int _decimal_get_div_scale( const bson_decimal *left, 
+int _decimal_get_div_scale( const bson_decimal *left,
                             const bson_decimal *right )
 {
    int weight1 = 0 ;
@@ -1153,7 +1153,7 @@ int _decimal_get_div_scale( const bson_decimal *left,
    return rscale ;
 }
 
-int _decimal_div( const bson_decimal *left, const bson_decimal *right, 
+int _decimal_div( const bson_decimal *left, const bson_decimal *right,
                   bson_decimal *result, int rscale, int isRound )
 {
    int div_ndigits   = 0 ;
@@ -1211,7 +1211,7 @@ int _decimal_div( const bson_decimal *left, const bson_decimal *right,
 
    res_weight = left->weight - right->weight ;
    /* The number of accurate result digits we need to produce: */
-   res_ndigits = res_weight + 1 
+   res_ndigits = res_weight + 1
                  + ( rscale + DECIMAL_DEC_DIGITS - 1 ) / DECIMAL_DEC_DIGITS ;
    /* ... but always at least 1 */
    res_ndigits = Max( res_ndigits, 1 ) ;
@@ -1356,7 +1356,7 @@ int _decimal_div( const bson_decimal *left, const bson_decimal *right,
           * because we know the divisor length is at least 2.)
           */
          while ( divisor2 * qhat >
-                     (next2digits - qhat * divisor1) * DECIMAL_NBASE + 
+                     (next2digits - qhat * divisor1) * DECIMAL_NBASE +
                      dividend[j + 2] )
          {
             qhat-- ;
@@ -1651,7 +1651,7 @@ int decimal_is_nan( const bson_decimal *decimal )
       return 1 ;
    }
 
-   if ( decimal_is_special( decimal ) && 
+   if ( decimal_is_special( decimal ) &&
         decimal->dscale == SDB_DECIMAL_SPECIAL_NAN )
    {
       return 1 ;
@@ -1682,7 +1682,7 @@ int decimal_is_min( const bson_decimal *decimal )
       return 0 ;
    }
 
-   if ( decimal_is_special( decimal ) && 
+   if ( decimal_is_special( decimal ) &&
         decimal->dscale == SDB_DECIMAL_SPECIAL_MIN )
    {
       return 1 ;
@@ -1706,14 +1706,14 @@ void decimal_set_max( bson_decimal *decimal )
    decimal->dscale  = SDB_DECIMAL_SPECIAL_MAX ;
 }
 
-int decimal_is_max( const bson_decimal *decimal ) 
+int decimal_is_max( const bson_decimal *decimal )
 {
    if ( NULL == decimal )
    {
       return 0 ;
    }
 
-   if ( decimal_is_special( decimal ) && 
+   if ( decimal_is_special( decimal ) &&
         decimal->dscale == SDB_DECIMAL_SPECIAL_MAX )
    {
       return 1 ;
@@ -1997,7 +1997,7 @@ int decimal_to_str_get_len( const bson_decimal *decimal, int *size )
       goto error ;
    }
 
-   *size = _decimal_sprint_len( decimal->sign, decimal->weight, 
+   *size = _decimal_sprint_len( decimal->sign, decimal->weight,
                                 decimal->dscale ) ;
 
 done:
@@ -2282,9 +2282,9 @@ int decimal_from_str( const char *value, bson_decimal *decimal )
    }
    len = strlen( cp ) ;
 
-   if ( len >= 3 )
+   if ( len == 3 )
    {
-      if ( ( cp[0] == 'n' || cp[0] == 'N' ) && 
+      if ( ( cp[0] == 'n' || cp[0] == 'N' ) &&
            ( cp[1] == 'a' || cp[1] == 'A' ) &&
            ( cp[2] == 'n' || cp[2] == 'N' ) )
       {
@@ -2292,7 +2292,7 @@ int decimal_from_str( const char *value, bson_decimal *decimal )
          goto done ;
       }
 
-      if ( ( cp[0] == 'm' || cp[0] == 'M' ) && 
+      if ( ( cp[0] == 'm' || cp[0] == 'M' ) &&
            ( cp[1] == 'i' || cp[1] == 'I' ) &&
            ( cp[2] == 'n' || cp[2] == 'N' ) )
       {
@@ -2300,7 +2300,7 @@ int decimal_from_str( const char *value, bson_decimal *decimal )
          goto done ;
       }
 
-      if ( ( cp[0] == 'm' || cp[0] == 'M' ) && 
+      if ( ( cp[0] == 'm' || cp[0] == 'M' ) &&
            ( cp[1] == 'a' || cp[1] == 'A' ) &&
            ( cp[2] == 'x' || cp[2] == 'X' ) )
       {
@@ -2308,20 +2308,23 @@ int decimal_from_str( const char *value, bson_decimal *decimal )
          goto done ;
       }
 
-      if ( len >= 4 && cp[0] == '-' &&
-           ( cp[1] == 'i' || cp[1] == 'I' ) && 
-           ( cp[2] == 'n' || cp[2] == 'N' ) &&
-           ( cp[3] == 'f' || cp[3] == 'F' ) )
-      {
-         decimal_set_min( decimal ) ;
-         goto done ;
-      }
-
-      if ( ( cp[0] == 'i' || cp[0] == 'I' ) && 
+      if ( ( cp[0] == 'i' || cp[0] == 'I' ) &&
            ( cp[1] == 'n' || cp[1] == 'N' ) &&
            ( cp[2] == 'f' || cp[2] == 'F' ) )
       {
          decimal_set_max( decimal ) ;
+         goto done ;
+      }
+   }
+
+   if ( len == 4 )
+   {
+      if (   cp[0] == '-' &&
+           ( cp[1] == 'i' || cp[1] == 'I' ) &&
+           ( cp[2] == 'n' || cp[2] == 'N' ) &&
+           ( cp[3] == 'f' || cp[3] == 'F' ) )
+      {
+         decimal_set_min( decimal ) ;
          goto done ;
       }
    }
@@ -2355,7 +2358,7 @@ int decimal_from_str( const char *value, bson_decimal *decimal )
       goto error ;
    }
 
-   decdigits = (unsigned char *) bson_malloc( strlen(cp) + 
+   decdigits = (unsigned char *) bson_malloc( strlen(cp) +
                                                  DECIMAL_DEC_DIGITS * 2 ) ;
 
    /* leading padding for digit alignment later */
@@ -2370,7 +2373,7 @@ int decimal_from_str( const char *value, bson_decimal *decimal )
          if ( !have_dp )
          {
             dweight++ ;
-            if ( dweight > DECIMAL_MAX_DWEIGHT + 
+            if ( dweight > DECIMAL_MAX_DWEIGHT +
                            DECIMAL_MAX_PRECISION )
             {
                rc = -6 ;
@@ -2380,7 +2383,7 @@ int decimal_from_str( const char *value, bson_decimal *decimal )
          else
          {
             dscale++ ;
-            if ( dscale > DECIMAL_MAX_DSCALE + 
+            if ( dscale > DECIMAL_MAX_DSCALE +
                           DECIMAL_MAX_PRECISION )
             {
                rc = -6 ;
@@ -2428,7 +2431,7 @@ int decimal_from_str( const char *value, bson_decimal *decimal )
       }
 
       cp = pEndPtr ;
-      if ( exponent > DECIMAL_MAX_PRECISION || 
+      if ( exponent > DECIMAL_MAX_PRECISION ||
            exponent < -DECIMAL_MAX_PRECISION )
       {
          rc = -6 ;
@@ -2442,7 +2445,7 @@ int decimal_from_str( const char *value, bson_decimal *decimal )
          dscale = 0 ;
       }
    }
-   
+
    if ( dweight >= DECIMAL_MAX_DWEIGHT ||
         dscale > DECIMAL_MAX_DSCALE )
    {
@@ -2470,7 +2473,7 @@ int decimal_from_str( const char *value, bson_decimal *decimal )
    {
       weight = -( (-dweight - 1)/DECIMAL_DEC_DIGITS + 1 ) ;
    }
-    
+
    offset  = (weight + 1) * DECIMAL_DEC_DIGITS - ( dweight + 1 ) ;
    ndigits = (ddigits + offset + DECIMAL_DEC_DIGITS - 1) / DECIMAL_DEC_DIGITS ;
 
@@ -2568,7 +2571,7 @@ error:
 }
 
 
-int decimal_get_typemod( const bson_decimal *decimal, int *precision, 
+int decimal_get_typemod( const bson_decimal *decimal, int *precision,
                          int *scale )
 {
    int rc        = 0 ;
@@ -2643,7 +2646,7 @@ error:
    goto done ;
 }
 
-int decimal_to_jsonstr_len( int sign, int weight, int dscale, 
+int decimal_to_jsonstr_len( int sign, int weight, int dscale,
                             int typemod, int *size )
 {
    int rc         = 0 ;
@@ -2657,7 +2660,7 @@ int decimal_to_jsonstr_len( int sign, int weight, int dscale,
 
    simpleSize = _decimal_sprint_len( sign, weight, dscale ) ;
 
-   tmpSize = strlen( decimal_str_start ) + simpleSize + 
+   tmpSize = strlen( decimal_str_start ) + simpleSize +
              strlen( decimal_str_end ) + strlen( json_str_end ) + 1 ;
 
    if ( typemod != -1 )
@@ -2681,7 +2684,7 @@ error:
    goto done ;
 }
 
-int decimal_to_jsonstr( const bson_decimal *decimal, char *value, 
+int decimal_to_jsonstr( const bson_decimal *decimal, char *value,
                         int value_size )
 {
    int rc          = 0 ;
@@ -2797,14 +2800,14 @@ int decimal_cmp( const bson_decimal *left, const bson_decimal *right )
    }
 
    /*
-    * postgresql's define: 
+    * postgresql's define:
     *    We consider all NANs to be equal and larger than any non-NAN. This is
     *    somewhat arbitrary; the important thing is to have a consistent sort
     *    order.
-    * 
+    *
     * while bson's define is the opposite:
     *    NAN's is smaller than any non-NAN.  bsonobj.cpp:compareElementValues
-    * 
+    *
     * conclusion:  we use bson's define!
     */
    if ( decimal_is_nan( left ) )
@@ -2866,7 +2869,7 @@ int decimal_cmp( const bson_decimal *left, const bson_decimal *right )
    return _decimal_cmp_abs( right, left ) ;
 }
 
-SDB_EXPORT int decimal_add( const bson_decimal *left, 
+SDB_EXPORT int decimal_add( const bson_decimal *left,
                             const bson_decimal *right, bson_decimal *result )
 {
    int rc = 0 ;
@@ -2902,7 +2905,7 @@ error:
    goto done ;
 }
 
-SDB_EXPORT int decimal_sub( const bson_decimal *left, 
+SDB_EXPORT int decimal_sub( const bson_decimal *left,
                             const bson_decimal *right, bson_decimal *result )
 {
    int rc = 0 ;
@@ -2938,7 +2941,7 @@ error:
    goto done ;
 }
 
-SDB_EXPORT int decimal_mul( const bson_decimal *left, 
+SDB_EXPORT int decimal_mul( const bson_decimal *left,
                             const bson_decimal *right, bson_decimal *result )
 {
    int rc = 0 ;
@@ -2972,7 +2975,7 @@ error:
    goto done ;
 }
 
-SDB_EXPORT int decimal_div( const bson_decimal *left, 
+SDB_EXPORT int decimal_div( const bson_decimal *left,
                             const bson_decimal *right, bson_decimal *result )
 {
    int rc     = 0 ;
@@ -3009,7 +3012,7 @@ error:
    goto done ;
 }
 
-SDB_EXPORT int decimal_abs( bson_decimal *decimal ) 
+SDB_EXPORT int decimal_abs( bson_decimal *decimal )
 {
    int rc = 0 ;
    if ( NULL == decimal || decimal_is_special( decimal ) )
@@ -3027,7 +3030,7 @@ error:
 }
 
 
-SDB_EXPORT int decimal_ceil( const bson_decimal *decimal, 
+SDB_EXPORT int decimal_ceil( const bson_decimal *decimal,
                              bson_decimal *result )
 {
    int rc = 0 ;
@@ -3075,7 +3078,7 @@ error:
    goto done ;
 }
 
-SDB_EXPORT int decimal_floor( const bson_decimal *decimal, 
+SDB_EXPORT int decimal_floor( const bson_decimal *decimal,
                               bson_decimal *result )
 {
    int rc = 0 ;
@@ -3129,7 +3132,7 @@ error:
    goto done ;
 }
 
-SDB_EXPORT int decimal_mod( const bson_decimal *left, 
+SDB_EXPORT int decimal_mod( const bson_decimal *left,
                             const bson_decimal *right, bson_decimal *result )
 {
    int rc = 0 ;

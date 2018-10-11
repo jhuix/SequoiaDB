@@ -26,9 +26,7 @@ class Pair {
 
 
 interface IConnectionPool {
-    public Sequoiadb peek(ConnItem connItem);
-
-    public Sequoiadb poll(ConnItem connItem);
+    public Sequoiadb poll(ConnItem pos);
 
     public ConnItem poll(Sequoiadb sdb);
 

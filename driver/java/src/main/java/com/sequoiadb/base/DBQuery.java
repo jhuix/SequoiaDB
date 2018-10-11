@@ -1,37 +1,31 @@
-/**
- * Copyright (C) 2012 SequoiaDB Inc.
- * <p>
+/*
+ * Copyright 2017 SequoiaDB Inc.
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * <p>
+ *
  * http://www.apache.org/licenses/LICENSE-2.0
- * <p>
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *
- * @package com.sequoiadb.base;
- * @brief SequoiaDB Driver for Java
- * @author Jacky Zhang
- */
-/**
- * @package com.sequoiadb.base;
- * @brief SequoiaDB Driver for Java
- * @author Jacky Zhang
- */
+*/
+
 package com.sequoiadb.base;
 
 import org.bson.BSONObject;
 
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 
 /**
- * @class DBQuery
- * @brief Database operation rules.
+ * Query expression of SequoiaDB.
+ *
+ * @see DBCollection#query(DBQuery)
  */
 public class DBQuery {
     private BSONObject matcher;
@@ -44,50 +38,51 @@ public class DBQuery {
     private int flag;
 
     /**
-     * @memberof FLG_QUERY_STRINGOUT 0x00000001
-     * @brief Normally, query return bson object,
-     *        when this flag is added, query return binary data stream
+     * Normally, query return bson object,
+     * when this flag is added, query return binary data stream
      */
     public static final int FLG_QUERY_STRINGOUT = 0x00000001;
 
     /**
-     * @memberof FLG_QUERY_FORCE_HINT 0x00000080
-     * @brief Force to use specified hint to query,
-     *        if database have no index assigned by the hint, fail to query.
+     * Force to use specified hint to query,
+     * if database have no index assigned by the hint, fail to query.
      */
     public static final int FLG_QUERY_FORCE_HINT = 0x00000080;
 
     /**
-     * @memberof FLG_QUERY_PARALLED 0x00000100
-     * @brief Enable parallel sub query, each sub query will finish scanning diffent part of the data.
+     * Enable parallel sub query, each sub query will finish scanning diffent part of the data.
      */
     public static final int FLG_QUERY_PARALLED = 0x00000100;
 
     /**
-     * @memberof FLG_QUERY_WITH_RETURNDATA 0x00000200
-     * @brief In general, query won't return data until cursor gets from database, when add this flag, return data in query response, it will be more high-performance.
+     * In general, query won't return data until cursor gets from database, when add this flag, return data in query response, it will be more high-performance.
      */
     public static final int FLG_QUERY_WITH_RETURNDATA = 0x00000200;
 
     /**
-     * @memberof FLG_QUERY_EXPLAIN 0x00000400
-     * @brief Query explain.
+     * Query explain.
      */
     static final int FLG_QUERY_EXPLAIN = 0x00000400;
 
     /**
-     * @memberof FLG_QUERY_MODIFY 0x00001000
-     * @brief Query and modify.
+     * Query and modify.
      */
     static final int FLG_QUERY_MODIFY = 0x00001000;
+
+    /**
+     * Enable prepare more data when query.
+     */
+    public static final int FLG_QUERY_PREPARE_MORE = 0x00004000;
+
+    /**
+     * The sharding key in update rule is not filtered,
+     * when executing queryAndUpdate.
+     */
+    public static final int FLG_QUERY_KEEP_SHARDINGKEY_IN_UPDATE = 0x00008000;
 
     final static Map<Integer, Integer> flagsMap = new HashMap<Integer, Integer>();
 
     static {
-        flagsMap.put(FLG_QUERY_STRINGOUT, FLG_QUERY_STRINGOUT);
-        flagsMap.put(FLG_QUERY_FORCE_HINT, FLG_QUERY_FORCE_HINT);
-        flagsMap.put(FLG_QUERY_PARALLED, FLG_QUERY_PARALLED);
-        flagsMap.put(FLG_QUERY_WITH_RETURNDATA, FLG_QUERY_WITH_RETURNDATA);
     }
 
     public DBQuery() {
@@ -102,8 +97,6 @@ public class DBQuery {
     }
 
     /**
-     * @fn BSONObject getModifier()
-     * @brief Get modified rule
      * @return The modified rule BSONObject
      */
     public BSONObject getModifier() {
@@ -111,35 +104,31 @@ public class DBQuery {
     }
 
     /**
-     * @fn void setModifier(BSONObject modifier)
-     * @brief Set modified rule
-     * @param Modifier The modified rule BSONObject
+     * Set modified rule.
+     *
+     * @param modifier The modified rule BSONObject
      */
     public void setModifier(BSONObject modifier) {
         this.modifier = modifier;
     }
 
     /**
-     * @fn BSONObject getSelector()
-     * @brief Get selective rule
-     * @return The selective rule BSONObject
+     * @return The selective rule BSONObject.
      */
     public BSONObject getSelector() {
         return selector;
     }
 
     /**
-     * @fn void setSelector(BSONObject selector)
-     * @brief Set selective rule
-     * @param Selector The selective rule BSONObject
+     * Set selective rule.
+     *
+     * @param selector The selective rule BSONObject
      */
     public void setSelector(BSONObject selector) {
         this.selector = selector;
     }
 
     /**
-     * @fn BSONObject getMatcher()
-     * @brief Get matching rule
      * @return The matching rule BSONObject
      */
     public BSONObject getMatcher() {
@@ -147,17 +136,15 @@ public class DBQuery {
     }
 
     /**
-     * @fn void setMatcher(BSONObject matcher)
-     * @brief Set matching rule
-     * @param Matcher The matching rule BSONObject
+     * Set matching rule.
+     *
+     * @param matcher The matching rule BSONObject
      */
     public void setMatcher(BSONObject matcher) {
         this.matcher = matcher;
     }
 
     /**
-     * @fn BSONObject getOrderBy()
-     * @brief Get ordered rule
      * @return The ordered rule BSONObject
      */
     public BSONObject getOrderBy() {
@@ -165,35 +152,31 @@ public class DBQuery {
     }
 
     /**
-     * @fn void setOrderBy(BSONObject orderBy)
-     * @brief Set ordered rule
-     * @param OrderBy The ordered rule BSONObject
+     * Set ordered rule.
+     *
+     * @param orderBy The ordered rule BSONObject
      */
     public void setOrderBy(BSONObject orderBy) {
         this.orderBy = orderBy;
     }
 
     /**
-     * @fn BSONObject getHint()
-     * @brief Get sepecified access plan
-     * @return The sepecified access plan BSONObject
+     * @return The specified access plan BSONObject
      */
     public BSONObject getHint() {
         return hint;
     }
 
     /**
-     * @fn void setHint(BSONObject hint)
-     * @brief Set sepecified access plan
-     * @param Hint The sepecified access plan BSONObject
+     * Set specified access plan.
+     *
+     * @param hint The specified access plan BSONObject
      */
     public void setHint(BSONObject hint) {
         this.hint = hint;
     }
 
     /**
-     * @fn Long getSkipRowsCount()
-     * @brief Get the count of BSONObjects to skip
      * @return The count of BSONObjects to skip
      */
     public Long getSkipRowsCount() {
@@ -201,17 +184,15 @@ public class DBQuery {
     }
 
     /**
-     * @fn void setSkipRowsCount(Long skipRowsCount)
-     * @brief Set the count of BSONObjects to skip
-     * @param SkipRowsCount The count of BSONObjects to skip
+     * Set the count of BSONObjects to skip.
+     *
+     * @param skipRowsCount The count of BSONObjects to skip
      */
     public void setSkipRowsCount(Long skipRowsCount) {
         this.skipRowsCount = skipRowsCount;
     }
 
     /**
-     * @fn Long getReturnRowsCount()
-     * @brief Get the count of BSONObjects to return
      * @return The count of BSONObjects to return
      */
     public Long getReturnRowsCount() {
@@ -219,64 +200,45 @@ public class DBQuery {
     }
 
     /**
-     * @fn void setReturnRowsCount(Long returnRowsCount)
-     * @brief Set the count of BSONObjects to return
-     * @param ReturnRowsCount The count of BSONObjects to return
+     * Set the count of BSONObjects to return.
+     *
+     * @param returnRowsCount The count of BSONObjects to return
      */
     public void setReturnRowsCount(Long returnRowsCount) {
         this.returnRowsCount = returnRowsCount;
     }
 
     /**
-     * @fn int getFlag()
-     * @brief Get the query
      * @return The query flag
-     * @see com.sequoiadb.base.DBCollection.query
      */
     public int getFlag() {
         return flag;
     }
 
     /**
-     * @fn void setFlag(int flag)
-     * @brief Set the query flag
-     * @param The query flag as below:
-     *  	  DBQuery.FLG_QUERY_STRINGOUT
-     *        DBQuery.FLG_QUERY_FORCE_HINT
-     *        DBQuery.LG_QUERY_PARALLED
-     *        DBQuery.FLG_QUERY_WITH_RETURNDATA  
-     * @see com.sequoiadb.base.DBCollection.query
+     * Set the query flag.
+     *
+     * @param flag The query flag as below:
+     *             DBQuery.FLG_QUERY_STRINGOUT
+     *             DBQuery.FLG_QUERY_FORCE_HINT
+     *             DBQuery.LG_QUERY_PARALLED
+     *             DBQuery.FLG_QUERY_WITH_RETURNDATA
      */
     public void setFlag(int flag) {
         this.flag = flag;
     }
 
-    private static int _regulate(final int newFlags, final int flag) {
-        int retFlags = newFlags;
-        Integer tmpFlag = flagsMap.get((Integer) flag);
-        if (tmpFlag == null)
-            return retFlags;
-        if (tmpFlag != flag) {
-            retFlags &= ~flag;
-            retFlags |= tmpFlag;
+    static int regulateFlags(final int flags) {
+        int erasedFlags = flags;
+        int mergedFlags = 0;
+        Iterator<Map.Entry<Integer, Integer>> entries = flagsMap.entrySet().iterator();
+        while (entries.hasNext()) {
+            Map.Entry<Integer, Integer> entry = entries.next();
+            if (((erasedFlags & entry.getKey()) != 0) && (entry.getKey() != entry.getValue())) {
+                erasedFlags &= ~entry.getKey();
+                mergedFlags |= entry.getValue();
+            }
         }
-        return retFlags;
-    }
-
-    static int regulateFlag(final int flag) {
-        int newFlags = flag;
-        if ((flag & FLG_QUERY_STRINGOUT) != 0) {
-            newFlags = _regulate(newFlags, FLG_QUERY_STRINGOUT);
-        }
-        if ((flag & FLG_QUERY_FORCE_HINT) != 0) {
-            newFlags = _regulate(newFlags, FLG_QUERY_FORCE_HINT);
-        }
-        if ((flag & FLG_QUERY_PARALLED) != 0) {
-            newFlags = _regulate(newFlags, FLG_QUERY_PARALLED);
-        }
-        if ((flag & FLG_QUERY_WITH_RETURNDATA) != 0) {
-            newFlags = _regulate(newFlags, FLG_QUERY_WITH_RETURNDATA);
-        }
-        return newFlags;
+        return erasedFlags | mergedFlags;
     }
 }

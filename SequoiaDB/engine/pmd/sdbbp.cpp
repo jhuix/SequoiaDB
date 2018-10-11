@@ -268,15 +268,9 @@ int main ( int argc , const char * argv[] )
 
    if ( ! freopen ( SDB_BP_LOG_FILE , "a" , stdout ) )
    {
-      FILE *stream = NULL ;
-#if defined(_WINDOWS)
-      stream = freopen( "CON", "w", stdout ) ;
-#else
-      stream = freopen( "/dev/tty", "w", stdout ) ;
-#endif
-      if ( NULL == stream )
+      rc = ossResetTty() ;
+      if ( SDB_OK != rc )
       {
-         rc = SDB_SYS ;
          goto error ;
       }
       ossPrintf( "warning: failed to freopen stdout to log "

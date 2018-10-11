@@ -56,6 +56,8 @@ namespace engine
 {
 
    class _dmsScanner ;
+   class _rtnContextData ;
+   class _rtnContextDump ;
 
    INT32 rtnReallocBuffer ( CHAR **ppBuffer, INT32 *bufferSize,
                             INT32 newLength, INT32 alignmentSize ) ;
@@ -65,7 +67,7 @@ namespace engine
    BSONObj rtnNullKeyNameObj( const BSONObj &obj ) ;
 
    INT32 rtnGetIXScanner ( const CHAR *pCollectionShortName,
-                           _optAccessPlan *plan,
+                           optAccessPlanRuntime *planRuntime,
                            _dmsStorageUnit *su,
                            _dmsMBContext *mbContext,
                            _pmdEDUCB *cb,
@@ -73,19 +75,30 @@ namespace engine
                            DMS_ACCESS_TYPE accessType ) ;
 
    INT32 rtnGetTBScanner ( const CHAR *pCollectionShortName,
-                           _mthMatchTree &matcher,
+                           optAccessPlanRuntime *planRuntime,
                            _dmsStorageUnit *su,
                            _dmsMBContext *mbContext,
                            _pmdEDUCB *cb,
                            _dmsScanner **ppScanner,
                            DMS_ACCESS_TYPE accessType ) ;
 
-   INT32 rtnGetIndexSeps( _optAccessPlan *plan,
+   INT32 rtnGetIndexSeps( optAccessPlanRuntime *planRuntime,
                           _dmsStorageUnit *su,
                           _dmsMBContext *mbContext,
                           _pmdEDUCB *cb,
                           std::vector< BSONObj > &idxBlocks,
                           std::vector< dmsRecordID > &idxRIDs ) ;
+
+   class _rtnInternalSorting ;
+
+   INT32 rtnGetIndexSamples ( _dmsStorageUnit *su,
+                              ixmIndexCB *indexCB,
+                              _pmdEDUCB * cb,
+                              UINT32 sampleRecords,
+                              UINT64 totalRecords,
+                              BOOLEAN fullScan,
+                              _rtnInternalSorting &sorter,
+                              UINT32 &levels, UINT32 &pages ) ;
 
    INT32 rtnInsert ( const CHAR *pCollectionName, BSONObj &objs, INT32 objNum,
                      INT32 flags, pmdEDUCB *cb,
@@ -98,25 +111,41 @@ namespace engine
                      INT32 *pInsertedNum = NULL,
                      INT32 *pIgnoredNum = NULL ) ;
 
-   INT32 rtnUpdate ( const CHAR *pCollectionName, const BSONObj &selector,
+   INT32 rtnReplayInsert( const CHAR *pCollectionName, BSONObj &obj,
+                          INT32 flags, pmdEDUCB *cb, SDB_DMSCB *dmsCB,
+                          SDB_DPSCB *dpsCB, INT16 w = 1 ) ;
+
+   INT32 rtnUpdate ( const CHAR *pCollectionName, const BSONObj &matcher,
                      const BSONObj &updator, const BSONObj &hint, INT32 flags,
                      pmdEDUCB *cb, INT64 *pUpdateNum = NULL,
-                     INT32 *pInsertNum = NULL ) ;
+                     INT32 *pInsertNum = NULL,
+                     const BSONObj *shardingKey = NULL ) ;
 
-   INT32 rtnUpdate ( const CHAR *pCollectionName, const BSONObj &selector,
+   INT32 rtnUpdate ( const CHAR *pCollectionName, const BSONObj &matcher,
                      const BSONObj &updator, const BSONObj &hint, INT32 flags,
                      pmdEDUCB *cb, SDB_DMSCB *dmsCB, SDB_DPSCB *dpsCB,
                      INT16 w = 1, INT64 *pUpdateNum = NULL,
-                     INT32 *pInsertNum = NULL ) ;
+                     INT32 *pInsertNum = NULL,
+                     const BSONObj *shardingKey = NULL ) ;
+
+   INT32 rtnUpdate ( rtnQueryOptions &options, const BSONObj &updator,
+                     pmdEDUCB *cb, SDB_DMSCB *dmsCB, SDB_DPSCB *dpsCB,
+                     INT16 w = 1, INT64 *pUpdateNum = NULL,
+                     INT32 *pInsertNum = NULL,
+                     const BSONObj *shardingKey = NULL ) ;
 
    INT32 rtnUpsertSet( const BSONElement& setOnInsert, BSONObj& target ) ;
 
-   INT32 rtnDelete ( const CHAR *pCollectionName, const BSONObj &deletor,
+   INT32 rtnDelete ( const CHAR *pCollectionName, const BSONObj &matcher,
                      const BSONObj &hint, INT32 flags, pmdEDUCB *cb,
                      INT64 *pDelNum = NULL ) ;
 
-   INT32 rtnDelete ( const CHAR *pCollectionName, const BSONObj &deletor,
+   INT32 rtnDelete ( const CHAR *pCollectionName, const BSONObj &matcher,
                      const BSONObj &hint, INT32 flags, pmdEDUCB *cb,
+                     SDB_DMSCB *dmsCB, SDB_DPSCB *dpsCB, INT16 w = 1,
+                     INT64 *pDelNum = NULL ) ;
+
+   INT32 rtnDelete ( rtnQueryOptions &options, pmdEDUCB *cb,
                      SDB_DMSCB *dmsCB, SDB_DPSCB *dpsCB, INT16 w = 1,
                      INT64 *pDelNum = NULL ) ;
 
@@ -146,6 +175,15 @@ namespace engine
                     rtnContextBase **ppContext = NULL,
                     BOOLEAN enablePrefetch = FALSE ) ;
 
+   INT32 rtnQuery ( rtnQueryOptions &options,
+                    pmdEDUCB *cb,
+                    SDB_DMSCB *dmsCB,
+                    SDB_RTNCB *rtnCB,
+                    SINT64 &contextID,
+                    rtnContextBase **ppContext = NULL,
+                    BOOLEAN enablePrefetch = FALSE,
+                    BOOLEAN keepSearchPaths = FALSE ) ;
+
    INT32 rtnSort ( rtnContext **ppContext,
                    const BSONObj &orderBy,
                    _pmdEDUCB *cb,
@@ -161,7 +199,7 @@ namespace engine
                              SDB_DMSCB *dmsCB,
                              SDB_RTNCB *rtnCB,
                              SINT64 &contextID,
-                             rtnContextData **ppContext = NULL,
+                             _rtnContextData **ppContext = NULL,
                              BOOLEAN enablePrefetch = FALSE ) ;
 
    INT32 rtnCreateCollectionSpaceCommand ( const CHAR *pCollectionSpace,
@@ -169,6 +207,7 @@ namespace engine
                                            SDB_DMSCB *dmsCB, SDB_DPSCB *dpsCB,
                                            INT32 pageSize = DMS_PAGE_SIZE_DFT,
                                            INT32 lobPageSize = DMS_DEFAULT_LOB_PAGE_SZ,
+                                           DMS_STORAGE_TYPE type = DMS_STORAGE_NORMAL,
                                            BOOLEAN sysCall = FALSE ) ;
 
    INT32 rtnCreateCollectionCommand ( const CHAR *pCollection,
@@ -179,7 +218,8 @@ namespace engine
                                       UTIL_COMPRESSOR_TYPE compressorType =
                                           UTIL_COMPRESSOR_INVALID,
                                       INT32 flags = 0,
-                                      BOOLEAN sysCall = FALSE ) ;
+                                      BOOLEAN sysCall = FALSE,
+                                      const BSONObj *extOptions = NULL ) ;
 
    INT32 rtnCreateCollectionCommand ( const CHAR *pCollection,
                                       const BSONObj &shardingKey,
@@ -190,7 +230,8 @@ namespace engine
                                       UTIL_COMPRESSOR_TYPE compressorType =
                                           UTIL_COMPRESSOR_INVALID,
                                       INT32 flags = 0,
-                                      BOOLEAN sysCall = FALSE ) ;
+                                      BOOLEAN sysCall = FALSE,
+                                      const BSONObj *extOptions = NULL ) ;
 
    INT32 rtnGetMore ( SINT64 contextID,            // input, context id
                       SINT32 maxNumToReturn,       // input, max record to read
@@ -204,6 +245,7 @@ namespace engine
                                   const CHAR *indexPath,
                                   const CHAR *lobPath,
                                   const CHAR *lobMetaPath,
+                                  pmdEDUCB *cb,
                                   SDB_DMSCB *dmsCB,
                                   BOOLEAN checkOnly = FALSE ) ;
 
@@ -242,7 +284,9 @@ namespace engine
                                            SDB_DMSCB *dmsCB,
                                            dmsStorageUnit **ppsu,
                                            const CHAR **ppCollectionName,
-                                           dmsStorageUnitID &suID ) ;
+                                           dmsStorageUnitID &suID,
+                                           OSS_LATCH_MODE lockType = SHARED,
+                                           INT32 millisec = -1 ) ;
 
    INT32 rtnFindCollection ( const CHAR *pCollection,
                              SDB_DMSCB *dmsCB ) ;
@@ -258,7 +302,7 @@ namespace engine
                            const CHAR *backupName,
                            const BSONObj &option ) ;
 
-   INT32 rtnDumpBackups ( const BSONObj &hint, rtnContextDump *context ) ;
+   INT32 rtnDumpBackups ( const BSONObj &hint, _rtnContextDump *context ) ;
 
    BOOLEAN rtnIsInBackup () ;
 
@@ -294,6 +338,9 @@ namespace engine
 
    INT32 rtnGetNumberLongElement ( const BSONObj &obj, const CHAR *fieldName,
                                    INT64 &value ) ;
+
+   INT32 rtnGetDoubleElement ( const BSONObj &obj, const CHAR *fieldName,
+                               double &value ) ;
 
    INT32 rtnCreateIndexCommand ( const CHAR *pCollection,
                                  const BSONObj &indexObj,
@@ -344,51 +391,39 @@ namespace engine
                                SDB_DPSCB *dpsCB,
                                BOOLEAN sysCall = FALSE ) ;
 
-   INT32 rtnGetCount ( const CHAR *pCollection,
-                       const BSONObj &matcher,
-                       const BSONObj &hint,
+   INT32 rtnGetCount ( const rtnQueryOptions & options,
                        SDB_DMSCB *dmsCB,
                        _pmdEDUCB *cb,
                        SDB_RTNCB *rtnCB,
-                       INT64 *count,
-                       INT32 flags = 0 ) ;
+                       INT64 *count ) ;
 
-   INT32 rtnGetCount ( const CHAR *pCollection,
-                       const BSONObj &matcher,
-                       const BSONObj &hint,
+   INT32 rtnGetCount ( const rtnQueryOptions & options,
                        SDB_DMSCB *dmsCB,
                        _pmdEDUCB *cb,
                        SDB_RTNCB *rtnCB,
-                       rtnContext *context,
-                       INT32 flags = 0 ) ;
+                       rtnContext *context ) ;
 
    INT32 rtnGetCommandEntry ( RTN_COMMAND_TYPE command,
-                              const CHAR *pCollectionName,
-                              const BSONObj &selector,
-                              const BSONObj &matcher,
-                              const BSONObj &orderBy,
-                              const BSONObj &hint,
-                              SINT32 flags,
+                              const rtnQueryOptions & options,
                               pmdEDUCB *cb,
-                              SINT64 numToSkip,
-                              SINT64 numToReturn,
                               SDB_DMSCB *dmsCB,
                               SDB_RTNCB *rtnCB,
                               SINT64 &contextID ) ;
 
-   INT32 rtnGetQueryMeta( const CHAR *pCollectionName,
-                          const BSONObj &match,
-                          const BSONObj &orderby,
-                          const BSONObj &hint,
+   INT32 rtnGetQueryMeta( const rtnQueryOptions & options,
                           SDB_DMSCB *dmsCB,
                           pmdEDUCB *cb,
-                          rtnContextDump *context ) ;
+                          _rtnContextDump *context ) ;
 
    INT32 rtnTestCollectionCommand ( const CHAR *pCollection,
                                     SDB_DMSCB *dmsCB ) ;
 
    INT32 rtnTestCollectionSpaceCommand ( const CHAR *pCollectionSpace,
                                          SDB_DMSCB *dmsCB ) ;
+
+   INT32 rtnPopCommand( const CHAR *pCollectionName, INT64 logicalID,
+                        pmdEDUCB *cb, SDB_DMSCB *dmsCB, SDB_DPSCB *dpsCB,
+                        INT16 w, INT8 direction = 1 ) ;
 
    INT32 rtnTestIndex( const CHAR *pCollection,
                        const CHAR *pIndexName,
@@ -450,14 +485,7 @@ namespace engine
                           INT32 objNum, SINT32 flags, pmdEDUCB *cb,
                           SDB_DMSCB *dmsCB, SINT64 &contextID ) ;
 
-   INT32 rtnExplain( const CHAR *pCollectionName,
-                     const BSONObj &selector,
-                     const BSONObj &matcher,
-                     const BSONObj &orderBy,
-                     const BSONObj &hint,
-                     SINT32 flags,
-                     SINT64 numToSkip,
-                     SINT64 numToReturn,
+   INT32 rtnExplain( rtnQueryOptions &options,
                      pmdEDUCB *cb, SDB_DMSCB *dmsCB,
                      SDB_RTNCB *rtnCB, INT64 &contextID,
                      rtnContextBase **ppContext = NULL ) ;
@@ -473,6 +501,50 @@ namespace engine
    INT32 rtnSyncDB( pmdEDUCB *cb, INT32 syncType,
                     const CHAR *pSpecCSName = NULL,
                     BOOLEAN block = FALSE ) ;
+
+   INT32 rtnTestAndCreateCL ( const CHAR *pCLFullName, pmdEDUCB *cb,
+                              _SDB_DMSCB *dmsCB, _dpsLogWrapper *dpsCB,
+                              BOOLEAN sys = TRUE ) ;
+
+   INT32 rtnTestAndCreateIndex ( const CHAR *pCLFullName,
+                                 const BSONObj &indexDef,
+                                 pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
+                                 _dpsLogWrapper *dpsCB, BOOLEAN sys = TRUE,
+                                 INT32 sortBufferSize = SDB_INDEX_SORT_BUFFER_DEFAULT_SIZE ) ;
+
+   INT32 rtnAnalyze ( const CHAR *pCSName,
+                      const CHAR *pCLName,
+                      const CHAR *pIXName,
+                      const rtnAnalyzeParam &param,
+                      pmdEDUCB *cb,
+                      _SDB_DMSCB *dmsCB,
+                      _SDB_RTNCB *rtnCB,
+                      _dpsLogWrapper *dpsCB ) ;
+
+   INT32 rtnReloadCLStats ( dmsStorageUnit *pSU, dmsMBContext *mbContext,
+                            pmdEDUCB *cb, _SDB_DMSCB *dmsCB ) ;
+
+   INT32 rtnAnalyzeDpsLog ( const CHAR *pCSName,
+                            const CHAR *pCLFullName,
+                            const CHAR *pIndexName,
+                            _dpsLogWrapper *dpsCB ) ;
+
+   /* Split collection full name to cs name and cl name */
+   INT32 rtnResolveCollectionName( const CHAR *pInput, UINT32 inputLen,
+                                   CHAR *pSpaceName, UINT32 spaceNameSize,
+                                   CHAR *pCollectionName,
+                                   UINT32 collectionNameSize ) ;
+
+   /* Split collection full name to find cs name */
+   INT32 rtnResolveCollectionSpaceName ( const CHAR *pInput,
+                                         UINT32 inputLen,
+                                         CHAR *pSpaceName,
+                                         UINT32 spaceNameSize ) ;
+
+   /* Check whether collections in the same space */
+   INT32 rtnCollectionsInSameSpace ( const CHAR *pCLNameA, UINT32 lengthA,
+                                     const CHAR *pCLNameB, UINT32 lengthB,
+                                     BOOLEAN &inSameSpace ) ;
 
 }
 

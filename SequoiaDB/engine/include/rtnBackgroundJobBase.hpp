@@ -61,6 +61,7 @@ namespace engine
       PMD_JOB_SYNC               = 15, // sync job
       RTN_JOB_REBUILD            = 16, // rebuild job
       RTN_JOB_CLS_STORAGE_CHECK  = 17, // storage check job
+      RTN_JOB_OPT_PLAN_CLEAR     = 18, // opt plan clear job
       RTN_JOB_PAGEMAPPING        = 19, // page mapping job
 
       RTN_JOB_MAX
@@ -129,6 +130,8 @@ namespace engine
          virtual const CHAR* name () const = 0 ;
          virtual BOOLEAN muteXOn ( const _rtnBaseJob *pOther ) = 0 ;
          virtual INT32 doit () = 0 ;
+
+         virtual BOOLEAN reuseEDU() const { return FALSE ; }
 
       private:
          ossSpinXLatch        _latchIn ;

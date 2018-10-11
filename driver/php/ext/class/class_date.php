@@ -27,14 +27,35 @@ class SequoiaDate
    /**
     * Constructor.
     *
-    * @param string $date a string to uses as the date
+    * @param $date the date
     *
+    * @code string format
+    *
+    * date format.
     * @code
     * $dateObj = new SequoiaDate( '2000-01-01' ) ;
     * $arr = array( 'date' => $dateObj ) ; // json ==> { "date": { "$date": "2000-01-01" } }
     * @endcode
+    *
+    * default parameter, current date. ( Available/Support on 2.10 or newer version. )
+    * @code
+    * $dateObj = new SequoiaDate() ;
+    * $arr = array( 'date' => $dateObj ) ; // json ==> { "date": { "$date": "2017-12-01" } }
+    * @endcode
+    *
+    * string format(millisecond). ( Available/Support on 2.10 or newer version. )
+    * @code
+    * $dateObj = new SequoiaDate( '946656000000' ) ;
+    * $arr = array( 'date' => $dateObj ) ; // json ==> { "date": { "$date": "2000-01-01" } }
+    * @endcode
+    *
+    * integer(millisecond). ( Available/Support on 2.10 or newer version. )
+    * @code
+    * $dateObj = new SequoiaDate( 946656000000 ) ;
+    * $arr = array( 'date' => $dateObj ) ; // json ==> { "date": { "$date": "2000-01-01" } }
+    * @endcode
    */
-   public function __construct( $date ){}
+   public function __construct( string|integer $date ){}
 
    /**
     * PHP Magic Methods, the class as string output.

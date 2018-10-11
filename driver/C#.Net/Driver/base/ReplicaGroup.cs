@@ -333,7 +333,18 @@ namespace SequoiaDB
          */
         public Node GetSlave()
         {
-            int[] positions = null;
+            return GetSlave(null);
+        }
+
+        /** \fn Node GetSlave(params int[] positions)
+         *  \brief Get the slave node of current group
+         *  \param positions The positions of nodes
+         *  \return The fitted node or null
+         *  \exception SequoiaDB.BaseException
+         *  \exception System.Exception
+         */
+        public Node GetSlave(params int[] positions)
+        {
             bool needGeneratePosition = false;
             List<int> validPositions = new List<int>();
             // check arguements 

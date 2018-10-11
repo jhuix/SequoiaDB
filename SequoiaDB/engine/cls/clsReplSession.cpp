@@ -997,20 +997,20 @@ namespace engine
    error:
       if ( _pReplBucket->waitEmptyAndRollback() )
       {
-         DPS_LSN expectLSN = _pReplBucket->completeLSN() ;
-         rcTmp = _logger->move( expectLSN.offset, expectLSN.version ) ;
+         DPS_LSN completeLSN = _pReplBucket->completeLSN() ;
+         rcTmp = _logger->move( completeLSN.offset, completeLSN.version ) ;
          if ( rcTmp )
          {
             PD_LOG( PDERROR, "Session[%s]: Failed to move lsn to "
                     "[%u, %llu], rc: %d, need to synchronize full data",
-                    sessionName(), expectLSN.version, expectLSN.offset,
+                    sessionName(), completeLSN.version, completeLSN.offset,
                     rcTmp ) ;
             _fullSync() ;
          }
          else
          {
             PD_LOG( PDEVENT, "Session[%s]: Move lsn to[%u, %llu]",
-                    sessionName(), expectLSN.version, expectLSN.offset ) ;
+                    sessionName(), completeLSN.version, completeLSN.offset ) ;
          }
       }
       else if ( needRollback )

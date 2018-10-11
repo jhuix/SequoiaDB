@@ -23,8 +23,8 @@ namespace engine
    private:
       INT32 _checkAndCreateDictForCL( dmsDictJob job );
       BOOLEAN _conditionMatch( dmsStorageUnit *su, UINT16 mbID ) ;
-      INT32 _createDict( dmsStorageData *sd, dmsMBContext *context ) ;
-      INT32 _transferDict( dmsStorageData *sd, dmsMBContext *context,
+      INT32 _createDict( dmsStorageDataCommon *sd, dmsMBContext *context ) ;
+      INT32 _transferDict( dmsStorageDataCommon *sd, dmsMBContext *context,
                            CHAR *dictStream, UINT32 dictSize ) ;
    private:
       utilDictCreator *_creator ;
@@ -33,7 +33,7 @@ namespace engine
    typedef _rtnDictCreatorJob rtnDictCreatorJob ;
 
    INT32 startDictCreatorJob ( EDUID *pEDUID,
-                       UINT32 scanInterval = RTN_DEFAULT_DICT_SCAN_INTERVAL ) ;
+                               UINT32 scanInterval = RTN_DEFAULT_DICT_SCAN_INTERVAL ) ;
 }
 
 #endif /* RTN_DICT_CREATOR_JOB_HPP_ */

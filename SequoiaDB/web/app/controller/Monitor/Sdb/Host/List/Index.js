@@ -1,3 +1,5 @@
+//@ sourceURL=Index.js
+//"use strict" ;
 (function(){
    var sacApp = window.SdbSacManagerModule ;
    //控制器
@@ -21,6 +23,7 @@
          'title': {
             'HostName':       $scope.autoLanguage( '主机名' ),
             'IP':             'IP',
+            'AgentService':   $scope.autoLanguage( '代理端口' ),
             'CPU':            'CPU',
             'MemorySize':     $scope.autoLanguage( '内存大小' ),
             'DiskSize':       $scope.autoLanguage( '磁盘容量' ),
@@ -33,6 +36,7 @@
             'sort': {
                'HostName':       true,
                'IP':             true,
+               'AgentService':   true,
                'CPU':            true,
                'MemorySize':     true,
                'DiskSize':       true,
@@ -43,6 +47,7 @@
             'filter': {
                'HostName':       'indexof',
                'IP':             'indexof',
+               'AgentService':   'indexof',
                'CPU':            'indexof',
                'MemorySize':     'number',
                'DiskSize':       'number',
@@ -77,8 +82,9 @@
                   return true ;
                } ) ;
             }
+         },{
+            'showLoading': false
          } ) ;
-         
       }
 
       //查询业务信息
@@ -98,6 +104,8 @@
                   return true ;
                } ) ;
             }
+         },{
+            'showLoading': false
          } ) ;
       }
 

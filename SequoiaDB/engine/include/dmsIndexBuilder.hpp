@@ -57,6 +57,7 @@ namespace engine
 
    protected:
       virtual INT32 _build() = 0 ;
+      virtual INT32 _onInit() ;
 
       #define _DMS_SKIP_EXTENT 1
       virtual INT32 _beforeExtent() ;
@@ -92,8 +93,9 @@ namespace engine
                                                _dmsStorageData* dataSU,
                                                _dmsMBContext* mbContext,
                                                _pmdEDUCB* eduCB,
-                                               dmsExtentID indexExtentID, 
-                                               INT32 sortBufferSize ) ;
+                                               dmsExtentID indexExtentID,
+                                               INT32 sortBufferSize,
+                                               UINT16 indexType ) ;
       static void releaseInstance( _dmsIndexBuilder* builder ) ;
    } ;
    typedef class _dmsIndexBuilder dmsIndexBuilder ;

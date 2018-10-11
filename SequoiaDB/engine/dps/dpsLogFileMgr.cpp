@@ -60,7 +60,7 @@ namespace engine
 
    #define LOG_FILE( a ) ( _files.at((a)%_logFileNum) )
 
-   #define WORK_FILE ( _files.at( _work ) )
+   #define WORK_FILE()  ( _files.at( _work ) )
 
    #define UPDATE_SUB( a ) { a = ++a % _files.size();}
 
@@ -149,7 +149,7 @@ namespace engine
 
       while ( i < _files.size() )
       {
-         file = _files [i] ;
+         file = _files[i] ;
          if ( file->header()._logID == DPS_INVALID_LOG_FILE_ID )
          {
             ++i ;
@@ -157,13 +157,7 @@ namespace engine
          }
 
          if ( beginLogID == DPS_INVALID_LOG_FILE_ID ||
-              ( file->header()._logID < beginLogID &&
-                beginLogID - file->header()._logID <
-                DPS_INVALID_LOG_FILE_ID / 2 ) ||
-              ( file->header()._logID > beginLogID &&
-                file->header()._logID - beginLogID >
-                DPS_INVALID_LOG_FILE_ID / 2 )
-             )
+              DPS_FILEID_COMPARE( file->header()._logID, beginLogID ) < 0 )
          {
             beginLogID = file->header()._logID ;
             _begin = i ;
@@ -231,12 +225,15 @@ namespace engine
       INT32 rc = SDB_OK;
       PD_TRACE_ENTRY ( SDB__DPSLGFILEMGR_FLUSH );
 
+      dpsLogFile *pWork = WORK_FILE() ;
+
       SDB_ASSERT ( shutdown || mb->length() == DPS_DEFAULT_PAGE_SIZE,
                    "mb length must be DPS_DEFAULT_PAGE_SIZE unless it's "
                    "shutdown" ) ;
-      if ( WORK_FILE->getIdleSize() == 0 )
+      if ( pWork->getIdleSize() == 0 )
       {
          _work = _incFileID ( _work ) ;
+         pWork = WORK_FILE() ;
          _incLogicalFileID () ;
 
          if ( !_rollFlag && _begin != _work )
@@ -249,13 +246,13 @@ namespace engine
          }
       }
 
-      if ( WORK_FILE->getIdleSize() == 0 ||
-           WORK_FILE->getIdleSize() == WORK_FILE->size() )
+      if ( pWork->getIdleSize() == 0 ||
+           pWork->getIdleSize() == pWork->size() )
       {
-         WORK_FILE->reset( _logicalWork, beginLsn.offset, beginLsn.version ) ;
+         pWork->reset( _logicalWork, beginLsn.offset, beginLsn.version ) ;
       }
 
-      rc = WORK_FILE->write ( mb->startPtr(), DPS_DEFAULT_PAGE_SIZE ) ;
+      rc = pWork->write ( mb->startPtr(), DPS_DEFAULT_PAGE_SIZE ) ;
       if ( rc )
       {
          PD_LOG ( PDERROR, "Failed to write %d bytes into file, rc = %d",
@@ -265,8 +262,8 @@ namespace engine
 
       if ( DPS_DEFAULT_PAGE_SIZE != mb->length() )
       {
-         WORK_FILE->idleSize( WORK_FILE->getIdleSize() +
-                              DPS_DEFAULT_PAGE_SIZE ) ;
+         pWork->idleSize( pWork->getIdleSize() +
+                          DPS_DEFAULT_PAGE_SIZE ) ;
       }
 
    done:
@@ -423,11 +420,7 @@ namespace engine
          _begin = file ;
          _work = file ;
          _rollFlag = FALSE ;
-         _logicalWork = offset / _logFileSz ;
-         if ( _logicalWork == DPS_INVALID_LOG_FILE_ID )
-         {
-            _logicalWork = 0 ;
-         }
+         _logicalWork = DPS_LSN_2_FILEID( offset, _logFileSz ) ;
          rc = _files[_work]->reset ( _logicalWork, offset, version ) ;
          _files[_work]->idleSize ( _logFileSz - fileOffset ) ;
       }
@@ -464,10 +457,6 @@ namespace engine
    void _dpsLogFileMgr::_incLogicalFileID ()
    {
       ++_logicalWork ;
-      if ( _logicalWork == DPS_INVALID_LOG_FILE_ID )
-      {
-         _logicalWork = 0 ;
-      }
    }
 
     // PD_TRACE_DECLARE_FUNCTION ( SDB__DPSLGFILEMGR_SYNC, "_dpsLogFileMgr::sync" )

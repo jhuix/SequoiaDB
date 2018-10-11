@@ -53,7 +53,8 @@ namespace engine
    class _mthMatchLogicNode : public _mthMatchNode
    {
       public:
-         _mthMatchLogicNode( _mthNodeAllocator *allocator ) ;
+         _mthMatchLogicNode( _mthNodeAllocator *allocator,
+                             const mthNodeConfig *config ) ;
          virtual ~_mthMatchLogicNode() ;
 
       public: /* from parent */
@@ -64,6 +65,7 @@ namespace engine
          virtual UINT32 getWeight() ;
          virtual BOOLEAN isTotalConverted() ;
          virtual BSONObj toBson() ;
+         virtual BSONObj toParamBson ( const rtnParamList &parameters ) ;
 
       protected:
          virtual INT32 _init( const CHAR *fieldName, 
@@ -77,7 +79,8 @@ namespace engine
    class _mthMatchLogicAndNode : public _mthMatchLogicNode
    {
       public:
-         _mthMatchLogicAndNode( _mthNodeAllocator *allocator ) ;
+         _mthMatchLogicAndNode( _mthNodeAllocator *allocator,
+                                const mthNodeConfig *config ) ;
          virtual ~_mthMatchLogicAndNode() ;
 
       public:
@@ -88,12 +91,15 @@ namespace engine
                                 BOOLEAN &result ) ;
          virtual BOOLEAN isTotalConverted() ;
          virtual void release() ;
+         virtual void evalEstimation ( const optCollectionStat *pCollectionStat,
+                                       double &selectivity, UINT32 &cpuCost ) ;
    } ;
 
    class _mthMatchLogicOrNode : public _mthMatchLogicNode
    {
       public:
-         _mthMatchLogicOrNode( _mthNodeAllocator *allocator ) ;
+         _mthMatchLogicOrNode( _mthNodeAllocator *allocator,
+                               const mthNodeConfig *config ) ;
          virtual ~_mthMatchLogicOrNode() ;
 
       public:
@@ -102,15 +108,20 @@ namespace engine
          virtual INT32 execute( const BSONObj &obj, 
                                 _mthMatchTreeContext &context,
                                 BOOLEAN &result ) ;
-         virtual INT32 calcPredicate( _rtnPredicateSet &predicateSet ) ;
-         virtual INT32 extraEqualityMatches( BSONObjBuilder &builder ) ;
+         virtual INT32 calcPredicate( rtnPredicateSet &predicateSet,
+                                      const rtnParamList * paramList ) ;
+         virtual INT32 extraEqualityMatches( BSONObjBuilder &builder,
+                                             const rtnParamList *parameters ) ;
          virtual void release() ;
+         virtual void evalEstimation ( const optCollectionStat *pCollectionStat,
+                                       double &selectivity, UINT32 &cpuCost ) ;
    } ;
 
    class _mthMatchLogicNotNode : public _mthMatchLogicAndNode
    {
       public:
-         _mthMatchLogicNotNode( _mthNodeAllocator *allocator ) ;
+         _mthMatchLogicNotNode( _mthNodeAllocator *allocator,
+                                const mthNodeConfig *config ) ;
          virtual ~_mthMatchLogicNotNode() ;
 
       public:
@@ -119,10 +130,14 @@ namespace engine
          virtual INT32 execute( const BSONObj &obj, 
                                 _mthMatchTreeContext &context,
                                 BOOLEAN &result ) ;
-         virtual INT32 calcPredicate( _rtnPredicateSet &predicateSet ) ;
-         virtual INT32 extraEqualityMatches( BSONObjBuilder &builder ) ;
+         virtual INT32 calcPredicate( rtnPredicateSet &predicateSet,
+                                      const rtnParamList * paramList ) ;
+         virtual INT32 extraEqualityMatches( BSONObjBuilder &builder,
+                                             const rtnParamList *parameters ) ;
          virtual BOOLEAN isTotalConverted() ;
          virtual void release() ;
+         virtual void evalEstimation ( const optCollectionStat *pCollectionStat,
+                                       double &selectivity, UINT32 &cpuCost ) ;
    } ;
 }
 

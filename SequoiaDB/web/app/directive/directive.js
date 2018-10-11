@@ -1495,8 +1495,10 @@
                   'width': 0,
                   'height': 0
                },
-               Body: {              //body的样式
+               Event: {
+                  onResize: null
                },
+               Body: {},            //body的样式
                Button: {            //按钮
                   OK: {
                      'Text': $scope.autoLanguage( '确定' ),
@@ -1507,7 +1509,7 @@
                      'Func': function(){ return true; }
                   }
                },
-               Mask: $( '<div></div>' ).attr( 'ng-mousedown', 'prompt()' ).addClass( 'mask-screen unalpha' ),  //遮罩
+               Mask: $compile( $( '<div></div>' ).attr( 'ng-mousedown', 'prompt()' ).addClass( 'mask-screen unalpha' ) )( $scope ),  //遮罩
                Temp: {              //临时数据
                   left:    100000,
                   top:     100000,
@@ -1524,9 +1526,30 @@
                post: function postLink( scope, element, attributes ){
 
                   scope.$on( '$destroy', function(){  //主scope释放，子的scope也要释放
+
                      if( scope.lastScope !== null )
                         scope.lastScope.$destroy() ;
+
+                     $animate.leave( scope.Setting['Mask'] ) ;
+                     if( scope.Setting.Modal !== null )
+                     {
+                        scope.Setting.Modal.remove() ;
+                        $animate.leave( scope.Setting.Modal ) ;
+                     }
+
                      scope.lastScope = null ;
+                     scope.Setting['Modal'] = null ;
+                     scope.Setting['data']  = null ;
+                     scope.Setting['Windows'] = null ;
+                     scope.Setting['Body'] = null ;
+                     scope.Setting['Button']['OK']['Func'] = null ;
+                     scope.Setting['Button']['OK'] = null ;
+                     scope.Setting['Button']['Close']['Func'] = null ;
+                     scope.Setting['Button']['Close'] = null ;
+                     scope.Setting['Button'] = null ;
+                     scope.Setting['Mask'] = null ;
+                     scope.Setting['Temp'] = null ;
+                     scope.Setting = null ;
                   } ) ;
 
                   //解析表达式
@@ -1550,12 +1573,12 @@
                      scope.Setting.Temp.y = 0 ;
                      //先恢复窗口
                      scope.recoveryModal() ;
+                     if( scope.lastScope !== null )
+                     {
+                        scope.lastScope.$destroy() ;
+                        scope.lastScope = null ;
+                     }
                      $timeout( function(){
-                        if( scope.lastScope !== null )
-                        {
-                           scope.lastScope.$destroy() ;
-                           scope.lastScope = null ;
-                        }
                         var modal = $( '> .modal2', element ) ;
                         var bodyEle = $( '> .body', modal ) ;
                         if( bodyEle.length > 0 && scope.Setting.isShow == true )
@@ -1565,6 +1588,7 @@
                            childScope[ sub ] = scope.Setting.data ;
                            transclude( childScope, function( clone ){
                               $animate.enter( clone, bodyEle, null ) ;
+                              bodyEle = null ;
                            } ) ;
                         }
                         $( modal ).detach() ;
@@ -1629,7 +1653,7 @@
                      $( element ).height( 0 ) ; //为了Ie7兼容
                      if( scope.Setting.isShow == false )
                      {
-                        $( document.body ).append( $compile( scope.Setting.Mask )( scope ) ) ;
+                        $( document.body ).append( scope.Setting.Mask ) ;
                      }
                      scope.Setting.isShow = true ;
                      createBody() ;
@@ -1637,14 +1661,21 @@
 
                   //关闭窗口
                   scope.closeWindows = function(){
+                     if( scope.lastScope !== null )
+                        scope.lastScope.$destroy() ;
                      if( scope.Setting.Modal !== null )
                      {
-                        $( scope.Setting.Modal ).detach() ;
-                        $( element ).append( scope.Setting.Modal ) ;
+                        scope.Setting.Modal.remove() ;
+                        $animate.leave( scope.Setting.Modal ) ;
                         scope.Setting.Modal = null ;
                      }
                      scope.Setting.isShow = false ;
-                     scope.Setting.Mask.detach() ;
+                     $( scope.Setting.Mask ).detach() ;
+                  }
+
+                  //添加重绘事件
+                  scope.setResize = function( func ){
+                     scope.Setting.Event.onResize = func ;
                   }
 
                   //设置确定按钮
@@ -1691,6 +1722,7 @@
                         callback['DisableBodyScroll'] = scope.disableBodyScroll ;
                         callback['SetTitle']          = scope.setTitle ;
                         callback['SetIcon']           = scope.setIcon ;
+                        callback['SetResize']         = scope.setResize ;
                      }
                   } ) ;
 
@@ -1704,6 +1736,13 @@
                      else
                      {
                         maximumModal() ;
+                     }
+                     if( typeof( scope.Setting.Event.onResize ) == 'function' )
+                     {
+                        scope.Setting.Event.onResize( scope.Setting.Windows['left'],
+                                                      scope.Setting.Windows['top'],
+                                                      scope.Setting.Windows['width'],
+                                                      scope.Setting.Windows['height'] ) ;
                      }
                   }
 
@@ -1848,6 +1887,13 @@
                         $( document ).off( 'mousemove' ) ;
                         $( document ).off( 'mouseup' ) ;
                         Tip.auto() ;
+                        if( typeof( scope.Setting.Event.onResize ) == 'function' )
+                        {
+                           scope.Setting.Event.onResize( scope.Setting.Windows['left'],
+                                                         scope.Setting.Windows['top'],
+                                                         scope.Setting.Windows['width'],
+                                                         scope.Setting.Windows['height'] ) ;
+                        }
                      }
                   }
 
@@ -1921,6 +1967,10 @@
                json = $scope.data['Json'] ;
             }
             $scope.Setting = {
+               IsPaste: false,
+               PasteEle: null,
+               IsFullScreen: false,
+               TempCSS: null,
                Height: 0,
                Type: 1,
                View: json2Array( json ),
@@ -1971,6 +2021,7 @@
                   //scope的一些初始化或者运算
                },
                post: function postLink( scope, element, attributes ){
+
                   //显示类型菜单 
                   scope.showMenu = function( event ){
                      var clickEle = $( event.target ) ;
@@ -1989,15 +2040,39 @@
                         } ) ;
                      } ) ;
                   }
+
+                  scope.checkHtml = function( event ){
+                     scope.Setting.IsPaste = true ;
+                     scope.Setting.PasteEle = event.target ;
+                  }
+
+                  scope.htmlEscape = function( field ){
+                     if( scope.Setting.IsPaste )
+                     {
+                        var str = field.val ;
+                        $( scope.Setting.PasteEle ).text('').focus().text( str ) ;
+                        scope.Setting.IsPaste = false ;
+                        try
+                        {
+                           set_focus( scope.Setting.PasteEle ) ;
+                        }
+                        catch( e )
+                        {
+                        }
+                     }
+                  }
+
                   //隐藏菜单
                   scope.hideMenu = function( menu ){
                      menu.hide() ;
                      $( document ).off( 'click' ) ;
                   }
+
                   //显示隐藏子字段
                   scope.toggle = function( field ){
                      field.isOpen = !field.isOpen ;
                   }
+
                   //添加子字段
                   scope.add = function( field ){
                      if( field.type == 'Array' )
@@ -2047,6 +2122,7 @@
                         }
                      }
                   }
+
                   //删除字段
                   scope.remove = function( fields, field ){
                      var index = fields.indexOf( field ) ;
@@ -2124,7 +2200,8 @@
                      else
                      {
                         //var json = array2Json( scope.Setting.View ) ;
-                        try{
+                        try
+                        {
                            var json = JSON.parse( scope.Setting.Json ) ;
                            scope.Setting.Json = JSON.stringify( json, null, 3 ) ;
                         }
@@ -2154,7 +2231,8 @@
                      else
                      {
                         //var json = array2Json( scope.Setting.View ) ;
-                        try{
+                        try
+                        {
                            var json = JSON.parse( scope.Setting.Json ) ;
                            scope.Setting.Json = JSON.stringify( json ) ;
                         }
@@ -2164,6 +2242,31 @@
                         }
                      }
                   }
+
+                  //全屏
+                  scope.fullScreen = function(){
+                     var bodyWidth = $( window ).width() ;
+                     var bodyHeight = $( window ).height() ;
+                     var width = bodyWidth - 12 ;
+                     var height = bodyHeight - 16 ;
+                     if( width < 600 ) width = 600 ;
+                     if( height < 450 ) height = 450 ;
+                     scope.Setting.TempCSS = $( element ).attr( 'style' ) ;
+                     $( element ).css( { 'position': 'fixed', 'top': '6px', 'left': '6px', 'background': '#fff', 'width': width, 'height': height,
+                                         'border': '#AAA solid 1px', 'box-shadow': '0px 2px 8px rgba(0,0,0,0.5)', 'margin': 0 } ) ;
+                     scope.Setting.Height = height - 39 ;
+                     scope.Setting.IsFullScreen = true ;
+                  }
+
+                  //取消全屏
+                  scope.cancelFullScreen = function(){
+                     $( element ).css( { 'position': 'static', 'top': 'auto', 'left': 'auto', 'background': '#fff', 'width': 'auto', 'height': 'auto',
+                                         'border': 'none', 'box-shadow': 'none' } ) ;
+                     $( element ).attr( 'style', scope.Setting.TempCSS ) ;
+                     scope.Setting.Height = scope.data.Height - 39 ;
+                     scope.Setting.IsFullScreen = false ;
+                  }
+
                   //修改类型
                   scope.changeType = function( event, field, newType ){
                      var clickEle = $( event.target ) ;
@@ -2242,6 +2345,268 @@
       } ;
       return dire ;
    });
+
+   //Json查看器
+   sacApp.directive( 'jsonView', function( $rootScope, $timeout, SdbFunction ){
+      var dire = {
+         restrict: 'A',
+         scope: true,
+         replace: false,
+         templateUrl: './app/template/Component/JsonView.html',
+         // 专用控制器
+         controller: function( $scope, $element, $attrs, $transclude ){
+            $scope.autoLanguage = $rootScope.autoLanguage ;
+            var json = {} ;
+            $scope.Setting = {
+               TempCSS: '',
+               IsFullScreen: false,
+               Type: 1,
+               View: json2Array( json ),
+               Json: JSON.stringify( json, null, 3 ),
+               Search: ''
+            } ;
+         },
+         // 编译
+         compile: function( element, attributes ){
+            return {
+               pre: function preLink( scope, element, attributes ){
+               },
+               post: function postLink( scope, element, attributes ){
+
+                  var box = $( element ) ;
+
+                  function resizeFun()
+                  {
+                     $timeout( function(){
+                        var height ;
+                        if( scope.Setting.IsFullScreen )
+                        {
+                           var bodyWidth = $( window ).width() ;
+                           var bodyHeight = $( window ).height() ;
+                           var width = bodyWidth - 12 ;
+                           height = bodyHeight - 16 ;
+                           $( element ).css( { 'width': width, 'height': height } ) ;
+                        }
+                        else
+                        {
+                           height = box.parent().height() ;
+                        }
+
+                        $( '> .jsonEdit > .jsonModel > .editBox', box ).height( height - 40 ) ;
+                        $( '> .jsonEdit > .viewModel > .editBox', box ).height( height - 40 ) ;
+                     } ) ;
+                  }
+
+                  resizeFun() ;
+
+                  //重绘函数绑定到重绘队列
+                  SdbFunction.defer( scope, resizeFun ) ;
+
+                  //监控配置
+                  scope.$watch( attributes.jsonView, function jsonView( json ){
+                     if( typeof( json ) == 'object' )
+                     {
+                        scope.Setting.View = json2Array( json ) ;
+                        scope.Setting.View[0]['isOpen'] = true ;
+                        scope.Setting.Json = JSON.stringify( json, null, 3 ) ;
+                     }
+                  }, true ) ;
+
+                  //如果有json-callback，那么把回调的函数传给他
+                  scope.$watch( attributes.jsonCallback, function ( callbackGetter ){
+                     if( typeof( callbackGetter ) == 'object' )
+                     {
+                        callbackGetter['Resize'] = resizeFun ;
+                     }
+                  } ) ;
+
+                  //显示隐藏子字段
+                  scope.toggle = function( field ){
+                     field.isOpen = !field.isOpen ;
+                  }
+                  
+                  //切换视图
+                  scope.switchView = function(){
+                     if( scope.Setting.Type == 1 )
+                     {
+                        //视图 -> Json
+                        var json = array2Json( scope.Setting.View ) ;
+                        scope.Setting.Json = JSON.stringify( json, null, 3 ) ;
+                        scope.Setting.Type = 2 ;
+                     }
+                     else 
+                     {
+                        //Json -> 视图
+                        try
+                        {
+                           var json = JSON.parse( scope.Setting.Json ) ;
+                           scope.Setting.View = json2Array( json ) ;
+                           scope.Setting.View[0]['isOpen'] = true ;
+                           scope.Setting.Type = 1 ;
+                        }
+                        catch(e)
+                        {
+                           alert( e.message ) ;
+                        }
+                     }
+                  }
+
+                  //展开
+                  scope.expand = function(){
+                     if( scope.Setting.Type == 1 )
+                     {
+                        //视图模式
+                        function viewExpand( fields )
+                        {
+                           $.each( fields, function( index, field ){
+                              field.isOpen = true ;
+                              if( field.type == 'Object' || field.type == 'Array' )
+                              {
+                                 viewExpand( field.val ) ;
+                              }
+                           } ) ;
+                        }
+                        viewExpand( scope.Setting.View ) ;
+                     }
+                     else
+                     {
+                        try
+                        {
+                           var json = JSON.parse( scope.Setting.Json ) ;
+                           scope.Setting.Json = JSON.stringify( json, null, 3 ) ;
+                        }
+                        catch( e )
+                        {
+                           alert( e.message ) ;
+                        }
+                     }
+                  }
+
+                  //收起
+                  scope.collapse = function(){
+                     if( scope.Setting.Type == 1 )
+                     {
+                        //视图模式
+                        function viewExpand( fields )
+                        {
+                           $.each( fields, function( index, field ){
+                              field.isOpen = false ;
+                              if( field.type == 'Object' || field.type == 'Array' )
+                              {
+                                 viewExpand( field.val ) ;
+                              }
+                           } ) ;
+                        }
+                        viewExpand( scope.Setting.View ) ;
+                     }
+                     else
+                     {
+                        try
+                        {
+                           var json = JSON.parse( scope.Setting.Json ) ;
+                           scope.Setting.Json = JSON.stringify( json ) ;
+                        }
+                        catch( e )
+                        {
+                           alert( e.message ) ;
+                        }
+                     }
+                  }
+
+                  //全屏
+                  scope.fullScreen = function(){
+                     var bodyWidth = $( window ).width() ;
+                     var bodyHeight = $( window ).height() ;
+                     var width = bodyWidth - 12 ;
+                     var height = bodyHeight - 16 ;
+                     if( width < 600 ) width = 600 ;
+                     if( height < 450 ) height = 450 ;
+                     scope.Setting.TempCSS = $( element ).attr( 'style' ) ;
+                     $( element ).css( { 'position': 'fixed', 'top': '6px', 'left': '6px', 'background': '#fff', 'width': width, 'height': height,
+                                         'border': '#AAA solid 1px', 'box-shadow': '0px 2px 8px rgba(0,0,0,0.5)', 'margin': 0 } ) ;
+                     $( '.jsonEdit > .jsonModel > .editBox', box ).height( height - 40 ) ;
+                     $( '.jsonEdit > .viewModel > .editBox', box ).height( height - 40 ) ;
+                     scope.Setting.IsFullScreen = true ;
+                  }
+
+                  //取消全屏
+                  scope.cancelFullScreen = function(){
+                     $( element ).css( { 'position': 'static', 'top': 'auto', 'left': 'auto', 'background': '#fff', 'width': 'auto', 'height': 'auto',
+                                         'border': 'none', 'box-shadow': 'none' } ) ;
+                     $( element ).attr( 'style', scope.Setting.TempCSS ) ;
+                     var height = box.parent().height() ;
+                     $( '.jsonEdit > .jsonModel > .editBox', box ).height( height - 40 ) ;
+                     $( '.jsonEdit > .viewModel > .editBox', box ).height( height - 40 ) ;
+                     scope.Setting.IsFullScreen = false ;
+                  }
+
+               }
+            } ;
+         }
+      } ;
+      return dire ;
+   } ) ;
+
+   //文字摘要组件，点击可以展开
+   sacApp.directive( 'textAbstract', function( $rootScope, $timeout, SdbFunction ){
+      var maxLen = 256 ;
+      var dire = {
+         restrict: 'A',
+         scope: true,
+         replace: false,
+         template: '<span ng-click="switchShow()">{{text}}</span>',
+         // 专用控制器
+         controller: function( $scope, $element, $attrs, $transclude ){
+            $scope.str = '' ;
+            $scope.text = '' ;
+            $scope.isFullShow = false ;
+         },
+         // 编译
+         compile: function( element, attributes ){
+            return {
+               pre: function preLink( scope, element, attributes ){
+               },
+               post: function postLink( scope, element, attributes ){
+
+                  var box = $( element ) ;
+
+                  //监控配置
+                  scope.$watch( attributes.textAbstract, function textAbstract( str ){
+                     if( typeof( str ) == 'string' )
+                     {
+                        if( str.length > maxLen && scope.isFullShow == false )
+                        {
+                           scope.text = str.substring( 0, maxLen ) + '...' ;
+                           $( 'span', box ).css( { 'cursor': 'pointer' } ) ;
+                        }
+                        else
+                        {
+                           scope.text = str ;
+                           scope.isFullShow = true ;
+                        }
+                        scope.str = str ;
+                     }
+                  }, true ) ;
+
+                  scope.switchShow = function()
+                  {
+                     if( scope.str.length > maxLen && scope.isFullShow == false )
+                     {
+                        scope.text = scope.str ;
+                        scope.isFullShow = true ;
+                     }
+                     else if( scope.str.length > maxLen && scope.isFullShow == true )
+                     {
+                        scope.text = scope.str.substring( 0, maxLen ) + '...' ;
+                        scope.isFullShow = false ;
+                     }
+                  }
+               }
+            } ;
+         }
+      } ;
+      return dire ;
+   } ) ;
 
    //表单
    sacApp.directive( 'formCreate', function( $rootScope, SdbFunction ){
@@ -2399,21 +2764,22 @@
                         }
                         else if( typeof( valid ) == 'object' )
                         {
+                           var num = parseInt( value ) ;
                            var min = valid.min ;
                            var max = valid.max ;
                            var ban = valid.ban ;
                            var step = valid.step ;
-                           if( typeof( min ) == 'number' && value < min )
+                           if( typeof( min ) == 'number' && num < min )
                            {
                               error = sprintf( $scope.Setting['Text']['int']['min'], name, min ) ;
                               rc = false ;
                            }
-                           else if( typeof( max ) == 'number' && value > max )
+                           else if( typeof( max ) == 'number' && num > max )
                            {
                               error = sprintf( $scope.Setting['Text']['int']['max'], name, max ) ;
                               rc = false ;
                            }
-                           else if( typeof( ban ) == 'number' && value == ban )
+                           else if( typeof( ban ) == 'number' && num == ban )
                            {
                               error = sprintf( $scope.Setting['Text']['int']['ban'], name, ban ) ;
                               rc = false ;
@@ -2421,7 +2787,7 @@
                            else if( isArray( ban ) )
                            {
                               $.each( ban, function( index, banInt ){
-                                 if( value == banInt )
+                                 if( num == banInt )
                                  {
                                     error = sprintf( $scope.Setting['Text']['int']['ban'], name, banInt ) ;
                                     rc = false ;
@@ -2429,7 +2795,7 @@
                                  }
                               } ) ;
                            }
-                           else if( typeof( step ) == 'number' && value % step != 0 )
+                           else if( typeof( step ) == 'number' && num % step != 0 )
                            {
                               error = sprintf( $scope.Setting['Text']['int']['step'], name, step ) ;
                               rc = false ;
@@ -2447,39 +2813,40 @@
                         }
                         else if( typeof( valid ) == 'object' )
                         {
+                           var num = parseFloat( value ) ;
                            var min = valid.min ;
                            var max = valid.max ;
                            var ban = valid.ban ;
                            var step = valid.step ;
-                           if( typeof( min ) == 'number' && value < min )
+                           if( typeof( min ) == 'number' && num < min )
                            {
                               error = sprintf( $scope.Setting['Text']['double']['min'], name, min ) ;
                               rc = false ;
                            }
-                           else if( typeof( max ) == 'number' && value > max )
+                           else if( typeof( max ) == 'number' && num > max )
                            {
                               error = sprintf( $scope.Setting['Text']['double']['max'], name, max ) ;
                               rc = false ;
                            }
-                           else if( typeof( ban ) == 'number' && value == ban )
+                           else if( typeof( ban ) == 'number' && num == ban )
                            {
                               error = sprintf( $scope.Setting['Text']['double']['ban'], name, ban ) ;
                               rc = false ;
                            }
                            else if( isArray( ban ) )
                            {
-                              $.each( ban, function( index, banInt ){
-                                 if( value == banInt )
+                              $.each( ban, function( index, banFloat ){
+                                 if( num == banFloat )
                                  {
-                                    error = sprintf( $scope.Setting['Text']['double']['ban'], name, banInt ) ;
+                                    error = sprintf( $scope.Setting['Text']['double']['ban'], name, banFloat ) ;
                                     rc = false ;
                                     return false ;
                                  }
                               } ) ;
                            }
-                           else if( typeof( step ) == 'number' && value % step != 0 )
+                           else if( typeof( step ) == 'number' && num % step != 0 )
                            {
-                              error = sprintf( $scope.Setting['Text']['int']['step'], name, step ) ;
+                              error = sprintf( $scope.Setting['Text']['double']['step'], name, step ) ;
                               rc = false ;
                            }
                         }
@@ -2680,6 +3047,12 @@
                               } ) ;
                               returnValue[ inputInfo.name ] = listValue ;
                               break ;
+                           case 'switch':
+                              returnValue[ inputInfo.name ] = inputInfo.value ;
+                              break ;
+                           case 'normal':
+                              returnValue[ inputInfo.name ] = inputInfo.value ;
+                              break ;
                            }
                         } ) ;
                         return returnValue ;
@@ -2708,18 +3081,25 @@
                      return $scope.Setting.checkInput( $scope.Setting.inputList, customCheckFun ) ;
                   }
                   $scope.data.getValue = function(){
-                  if( $scope.Setting.Type == 'grid' )
-                  {
-                     return $scope.Setting.getValue2( $scope.Setting.inputList ) ;
+                     if( $scope.Setting.Type == 'grid' )
+                     {
+                        return $scope.Setting.getValue2( $scope.Setting.inputList ) ;
+                     }
+                     else
+                     {
+                        return $scope.Setting.getValue( $scope.Setting.inputList ) ;
+                     }
                   }
-                  else
-                  {
-                     return $scope.Setting.getValue( $scope.Setting.inputList ) ;
-                  }
-               }
                }
             }
             var listener = $scope.$watch( 'data', function(){
+               //清除网格内容
+               if( typeof( $scope.data ) == 'object' )
+               {
+                  init() ;
+               }
+            } ) ;
+            var listener = $scope.$watchCollection( 'data.inputList', function(){
                //清除网格内容
                if( typeof( $scope.data ) == 'object' )
                {
@@ -2792,6 +3172,19 @@
                         var index = items.indexOf( item ) ;
                         items.splice( index, 1 ) ;
                      }
+                     else
+                     {
+                        $.each( item, function( index, inputInfo ){
+                           if( typeof( inputInfo['default'] ) == 'undefined' )
+                           {
+                              inputInfo['value'] = '' ;
+                           }
+                           else
+                           {
+                              inputInfo['value'] = inputInfo['default'] ;
+                           }
+                        } ) ;
+                     }
                   }
                   scope.onChange = function( inputInfo ){
                      if( typeof( inputInfo.onChange ) == 'function' )
@@ -2843,37 +3236,59 @@
    });
 
    //json树 key部分
-   sacApp.directive( 'treeKey', function( $window ){
-      var img = $( '<img>' ).attr( 'src', './images/tree/object.png' ) ;
+   sacApp.directive( 'treeKey', function( $rootScope, SdbFunction ){
+      //var img = $( '<img>' ).attr( 'src', './images/tree/object.png' ) ;
       var dire = {
          restrict: 'A',
-         scope: {
-            data: '=para'
-         },
+         transclude: true,
+         scope: true,
          templateUrl: './app/template/Component/TreeKey.html',
          replace: false,
          controller: function( $scope, $element ){
             $scope.Setting = {
-               items: $scope.data.Json,
-               index: $scope.data.index,
-               width: $scope.data.width
+               'items': [],
+               'index': 0,
+               'width': 0
             }
          },
          compile: function( element, attributes ){
             return {
                pre: function preLink( scope, element, attributes ){
                   $( element ).addClass( 'jsonTree' ) ;
-                  var listener = scope.$watch( 'data.width', function(){
-                     if( scope.data && typeof( scope.data.width ) == 'number' )
-                     {
-                        scope.Setting.width = scope.data.width ;
-                     }
-                  } ) ;
-                  scope.$on( '$destroy', function(){
-                     listener() ;
-                  } ) ;
                },
                post: function postLink( scope, element, attributes ){
+
+                  var box = $( element ) ;
+
+                  //监控配置
+                  scope.$watch( attributes.treeKey, function treeKey( options ){
+                     if( typeof( options ) == 'object' )
+                     {
+                        scope.Setting['items'] = options['json'] ;
+                        scope.Setting['index'] = options['index'] ;
+                     }
+                  }, true ) ;
+
+                  function resizeFun(){
+                     var width = box.parent().width() ;
+                     if( width == 0 )
+                     {
+                        width = -1 ;
+                     }
+                     scope.Setting['width'] = width ;
+                  }
+
+                  resizeFun() ; //为了兼容ie7
+
+                  //重绘函数绑定到重绘队列
+                  SdbFunction.defer( scope, resizeFun ) ;
+
+                  //回收资源
+                  scope.$on( '$destroy', function(){
+                     scope.Setting['items'] = null ;
+                     scope.Setting = null ;
+                  } ) ;
+
                   scope.toggle = function( field ){
                      if( field.type == 'Object' || field.type == 'Array' )
                      {
@@ -2888,36 +3303,58 @@
    });
 
    //json树 value部分
-   sacApp.directive( 'treeValue', function( $window ){
+   sacApp.directive( 'treeValue', function( $rootScope, SdbFunction ){
       var dire = {
          restrict: 'A',
-         scope: {
-            data: '=para'
-         },
+         transclude: true,
+         scope: true,
          templateUrl: './app/template/Component/TreeValue.html',
          replace: false,
          controller: function( $scope, $element ){
             $scope.Setting = {
-               items: $scope.data.Json,
-               index: $scope.data.index,
-               width: $scope.data.width
+               'items': [],
+               'index': 0,
+               'width': 0
             }
          },
          compile: function( element, attributes ){
             return {
                pre: function preLink( scope, element, attributes ){
                   $( element ).addClass( 'jsonTreeValue' ) ;
-                  var listener = scope.$watch( 'data.width', function(){
-                     if( scope.data && typeof( scope.data.width ) == 'number' )
-                     {
-                        scope.Setting.width = scope.data.width ;
-                     }
-                  } ) ;
-                  scope.$on( '$destroy', function(){
-                     listener() ;
-                  } ) ;
                },
                post: function postLink( scope, element, attributes ){
+
+                  var box = $( element ) ;
+
+                  //监控配置
+                  scope.$watch( attributes.treeValue, function treeKey( options ){
+                     if( typeof( options ) == 'object' )
+                     {
+                        scope.Setting['items'] = options['json'] ;
+                        scope.Setting['index'] = options['index'] ;
+                     }
+                  }, true ) ;
+
+                  function resizeFun(){
+                     var width = box.parent().width() ;
+                     if( width == 0 )
+                     {
+                        width = -1 ;
+                     }
+                     scope.Setting['width'] = width ;
+                  }
+
+                  resizeFun() ; //为了兼容ie7
+
+                  //重绘函数绑定到重绘队列
+                  SdbFunction.defer( scope, resizeFun ) ;
+
+                  //回收资源
+                  scope.$on( '$destroy', function(){
+                     scope.Setting['items'] = null ;
+                     scope.Setting = null ;
+                  } ) ;
+
                }
             } ;
          }
@@ -2926,18 +3363,18 @@
    });
 
    //json树 type部分
-   sacApp.directive( 'treeType', function(){
+   sacApp.directive( 'treeType', function( $rootScope, SdbFunction ){
       var dire = {
          restrict: 'A',
-         scope: {
-            data: '=para'
-         },
+         transclude: true,
+         scope: true,
          templateUrl: './app/template/Component/TreeType.html',
          replace: false,
          controller: function( $scope, $element ){
             $scope.Setting = {
-               items: $scope.data.Json,
-               index: $scope.data.index
+               'items': [],
+               'index': 0,
+               'width': 0
             }
          },
          compile: function( element, attributes ){
@@ -2946,6 +3383,34 @@
                   $( element ).addClass( 'jsonTreeType' ) ;
                },
                post: function postLink( scope, element, attributes ){
+
+                  var box = $( element ) ;
+
+                  //监控配置
+                  scope.$watch( attributes.treeType, function treeKey( options ){
+                     if( typeof( options ) == 'object' )
+                     {
+                        scope.Setting['items'] = options['json'] ;
+                        scope.Setting['index'] = options['index'] ;
+                     }
+                  }, true ) ;
+
+                  function resizeFun(){
+                     var width = box.parent().width() ;
+                     scope.Setting['width'] = width ;
+                  }
+
+                  resizeFun() ; //为了兼容ie7
+
+                  //重绘函数绑定到重绘队列
+                  SdbFunction.defer( scope, resizeFun ) ;
+
+                  //回收资源
+                  scope.$on( '$destroy', function(){
+                     scope.Setting['items'] = null ;
+                     scope.Setting = null ;
+                  } ) ;
+
                }
             } ;
          }
@@ -3249,8 +3714,15 @@
          marginLeft  = ( typeof( marginLeft ) != 'number' ? 0 : marginLeft ) ;
          marginRight  = ( typeof( marginRight ) != 'number' ? 0 : marginRight ) ;
          offsetX  = ( typeof( offsetX ) != 'number' ? 0 : offsetX ) ;
-         width += offsetX ;
-         ele.outerWidth( width ).css( { marginLeft: marginLeft, marginRight: marginRight } ) ;
+         if( typeof( width ) == 'number' )
+         {
+            width += offsetX ;
+            ele.outerWidth( width ).css( { marginLeft: marginLeft, marginRight: marginRight } ) ;
+         }
+         else
+         {
+             ele.css( { marginLeft: marginLeft, marginRight: marginRight } ) ;
+         }
       }
       function _renderHeight( scope, ele, height )
       {
@@ -3314,6 +3786,9 @@
             {
                width = parseInt( parent.width() * parseInt( width ) * 0.01 ) ;
             }
+            else if( width == 'auto' )
+            {
+            }
             else
             {
                width  = parent.width() ;
@@ -3330,6 +3805,10 @@
             if( maxHeight.charAt( length - 1 ) == '%' )
             {  
                maxHeight = parseInt( parent.height() * parseInt( maxHeight ) * 0.01 ) ;
+            }
+            else
+            {
+               maxHeight = parseInt( maxHeight ) ;
             }
             _renderMaxHeight( scope, ele, maxHeight ) ;
          }
@@ -3997,8 +4476,20 @@
 
    /*
    下拉菜单（新版）
-   支持命令： ng-dropdown         必填   []   //列表数据
-             dropdown-callback   可选   {}   //定时器接口
+   支持命令： ng-dropdown         必填   [item] in [array_value]  //列表数据
+                                 array_value: [
+                                    { 'xxx': xxxx },
+                                    { 'xxx': xxxx },
+                                    { 'divider': true }, //分割线
+                                    { 'xxx': xxxx, ...., 'disabled': true } //禁用
+                                    { 'xxx': xxxx }
+                                 ]
+             dropdown-event      可选   {}                       //下拉菜单的事件
+                                                                 OnOpen( isOpen )
+                                                                 OnClose( isClose )
+             dropdown-callback   可选   {}                       //下拉菜单接口
+                                                                 Open()
+                                                                 Close()
    */
    sacApp.directive( 'ngDropdown', function( $compile, $animate, SdbFunction ){
       var dire = {
@@ -4007,6 +4498,7 @@
          transclude: true,
          scope: true,
          controller: function( $scope, $element, $attrs, $transclude ){
+            $scope.event = {} ;      //事件
             $scope.lastScope = [] ;  //最后一次创建的scope
             $scope.lastLi = [] ;
             $scope.mask = $compile( $( '<div></div>' ).attr( 'ng-mousedown', 'close()' ).addClass( 'mask-screen unalpha' ) )( $scope ) ;  //遮罩
@@ -4024,12 +4516,15 @@
                post: function postLink( scope, element, attributes ){
 
                   scope.$on( '$destroy', function(){
-                     $.each( scope.lastLi, function( index, liEle ){
-                        $animate.leave( liEle ) ;
-                     } ) ;
                      //主scope释放，子的scope也要释放
                      $.each( scope.lastScope, function( index, rowScope ){
                         rowScope.$destroy();
+                        rowScope = null ;
+                     } ) ;
+                     //移除dom
+                     $.each( scope.lastLi, function( index, liEle ){
+                        $animate.leave( liEle ) ;
+                        liEle = null ;
                      } ) ;
                   } ) ;
 
@@ -4045,19 +4540,22 @@
 
                   //渲染下拉菜单
                   var createDropdown = function( dataList ){
-                     var ulBox = scope.ulBox ;
-
-                     //删除旧的元素
-                     $.each( scope.lastLi, function( index, liEle ){
-                        $animate.leave( liEle ) ;
-                     } ) ;
 
                      //释放旧的scope
                      $.each( scope.lastScope, function( index, rowScope ){
                         rowScope.$destroy();
+                        rowScope = null ;
+                     } ) ;
+
+                     //删除旧的元素
+                     $.each( scope.lastLi, function( index, liEle ){
+                        $animate.leave( liEle ) ;
+                        liEle = null ;
                      } ) ;
 
                      scope.lastScope = [] ;
+
+                     var ulBox = scope.ulBox ;
 
                      var length = dataList.length ;
 
@@ -4073,19 +4571,37 @@
 
                         transclude( childScope, function( clone ){
 
-                           $.each( clone, function( index2, col ){
-                              if( col.nodeType == 1 )
-                              {
-                                 if( $( col ).attr( 'dropdown-config' ) == 'last' && index + 1 < length ) //如果有最后的属性，就只有最后才加入
+                           if( dataList[index]['divider'] === true )
+                           {
+                              var li = angular.element( '<li></li>' ) ;
+                              scope.lastLi.push( li ) ;
+                              $( li ).addClass( 'divider' ) ;
+                              ulBox.append( li ) ;
+                           }
+                           else
+                           {
+                              $.each( clone, function( index2, col ){
+                                 if( col.nodeType == 1 )
                                  {
-                                    return true ;
+                                    if( $( col ).attr( 'dropdown-config' ) == 'last' && index + 1 < length ) //如果有最后的属性，就只有最后才加入
+                                    {
+                                       return true ;
+                                    }
+                                    var li = angular.element( '<li></li>' ) ;
+                                    if( dataList[index]['disabled'] === true )
+                                    {
+                                       li.addClass( 'drop-disabled' ) ;
+                                    }
+                                    else
+                                    {
+                                       li.addClass( 'event' ) ;
+                                    }
+                                    scope.lastLi.push( li ) ;
+                                    $( li ).append( col ) ;
+                                    ulBox.append( li ) ;
                                  }
-                                 var li = angular.element( '<li></li>' ) ;
-                                 scope.lastLi.push( li ) ;
-                                 $( li ).append( col ) ;
-                                 ulBox.append( li ) ;
-                              }
-                           } ) ;
+                              } ) ;
+                           }
 
                         } ) ;
                      } ) ;
@@ -4143,6 +4659,10 @@
 
                   //打开下拉菜单
                   var open = function( btnEle ){
+                     if( typeof( scope.event['OnOpen'] ) == 'function' && scope.event['OnOpen']( scope.status == 1 ) === false )
+                     {
+                        return ;
+                     }
                      $( element ).height( 0 ) ; //兼容IE7
                      if( scope.status == 0 )
                      {
@@ -4158,6 +4678,10 @@
 
                   //关闭下拉菜单
                   var close = function(){
+                     if( typeof( scope.event['OnClose'] ) == 'function' && scope.event['OnClose']( scope.status == 0 ) === false )
+                     {
+                        return ;
+                     }
                      if( scope.status == 1 )
                      {
                         var ulBox = scope.ulBox ;
@@ -4174,6 +4698,14 @@
                      {
                         callback['Open'] = open ;
                         callback['Close'] = close ;
+                     }
+                  } ) ;
+
+                  //监控事件函数
+                  scope.$watch( attributes.dropdownEvent, function( event ){
+                     if( typeof( event ) == 'object' )
+                     {
+                        scope.event = event ;
                      }
                   } ) ;
 
@@ -4417,6 +4949,12 @@
                      'interval': 5       //每隔x秒执行回调
                   }
              timer-callback   可选 {}    //定时器接口
+                                        Start( 定时执行的函数 )    启动定时器
+                                        Complete()                继续开始下一次
+                                        Stop()                    停止定时器
+                                        GetStatus()               获取定时器状态, true: 运行中， false: 停止了
+                                        SetInterval( 秒 )         设置定时器间隔
+                                        GetInterval()             获取定时器间隔
    */
    sacApp.directive( 'createTimer', function( $timeout, $interval ){
       var rate = 20 ; //定时器速率
@@ -4499,7 +5037,11 @@
 
                   //获取定时器状态, true: 运行中， false: 停止了
                   var getStatus = function(){
-                     return scope.Setting.status ;
+                     if( scope && scope.Setting )
+                     {
+                        return scope.Setting.status ;
+                     }
+                     return false ;
                   }
 
                   //设置定时器时间
@@ -4512,13 +5054,23 @@
                      return scope.Setting['interval'] / 1000 ;
                   }
 
+                  //回收资源
+                  scope.$on( '$destroy', function(){
+                     stop() ;
+                     scope.Setting['options'] = null ;
+                     scope.Setting = null ;
+                  } ) ;
+
                   scope.$watch( attributes.timerCallback, function( callback ){
-                     callback['Start'] = start ;
-                     callback['Complete'] = complete ;
-                     callback['Stop']  = stop ;
-                     callback['GetStatus']  = getStatus ;
-                     callback['SetInterval'] = setTimerInterval ;
-                     callback['GetInterval'] = getTimerInterval ;
+                     if( typeof( callback ) == 'object' )
+                     {
+                        callback['Start'] = start ;
+                        callback['Complete'] = complete ;
+                        callback['Stop']  = stop ;
+                        callback['GetStatus']  = getStatus ;
+                        callback['SetInterval'] = setTimerInterval ;
+                        callback['GetInterval'] = getTimerInterval ;
+                     }
                   } ) ;
 
                   scope.$watch( attributes.createTimer, function( options ){
@@ -4531,6 +5083,12 @@
                               scope.Setting[key] = options[key] ;
                         }
                      } ) ;
+                     if( scope.Setting['beginRun'] === true &&
+                         typeof( scope.Setting['RunFun'] ) == 'function' )
+                     {
+                        start( scope.Setting['RunFun'] ) ;
+                     }
+
                      $( element ).css( scope.Setting['options'] ) ;
                   } ) ;
                }
@@ -4573,9 +5131,17 @@
                post: function postLink( scope, element, attributes ){
 
                   scope.$on( '$destroy', function(){  //主scope释放，子的scope也要释放
+
                      $.each( scope.lastScope, function( index, rowScope ){
                         rowScope.$destroy();
+                        rowScope = null ;
                      } ) ;
+
+                     //移除旧的dom
+                     angular.forEach( element.children(), function( ele ){
+                        $animate.leave( ele );
+                     } ) ;
+
                   } ) ;
 
                   //解析表达式
@@ -4590,13 +5156,6 @@
 
                   //渲染内容
                   var renderFun = function( startIndex, endIndex ){
-
-                     //释放旧的scope
-                     $.each( scope.lastScope, function( index, rowScope ){
-                        rowScope.$destroy();
-                     } ) ;
-
-                     scope.lastScope = [] ;
 
                      for( var index = startIndex; index < endIndex; ++index )
                      {
@@ -4651,6 +5210,14 @@
                         $animate.leave( ele );
                      } ) ;
 
+                     //释放旧的scope
+                     $.each( scope.lastScope, function( index, rowScope ){
+                        rowScope.$destroy();
+                        rowScope = null ;
+                     } ) ;
+
+                     scope.lastScope = [] ;
+
                      //创建新的
                      var length = collection.length ;
 
@@ -4679,7 +5246,11 @@
                      'tools': true,    //是否开启工具栏, 如果false, 就不能开启换页功能，默认 true
                      'max': 100        //一页最大显示多少行， 默认 100
                      'trim': true,     //是否允许调整表格宽度, 默认开启
+                     'mode': 'normal', //模式， normal: 一次性加载全部数据，由内置方法控制表格换页； dynamic: 由外部提供方法控制换页，每一页都是通过外部获取。
                      'sort': [],       //是否开启排序，数组仅支持bool类型的元素，排序数组和标题数组一一对应
+                     'autoSort': {}    //自动排序，当第一次数据写入到表格、表格数据改变时，将会自动排序
+                                         格式:
+                                          { 'key': '排序的字段', 'asc': true }  asc为true就是正序，从小到大
                      'filter': {}      //是否开启过滤功能，支持4种模式, key对应title的key
                                          1. 'indexof': 模糊匹配，只要在内容找到字符串子串就匹配成功。 输入框
                                          2. 任意字符串: 正则匹配，按照正则规则来匹配。 输入框
@@ -4694,6 +5265,7 @@
                   }
              table-title    必填 {}    表格的标题， key是要对应该列的字段名，用于排序和过滤， 如果value是false，那么该列不显示
              table-content  必填 []    表格的内容
+             table-key      必填 ""    列名，对应table-title的key
              table-callback 可选 {}    只要空对象就行，指令会把回调函数传回来
                                        GetPageData( 指定第几页 )
                                        GetAllData()
@@ -4702,7 +5274,22 @@
                                        GetFilterStatus()
                                        GetCurrentPageNum()
                                        GetSumPageNum()
-
+                                       ResizeTableHeader()
+                                       ResetBodyTop()
+                                       ResetBodyTopAfterRender()
+                                       SortData( 字段名, 是否正序(boolean) )
+                                       AddToolButton( 图标名字, 选项, 点击事件函数 )
+                                          选项： 'position':    'left|right',
+                                                'style':       'xxx'
+                                       SetToolButton( 图标名字, 选项 ) 修改按钮的选项
+                                       SetTotalNum( 设置总记录数 )
+                                       SetToolPageButton( name, func ) 自定义翻页按钮事件
+                                          name: 'first'  第一页
+                                                'last'   最后一页
+                                                'previous'  上一页
+                                                'next'   下一页
+                                                'jump'   跳转到指定页
+                                       Jump( 指定页数 ) 跳转到指定页
    */
    sacApp.directive( 'ngTable', function( $animate, $timeout, $compile, $filter, SdbFunction ){
       var brower = SdbFunction.getBrowserInfo() ;
@@ -4740,7 +5327,8 @@
                'page': 0,           //总共多少页
                'text': '',          //工具栏右边的文字
                'isCustom': false,   //工具栏的文字是否自定义
-               'height': 0          //工具栏高度
+               'height': 0,         //工具栏高度
+               'custom': []         //自定义按钮， 格式 { 'position': 'left|right', 'icon': 'fa-xxx', 'onClick': [function] }
             } ;
             $scope.loadStatus = {
                'length': 0,      //数据总共多少
@@ -4777,7 +5365,9 @@
                   'tools': true,    //是否开启工具栏, 如果false, 就不能开启换页功能
                   'max': 100,       //一页最大显示多少行
                   'trim': true,     //是否允许调整表格宽度
+                  'mode': 'normal', //模式， normal: 一次性加载全部数据，由内置方法控制表格换页； dynamic: 由外部提供方法控制换页，每一页都是通过外部获取。
                   'sort': [],       //是否开启排序，数组仅支持bool类型的元素，排序数组和标题数组一一对应
+                  'autoSort': '',   //自动排序，当第一次数据写入到表格、表格数据改变时，将会自动排序
                   'filter': {},     //是否开启过滤功能
                   'default': {},    //如果开启过滤，是否要设置默认值，如果不填，默认是''
                   'text': {
@@ -4786,21 +5376,18 @@
                   }
                }
             } ;
+            $scope.customEvent = {
+               'first': null,
+               'last': null,
+               'previous': null,
+               'next': null,
+               'jump': null
+            } ;
          },
          compile: function( element, attributes, transclude ){
             return {
                pre: function preLink( scope, element, attributes ){},
                post: function postLink( scope, element, attributes ){
-
-                  scope.$on( '$destroy', function(){
-                     $.each( scope.lastTr, function( index, trEle ){
-                        $animate.leave( trEle ) ;
-                     } ) ;
-                     //主scope释放，子的scope也要释放
-                     $.each( scope.lastScope, function( index, rowScope ){
-                        rowScope.$destroy();
-                     } ) ;
-                  } ) ;
 
                   //解析表达式
                   var expression = attributes.tableContent ;
@@ -4831,6 +5418,30 @@
                   var bodyEle  = angular.element( $( '> tbody', bodyTable ) ) ;
 
                   var toolEle = angular.element( $( '.ng-table-tools', tableEle ) ) ;
+
+                  //回收资源
+                  scope.$on( '$destroy', function(){
+                     //主scope释放，子的scope也要释放
+                     $.each( scope.lastScope, function( index, rowScope ){
+                        rowScope.$destroy();
+                        rowScope = null ;
+                     } ) ;
+                     //移除dom
+                     $.each( scope.lastTr, function( index, trEle ){
+                        $animate.leave( trEle ) ;
+                        trEle = null ;
+                     } ) ;
+                     tableEle = null ;
+                     boxEle = null ;
+                     headerBox = null ;
+                     titleEle = null ;
+                     filterEle = null ;
+                     headerTable = null ;
+                     bodyBox = null ;
+                     bodyTable = null ;
+                     bodyEle = null ;
+                     toolEle = null ;
+                  } ) ;
 
                   //设置过滤条件
                   var setFilter = function( key, value ){
@@ -4880,7 +5491,9 @@
                      {
                         if( typeof( key ) !== 'undefined' )
                         {
-                           scope.table['body'] = $filter( 'orderObjectBy' )( scope.table['body'], key, !orderType ) ;
+                           var tmp = scope.table['body'] ;
+                           scope.table['body'] = $filter( 'orderObjectBy' )( tmp, key, !orderType ) ;
+                           tmp = null ;
                         }
                      }
                      createTableContents( scope.loadStatus['page'], false ) ;
@@ -4908,6 +5521,7 @@
                            } )
                            .on( 'click', function(){
                               sortFun( index, key, false ) ;
+                              scope.$digest() ;
                            } ) ;
                      }
                      else
@@ -5165,14 +5779,21 @@
                   //渲染表格内容
                   var createTableContents = function( page, isRecoveryWidth ){
 
-                     //移除旧的
-                     $.each( scope.lastTr, function( index, trEle ){
-                        $animate.leave( trEle ) ;
-                     } ) ;
+                     if( scope.table.options['mode'] == 'dynamic' )
+                     {
+                        page = 1 ;
+                     }
 
                      //释放旧的scope
                      $.each( scope.lastScope, function( index, rowScope ){
                         rowScope.$destroy();
+                        scope.lastScope[index] = null ;
+                     } ) ;
+
+                     //移除旧的dom
+                     $.each( scope.lastTr, function( index, trEle ){
+                        $animate.leave( trEle ) ;
+                        scope.lastTr[index] = null ;
                      } ) ;
 
                      scope.lastScope = [] ;
@@ -5190,8 +5811,17 @@
                      } ) ;
 
                      //计算显示的记录范围
-                     var start = ( page - 1 ) * scope.table['options']['max'] ;
-                     var end   = start + scope.table['options']['max'] ;
+                     var start, end ;
+                     if( scope.table.options['mode'] == 'normal' )
+                     {
+                        start = ( page - 1 ) * scope.table['options']['max'] ;
+                        end   = start + scope.table['options']['max'] ;
+                     }
+                     else if( scope.table.options['mode'] == 'dynamic' )
+                     {
+                        start = ( scope.loadStatus['page'] - 1 ) * scope.table['options']['max'] ;
+                        end   = start + scope.table['options']['max'] ;
+                     }
                      end = end > scope.loadStatus['length'] ? scope.loadStatus['length'] : end ;
 
                      var widthList = scope.loadStatus['width'] ;
@@ -5206,6 +5836,13 @@
                                                        scope.loadStatus['showNum'],
                                                        scope.loadStatus['length'] ) ;
                      }
+
+                     if( scope.table.options['mode'] == 'dynamic' )
+                     {
+                        start = 0 ;
+                        end   = scope.loadStatus['showNum'] ;
+                     }
+
                      //在网页上使用table-key，并且不是$auto的列表
                      var keyList = null ;
                      for( var index1 = start; index1 < end; ++index1 )
@@ -5235,7 +5872,8 @@
                               if( col.nodeType == 1 )
                               {
                                  var tableKey = $( col ).attr( 'table-key' ) ;
-                                 if( typeof( tableKey ) != 'string' || scope.table['title'][tableKey] === false || index2 >= titleLength )
+                                 if( typeof( tableKey ) != 'string' || scope.table['title'][tableKey] === false ||
+                                     ( tableKey !== '$auto' && scope.table['title'][tableKey] === undefined ) || index2 >= titleLength )
                                  {
                                     return true ;
                                  }
@@ -5247,10 +5885,10 @@
                                  }
                                  while( true )
                                  {
-                                    var newAutoHtml = autoHtml ;
                                     //如果table-key属性是$auto，那么说明开发者也不知道字段名字，那么将通过标题找到对应字段
                                     if( tableKey == '$auto' || hasAuto == true )
                                     {
+                                       var newAutoHtml = autoHtml ;
                                        hasAuto = true ;
                                        tableKey = useTitleList[index2] ;
                                        if( keyList.indexOf( tableKey ) >= 0 ) //发现这个字段在后面的html有，那就不需要使用$auto了
@@ -5259,6 +5897,7 @@
                                        }
                                        newAutoHtml = newAutoHtml.replace( /\$autoValue/g, item + '.' + tableKey ) ;
                                        newAutoHtml = newAutoHtml.replace( /\$auto/g, tableKey ) ;
+                                       newAutoHtml = newAutoHtml.replace( /table-if/g, 'ng-if' ) ;
                                        col = $compile( newAutoHtml )( childScope ) ;
                                     }
                                     var td = angular.element( '<td></td>' ).attr( 'table-key', tableKey ) ; ;
@@ -5289,6 +5928,7 @@
                               }
                            } ) ;
                         } ) ;
+                        childScope = null ;
                         $animate.enter( tr, bodyEle, null ) ;
                      }
                      $timeout( function(){
@@ -5300,22 +5940,24 @@
                   var resizeTableHeaders = function(){
                      //列宽度
                      var widthList = scope.loadStatus['width'] ;
+
                      //修改标题宽度
-                     angular.forEach( titleEle.find( 'td' ), function( ele ){
-                        var td = angular.element( ele ) ;
+                     $( '> td', titleEle ).each( function( index, ele ){
+                        var td = $( ele ) ;
                         if( td.hasClass( 'trim' ) == false &&
                             td.hasClass( 'trimLast' ) == false ) // .trim是用来控制宽度的，所以不能修改
                         {
-                           var tableKey = $( td ).attr( 'table-key' ) ;
+                           var tableKey = td.attr( 'table-key' ) ;
                            if( typeof( tableKey ) == 'string' && typeof( widthList[tableKey] ) == 'string' )
                            {
                               td.css( { 'width': widthList[tableKey] } ) ;
                            }
                            else
                            {
-                              td.css( { 'width': null } ) ;
+                              td.css( { 'width': 'auto' } ) ;
                            }
                         }
+                        td = null ;
                      } ) ;
                   }
 
@@ -5324,27 +5966,31 @@
                      //列宽度
                      var widthList = scope.loadStatus['width'] ;
                      //修改内容宽度
-                     var firstTr = bodyEle.find( 'tr' ) ;
-                     if( firstTr.length > 0 )
-                     {
-                        firstTr = angular.element( firstTr[0] ) ;
-                        angular.forEach( firstTr.find( 'td' ), function( ele ){
-                           var td = angular.element( ele ) ;
-                           if( td.hasClass( 'trim' ) == false &&
-                               td.hasClass( 'trimLast' ) == false ) // .trim是用来控制宽度的，所以不能修改
+                     var firstTr = $( '> tr:first', bodyEle ) ;
+                     $( '> td', firstTr ).each( function( index, ele ){
+                        var td = $( ele ) ;
+                        if( td.hasClass( 'trim' ) == false &&
+                            td.hasClass( 'trimLast' ) == false ) // .trim是用来控制宽度的，所以不能修改
+                        {
+                           var tableKey = td.attr( 'table-key' ) ;
+                           if( typeof( tableKey ) == 'string' && typeof( widthList[tableKey] ) == 'string' )
                            {
-                              var tableKey = $( td ).attr( 'table-key' ) ;
-                              if( typeof( tableKey ) == 'string' && typeof( widthList[tableKey] ) == 'string' )
-                              {
-                                 td.css( { 'width': widthList[tableKey] } ) ;
-                              }
-                              else
-                              {
-                                 td.css( { 'width': null } ) ;
-                              }
+                              td.css( { 'width': widthList[tableKey] } ) ;
                            }
-                        } ) ;
-                     }
+                           else
+                           {
+                              td.css( { 'width': 'auto' } ) ;
+                           }
+                        }
+                        td = null ;
+                     } ) ;
+                     firstTr = null ;
+                     widthList = null ;
+                  }
+
+                  //调整表格内容跟表个头的间距
+                  var resetBodyTop = function(){
+                     $( bodyBox ).css( { 'padding-top': ( $( headerBox ).height() + 1 ) + 'px' } ) ;
                   }
 
                   //重绘的函数
@@ -5352,11 +5998,16 @@
                      //恢复原来的比例
                      if( isRecoveryWidth !== false )
                      {
-                        scope.loadStatus['width'] = $.extend( true, {}, scope.table['options']['width'] ) ;
+                        var widthList = scope.table['options']['width'] ;
+                        scope.loadStatus['width'] = $.extend( true, {}, widthList ) ;
+                        widthList = null ;
                      }
                      resizeTableHeaders() ;
                      resizeTableContents() ;
                      $timeout( function(){
+                        $timeout( function(){
+                           resetBodyTop() ;
+                        }, 1 ) ;
                         //表格头和表格内容宽度对齐
                         var width = $( bodyTable ).width() ;
                         $( headerTable ).width( width ) ;
@@ -5365,7 +6016,14 @@
                         scope.loadStatus['tableWidth'] = width ;
 
                         //预留表格工具栏的高度
-                        scope.tools['height'] = -1 * $( toolEle ).outerHeight() ;
+                        if( scope.table['options']['tools'] === false )
+                        {
+                           scope.tools['height'] = -1 ;
+                        }
+                        else
+                        {
+                           scope.tools['height'] = -1 * $( toolEle ).outerHeight() ;
+                        }
                      }, 0, false ) ;
                   }
 
@@ -5374,14 +6032,14 @@
                   //重绘函数绑定到重绘队列
                   SdbFunction.defer( scope, resizeFun ) ;
 
-                  //设置表格内容跟表格头的间距
-                  var resetBodyTop = function(){
+                  //初始化表格内容跟表格头的间距
+                  var initBodyTop = function(){
                      $timeout( function(){
-                        $( bodyBox ).css( { 'padding-top': ( $( headerBox ).height() + 1 ) + 'px' } ) ;
+                        resetBodyTop() ;
                      }, 0, false ) ;
                   } ;
 
-                  resetBodyTop() ;
+                  initBodyTop() ;
 
                   //监控配置
                   scope.$watch( attributes.ngTable, function ngTable( options ){
@@ -5414,14 +6072,28 @@
 
                   //监控内容
                   scope.$watchCollection( rhs, function( contents ){
+                     scope.table['body'] = null ;
                      scope.table['body'] = setOptionsFun( contents, [] ) ;
-                     scope.loadStatus['length'] = scope.table['body'].length ;
+                     if( scope.table.options['mode'] == 'normal' )
+                     {
+                        scope.loadStatus['length'] = scope.table['body'].length ;
+                     }
+                     if( typeof( scope.table['options']['autoSort'] ) == 'object' )
+                     {
+                        scope.table['body'] = $filter( 'orderObjectBy' )( scope.table['body'], scope.table['options']['autoSort']['key'],
+                                                                                               !scope.table['options']['autoSort']['asc'] ) ;
+                     }
                      createTableContents( 1, false ) ;
                      if( scope.loadStatus['onFilter']['status'] ) //如果已经做了过滤，那么要把数据复制到备份中，不然会丢数据
+                     {
+                        scope.loadStatus['onFilter']['dataBackup'] = null ;
                         scope.loadStatus['onFilter']['dataBackup'] = $.extend( [], scope.table['body'] ) ;
+                     }
                      scope.find() ;
+                     /*
                      if( scope.loadStatus['onSort']['last'] !== null ) //如果有排序，那么要做一次重新排序
                         sortFun( scope.loadStatus['onSort']['last']['index'], scope.loadStatus['onSort']['last']['key'], true ) ;
+                        */
                   } ) ;
 
                   //获取指定页数据
@@ -5489,6 +6161,97 @@
                   //重绘当前页
                   var showCurrentPage = function(){
                      createTableContents( scope.loadStatus['page'] ) ;
+                     try
+                     {
+                        scope.$digest() ;
+                     }
+                     catch(e){}
+                  }
+
+                  //接口专用排序，跟表格的标题排序不同，不会存在状态中
+                  var sortData = function( key, asc ){
+                     scope.table['body'] = $filter( 'orderObjectBy' )( scope.table['body'], key, !asc ) ;
+                     createTableContents( scope.loadStatus['page'], false ) ;
+                     scope.$digest() ;
+                  }
+
+                  /*
+                     添加工具栏自定义按钮
+                     option   {
+                                 'position':    'left|right',
+                                 'style':       'xxx'
+                              }
+                  */
+                  var addToolBtn = function( icon, option, func ){
+                     if( typeof( option['position'] ) == 'undefined' )
+                     {
+                        option['position'] = 'left' ;
+                     }
+                     option['icon'] = icon ;
+                     option['onClick'] = func ;
+                     scope.tools.custom.push( option ) ;
+                  }
+
+                  var resetToolBtn = function( icon, option ){
+                     $.each( scope.tools.custom, function( index, btn ){
+                        if( btn['icon'] == icon )
+                        {
+                           $.each( option, function( key, value ){
+                              btn[key] = value ;
+                           } ) ;
+                           return false ;
+                        }
+                     } ) ;
+                  }
+
+                  //自定义工具栏翻页事件
+                  var setToolPageBtn = function( name, func )
+                  {
+                     if( typeof( scope.customEvent[name] ) == 'undefined' )
+                     {
+                        alert( 'Invalid event name.') ;
+                        return ;
+                     }
+                     scope.customEvent[name] = func ;
+                  }
+
+                  //设置总记录数
+                  var setTotalRecords = function( totalNum )
+                  {
+                     if( scope.table.options['mode'] !== 'dynamic' )
+                     {
+                        alert( 'table.options.mode is not dynamic.' ) ;
+                        return ;
+                     }
+
+                     scope.loadStatus['length'] = totalNum ;
+                     scope.tools['page'] = numberCarry( scope.loadStatus['length'] / scope.table['options']['max'] ) ;
+                     showCurrentPage() ;
+                  }
+
+                  //跳转到指定页
+                  var jumpPage = function( pageNum ){
+                     if( pageNum > scope.tools['page'] )
+                     {
+                        scope.loadStatus['page'] = scope.tools['page'] ;
+                     }
+
+                     if( pageNum <= 0 )
+                     {
+                        scope.loadStatus['page'] = 1 ;
+                     }
+                     else
+                     {
+                        scope.loadStatus['page'] = pageNum ;
+                     }
+                     if( typeof( scope.customEvent['jump'] ) === 'function' )
+                     {
+                        scope.customEvent['jump']( scope.loadStatus['page'] ) ;
+                     }
+                     else
+                     {
+                        createTableContents( scope.loadStatus['page'], false ) ;
+                     }
                   }
 
                   //如果有table-callback，那么把回调的函数传给他
@@ -5505,43 +6268,104 @@
                         callbackGetter['SetFilter']         = setFilter ;
                         callbackGetter['SetToolText']       = setToolText ;
                         callbackGetter['ShowCurrentPage']   = showCurrentPage ;
+                        callbackGetter['ResizeTableHeader'] = resizeTableHeaders ;
+                        callbackGetter['ResetBodyTop']      = resetBodyTop ;
+                        callbackGetter['ResetBodyTopAfterRender'] = initBodyTop ;
+                        callbackGetter['SortData']          = sortData ;
+                        callbackGetter['AddToolButton']     = addToolBtn ;
+                        callbackGetter['SetToolButton']     = resetToolBtn ;
+                        callbackGetter['SetTotalNum']       = setTotalRecords ;
+                        callbackGetter['SetToolPageButton'] = setToolPageBtn ;
+                        callbackGetter['Jump']              = jumpPage ;
                      }
                   } ) ;
 
                   //第一页
                   scope.first = function(){
-                     if( scope.table['body'].length == 0 )
-                        return ;
-                     scope.loadStatus['page'] = 1 ;
-                     createTableContents( scope.loadStatus['page'], false ) ;
+                     if( typeof( scope.customEvent['first'] ) === 'function' )
+                     {
+                        if( scope.loadStatus['page'] > 1 )
+                        {
+                           scope.loadStatus['page'] = 1 ;
+                           scope.customEvent['first']() ;
+                        }
+                     }
+                     else
+                     {
+                        if( scope.table['body'].length == 0 )
+                           return ;
+                        scope.loadStatus['page'] = 1 ;
+                        createTableContents( scope.loadStatus['page'], false ) ;
+                     }
                   }
 
                   //上一页
                   scope.previous = function(){
-                     if( scope.table['body'].length == 0 )
-                        return ;
-                     --scope.loadStatus['page'] ;
-                     if( scope.loadStatus['page'] <= 0 )
-                        scope.loadStatus['page'] = 1 ;
-                     createTableContents( scope.loadStatus['page'], false ) ;
+                     if( typeof( scope.customEvent['previous'] ) === 'function' )
+                     {
+                        --scope.loadStatus['page'] ;
+                        if( scope.loadStatus['page'] <= 0 )
+                        {
+                           scope.loadStatus['page'] = 1 ;
+                        }
+                        else
+                        {
+                           scope.customEvent['previous']() ;
+                        }
+                     }
+                     else
+                     {
+                        if( scope.table['body'].length == 0 )
+                           return ;
+                        --scope.loadStatus['page'] ;
+                        if( scope.loadStatus['page'] <= 0 )
+                           scope.loadStatus['page'] = 1 ;
+                        createTableContents( scope.loadStatus['page'], false ) ;
+                     }
                   }
 
                   //下一页
                   scope.next = function(){
-                     if( scope.table['body'].length == 0 )
-                        return ;
-                     ++scope.loadStatus['page'] ;
-                     if( scope.loadStatus['page'] > scope.tools['page'] )
-                        scope.loadStatus['page'] = scope.tools['page'] ;
-                     createTableContents( scope.loadStatus['page'], false ) ;
+                     if( typeof( scope.customEvent['next'] ) === 'function' )
+                     {
+                        ++scope.loadStatus['page'] ;
+                        if( scope.loadStatus['page'] > scope.tools['page'] )
+                        {
+                           scope.loadStatus['page'] = scope.tools['page'] ;
+                        }
+                        else
+                        {
+                           scope.customEvent['next']() ;
+                        }
+                     }
+                     else
+                     {
+                        if( scope.table['body'].length == 0 )
+                           return ;
+                        ++scope.loadStatus['page'] ;
+                        if( scope.loadStatus['page'] > scope.tools['page'] )
+                           scope.loadStatus['page'] = scope.tools['page'] ;
+                        createTableContents( scope.loadStatus['page'], false ) ;
+                     }
                   }
 
                   //最后一页
                   scope.last = function(){
-                     if( scope.table['body'].length == 0 )
-                        return ;
-                     scope.loadStatus['page'] = scope.tools['page'] ;
-                     createTableContents( scope.loadStatus['page'], false ) ;
+                     if( typeof( scope.customEvent['last'] ) === 'function' )
+                     {
+                        if( scope.loadStatus['page'] < scope.tools['page'] )
+                        {
+                           scope.loadStatus['page'] = scope.tools['page'] ;
+                           scope.customEvent['last']() ;
+                        }
+                     }
+                     else
+                     {
+                        if( scope.table['body'].length == 0 )
+                           return ;
+                        scope.loadStatus['page'] = scope.tools['page'] ;
+                        createTableContents( scope.loadStatus['page'], false ) ;
+                     }
                   }
 
                   //检查输入的页数格式
@@ -5569,17 +6393,24 @@
                   scope.jump = function( event ){
                      if( event.keyCode == 13 )
                      {
-                        createTableContents( scope.loadStatus['page'], false ) ;
+                        if( typeof( scope.customEvent['jump'] ) === 'function' )
+                        {
+                           scope.customEvent['jump']( scope.loadStatus['page'] ) ;
+                        }
+                        else
+                        {
+                           createTableContents( scope.loadStatus['page'], false ) ;
+                        }
                      }
                   }
 
                   //按住
                   scope.mouseDown = function( event ){
+                     var trim = event.currentTarget ;
                      scope.loadStatus['onMove']['isMove'] = true ;
                      scope.loadStatus['onMove']['mouseX'] = event['pageX'] ;
-                     var trim = event.currentTarget ;
-                     scope.loadStatus['onMove']['prevWidth'] = $( trim ).prev().width() ;
-                     scope.loadStatus['onMove']['nextWidth'] = $( trim ).next().width() ;
+                     scope.loadStatus['onMove']['prevWidth'] = $( trim ).prev().width() - 1 ;
+                     scope.loadStatus['onMove']['nextWidth'] = $( trim ).next().width() - 1 ;
                      scope.loadStatus['onMove']['key'] = $( trim ).attr( 'table-key' ) ;
                      scope.loadStatus['onMove']['nextKey'] = getNextKey( scope.table['title'], scope.loadStatus['onMove']['key'] ) ;
                      $( tableEle ).css( { '-moz-user-select': 'none', '-webkit-user-select': 'none', '-ms-user-select': 'none', '-khtml-user-select': 'none', 'user-select': 'none' } ) ;
@@ -5594,6 +6425,8 @@
                         var offsetX = event['pageX'] - scope.loadStatus['onMove']['mouseX'] ;
                         var key = scope.loadStatus['onMove']['key'] ;
                         var nextKey = scope.loadStatus['onMove']['nextKey'] ;
+
+                        offsetX = fixedNumber( offsetX, 0 ) ;
                         if( offsetX < 0 && scope.loadStatus['onMove']['prevWidth'] > minWidth && scope.loadStatus['onMove']['prevWidth'] + offsetX < minWidth )
                         {
                            offsetX = minWidth - scope.loadStatus['onMove']['prevWidth'] ;
@@ -5630,8 +6463,6 @@
                      var match = scope.loadStatus['onFilter']['expre'] ;
                      //匹配的条件
                      var condition = scope.loadStatus['onFilter']['condition'] ;
-
-                     var dataList = null ;
                      //检查过滤条件是否全部为空
                      var isEmpty = true ;
                      $.each( match, function( index, matchVal ){
@@ -5662,6 +6493,8 @@
                            }
                         }
                      } ) ;
+
+                     var dataList = null ;
                      //判断过滤状态
                      if( scope.loadStatus['onFilter']['status'] )
                      {
@@ -5687,16 +6520,21 @@
                         }
                         else
                         {
+                           scope.loadStatus['onFilter']['dataBackup'] = null ;
                            scope.loadStatus['onFilter']['dataBackup'] = scope.table['body'] ;
                            dataList = $.extend( [], scope.table['body'] ) ;
                            scope.loadStatus['onFilter']['status'] = true ;
                         }
                      }
+                     scope.table['body'] = null ;
                      if( isEmpty )
                      {
                         //没用过滤条件，全部显示
                         scope.table['body'] = dataList ;
-                        scope.loadStatus['length'] = scope.table['body'].length ;
+                        if( scope.table.options['mode'] == 'normal' )
+                        {
+                           scope.loadStatus['length'] = scope.table['body'].length ;
+                        }
                      }
                      else
                      {
@@ -5720,6 +6558,7 @@
                                     value = value[ fields[y] ] ;
                                  }
                                  isMatch = condition[key]( value, matchStr ) ;
+                                 value = null ;
                                  if( isMatch == false )
                                     return false ;
                               }
@@ -5728,8 +6567,12 @@
                            if( isMatch == true )
                               scope.table['body'].push( row ) ;
                         } ) ;
-                        scope.loadStatus['length'] = scope.table['body'].length ;
+                        if( scope.table.options['mode'] == 'normal' )
+                        {
+                           scope.loadStatus['length'] = scope.table['body'].length ;
+                        }
                      }
+                     dataList = null ;
                      createTableContents( 1, false ) ;
                      if( scope.loadStatus['onSort']['last'] !== null ) //如果有排序，那么要做一次重新排序
                         sortFun( scope.loadStatus['onSort']['last']['index'], scope.loadStatus['onSort']['last']['key'], true ) ;

@@ -42,6 +42,7 @@
 #include "mthTrace.hpp"
 #include "mthDef.hpp"
 #include "mthCommon.hpp"
+#include "msgDef.hpp"
 
 using namespace bson ;
 
@@ -176,9 +177,10 @@ namespace engine
    INT32 _mthMatchFuncABS::call( const BSONElement &in, BSONObj &out )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       BSONObjBuilder builder ;
 
-      rc = mthAbs( _fieldName.getFieldName(), in, builder ) ;
+      rc = mthAbs( _fieldName.getFieldName(), in, builder, flag ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "mthAbs failed:rc=%d", rc ) ;
@@ -831,9 +833,10 @@ namespace engine
    INT32 _mthMatchFuncADD::call( const BSONElement &in, BSONObj &out )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       BSONObjBuilder builder ;
 
-      rc = mthAdd( _fieldName.getFieldName(), in, _funcEle, builder ) ;
+      rc = mthAdd( _fieldName.getFieldName(), in, _funcEle, builder, flag ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "mthAdd failed:rc=%d", rc ) ;
@@ -902,9 +905,10 @@ namespace engine
    INT32 _mthMatchFuncSUBTRACT::call( const BSONElement &in, BSONObj &out )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       BSONObjBuilder builder ;
 
-      rc = mthSub( _fieldName.getFieldName(), in, _funcEle, builder ) ;
+      rc = mthSub( _fieldName.getFieldName(), in, _funcEle, builder, flag ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "mthSub failed:rc=%d", rc ) ;
@@ -973,9 +977,10 @@ namespace engine
    INT32 _mthMatchFuncMULTIPLY::call( const BSONElement &in, BSONObj &out )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       BSONObjBuilder builder ;
 
-      rc = mthMultiply( _fieldName.getFieldName(), in, _funcEle, builder ) ;
+      rc = mthMultiply( _fieldName.getFieldName(), in, _funcEle, builder, flag ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "mthMultiply failed:rc=%d", rc ) ;
@@ -1044,9 +1049,10 @@ namespace engine
    INT32 _mthMatchFuncDIVIDE::call( const BSONElement &in, BSONObj &out )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       BSONObjBuilder builder ;
 
-      rc = mthDivide( _fieldName.getFieldName(), in, _funcEle, builder ) ;
+      rc = mthDivide( _fieldName.getFieldName(), in, _funcEle, builder, flag ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "mthDivide failed:rc=%d", rc ) ;
@@ -1080,6 +1086,14 @@ namespace engine
       {
          rc = SDB_INVALIDARG ;
          PD_LOG( PDERROR, "divisor must be number:ele=%s",
+                 ele.toString().c_str() ) ;
+         goto error ;
+      }
+
+      if ( mthIsZero( ele ) )
+      {
+         rc = SDB_INVALIDARG ;
+         PD_LOG( PDERROR, "divisor must not be zero:ele=%s",
                  ele.toString().c_str() ) ;
          goto error ;
       }
@@ -1716,8 +1730,9 @@ namespace engine
       goto done ;
    }
 
-   _mthMatchOpNode::_mthMatchOpNode( _mthNodeAllocator *allocator )
-                   :_mthMatchNode( allocator )
+   _mthMatchOpNode::_mthMatchOpNode( _mthNodeAllocator *allocator,
+                                     const mthNodeConfig *config )
+                   :_mthMatchNode( allocator, config )
    {
       _isCompareField     = FALSE ;
       _hasDollarFieldName = FALSE ;
@@ -1726,6 +1741,9 @@ namespace engine
       _hasExpand          = FALSE ;
       _offset             = 0 ;
       _len                = 0 ;
+      _paramIndex         = -1 ;
+      _addedToPred        = FALSE ;
+      _doneByPred         = FALSE ;
    }
 
    _mthMatchOpNode::~_mthMatchOpNode()
@@ -1792,6 +1810,24 @@ namespace engine
       return ;
    }
 
+   UINT32 _mthMatchOpNode::_evalFuncCPUCost ()
+   {
+      if ( _funcList.empty() )
+      {
+         return 0 ;
+      }
+
+      UINT32 cpuCost = 0 ;
+      MTH_FUNC_LIST::iterator iter = _funcList.begin() ;
+      while ( iter != _funcList.end() )
+      {
+         _mthMatchFunc *func = *iter ;
+         cpuCost += func->getEvalCPUCost() ;
+         iter++ ;
+      }
+      return cpuCost ;
+   }
+
    void _mthMatchOpNode::clear()
    {
       _clear() ;
@@ -1820,7 +1856,32 @@ namespace engine
       SDB_ASSERT( FALSE, "no need to setWeight in _mthMatchOpNode" ) ;
    }
 
-   INT32 _mthMatchOpNode::calcPredicate( _rtnPredicateSet &predicateSet )
+   void _mthMatchOpNode::evalEstimation ( const optCollectionStat *pCollectionStat,
+                                          double &selectivity,
+                                          UINT32 &cpuCost )
+   {
+
+      if ( _addedToPred )
+      {
+         _evalEstimation( NULL, selectivity, cpuCost ) ;
+         selectivity = 1.0 ;
+      }
+      else
+      {
+         _evalEstimation( pCollectionStat, selectivity, cpuCost ) ;
+      }
+   }
+
+   void _mthMatchOpNode::_evalEstimation ( const optCollectionStat *pCollectionStat,
+                                           double &selectivity,
+                                           UINT32 &cpuCost )
+   {
+      selectivity = OPT_MTH_OPTR_DEFAULT_SELECTIVITY ;
+      cpuCost = OPT_MTH_OPTR_BASE_CPU_COST ;
+   }
+
+   INT32 _mthMatchOpNode::calcPredicate( rtnPredicateSet &predicateSet,
+                                         const rtnParamList * paramList )
    {
       INT32 rc = SDB_OK ;
       const UINT32 bufLen        = 31 ;
@@ -1888,8 +1949,16 @@ namespace engine
 
       PD_LOG( PDDEBUG, "add preicate[%s] to predicates set",
               rebuildName ? buf : fieldName ) ;
-      predicateSet.addPredicate ( rebuildName ? buf : fieldName,
-                                  _toMatch, _isUnderLogicNot ) ;
+
+      if ( SDB_OK == _addPredicate ( predicateSet,
+                                     rebuildName ? buf : fieldName,
+                                     paramList ) )
+      {
+         if ( isTotalConverted() )
+         {
+            _addedToPred = TRUE ;
+         }
+      }
 
    done:
       if ( buf != staticBuf && NULL != buf )
@@ -1901,7 +1970,8 @@ namespace engine
       goto done ;
    }
 
-   INT32 _mthMatchOpNode::extraEqualityMatches( BSONObjBuilder &builder )
+   INT32 _mthMatchOpNode::extraEqualityMatches( BSONObjBuilder &builder,
+                                                const rtnParamList *parameters )
    {
       return SDB_OK ;
    }
@@ -1938,7 +2008,8 @@ namespace engine
    INT32 _mthMatchOpNode::_dollarMatches( const CHAR *pFieldName,
                                           const BSONElement &element,
                                           _mthMatchTreeContext &context,
-                                          BOOLEAN &result )
+                                          BOOLEAN &result,
+                                          BOOLEAN &gotUndefined )
    {
       PD_TRACE_ENTRY( SDB__MTHMATCHOPNODE_DOLLARMATCHES ) ;
       INT32 rc = SDB_OK ;
@@ -1973,7 +2044,8 @@ namespace engine
                if ( MTH_OPERATOR_EYECATCHER == *( childName + 1 ) &&
                     Array == e.type() )
                {
-                  rc = _dollarMatches( childName + 1, e, context, result ) ;
+                  rc = _dollarMatches( childName + 1, e, context, result,
+                                       gotUndefined ) ;
                   if ( SDB_OK != rc )
                   {
                      PD_LOG( PDERROR, "failed to child field name:%s, rc:%d",
@@ -1984,7 +2056,7 @@ namespace engine
                else if ( Object == e.type() )
                {
                   rc = _execute( childName + 1, e.embeddedObject(), FALSE,
-                                 context, result ) ;
+                                 context, result, gotUndefined ) ;
                   if ( SDB_OK != rc )
                   {
                      PD_LOG( PDERROR, "_execute failed:childName=%s,rc:%d",
@@ -2004,7 +2076,8 @@ namespace engine
                {
                   right = context._originalObj.getFieldDotted( _cmpFieldName ) ;
                }
-               rc = _doFuncMatch( e, right, context, result ) ;
+               rc = _doFuncMatch( e, right, context, mthEnabledMixCmp(),
+                                  result ) ;
                if ( SDB_OK != rc )
                {
                   PD_LOG( PDERROR, "_doFuncMatch failed:rc=%d", rc ) ;
@@ -2042,6 +2115,7 @@ namespace engine
    INT32 _mthMatchOpNode::_doFuncMatch( const BSONElement &original,
                                         const BSONElement &matchTarget,
                                         _mthMatchTreeContext &context,
+                                        BOOLEAN mixCmp,
                                         BOOLEAN &matchResult )
    {
       INT32 rc = SDB_OK ;
@@ -2058,9 +2132,11 @@ namespace engine
          }
 
          resultEle = resultObj.firstElement() ;
+
+         mixCmp = FALSE ;
       }
 
-      rc = _valueMatch( resultEle, matchTarget, context, matchResult) ;
+      rc = _valueMatch( resultEle, matchTarget, mixCmp, context, matchResult ) ;
       PD_RC_CHECK( rc, PDERROR, "_valueMatch failed:rc=%d", rc ) ;
 
    done:
@@ -2134,7 +2210,8 @@ namespace engine
    INT32 _mthMatchOpNode::_execute( const CHAR *pFieldName,
                                     const BSONObj &obj, BOOLEAN isArrayObj,
                                     _mthMatchTreeContext &context,
-                                    BOOLEAN &result )
+                                    BOOLEAN &result,
+                                    BOOLEAN &gotUndefined )
    {
       PD_TRACE_ENTRY( SDB__MTHMATCHOPNODE__EXECUTE ) ;
       INT32 rc = SDB_OK ;
@@ -2144,6 +2221,30 @@ namespace engine
       BSONElement recordEle ;
       BSONElement toMatchEle ;
       CHAR *p  = NULL ;
+
+      BOOLEAN mixCmp = mthEnabledMixCmp() ;
+
+      gotUndefined = FALSE ;
+
+      if ( _paramIndex != -1 )
+      {
+         if ( _doneByPred )
+         {
+            result = TRUE ;
+            goto done ;
+         }
+         else if ( context.paramDoneByPred( _paramIndex ) )
+         {
+            result = TRUE ;
+            _doneByPred = TRUE ;
+            goto done ;
+         }
+         toMatchEle = context.getParameter( _paramIndex ) ;
+      }
+      else
+      {
+         toMatchEle = _toMatch ;
+      }
 
       rc = mthFieldName.setFieldName( pFieldName ) ;
       PD_RC_CHECK( rc, PDERROR, "set fieldName failed:fieldName=%s,rc=%d",
@@ -2159,14 +2260,15 @@ namespace engine
          {
             if ( MTH_OPERATOR_EYECATCHER == *(p + 1) )
             {
-               rc = _dollarMatches( p + 1, ele, context, result ) ;
+               rc = _dollarMatches( p + 1, ele, context, result,
+                                    gotUndefined ) ;
                PD_RC_CHECK( rc, PDERROR, "_dollarMatches failed:rc=%d", rc ) ;
             }
             else
             {
                BSONObj subObj = ele.embeddedObject () ;
                rc = _execute( p + 1, subObj, ( ele.type() == Array ), context,
-                              result ) ;
+                              result, gotUndefined ) ;
                PD_RC_CHECK( rc, PDERROR, "failed to match child field:rc=%d",
                             rc ) ;
             }
@@ -2178,13 +2280,16 @@ namespace engine
       if ( isArrayObj )
       {
          BSONObjIterator it ( obj ) ;
+         BOOLEAN tmpUndefined = TRUE ;
          result = FALSE ;
          while ( it.more() )
          {
+            BOOLEAN subUndefined = TRUE ;
             BSONElement z = it.next() ;
             if ( ossStrcmp( z.fieldName(), pTmpFieldName ) == 0 )
             {
-               rc = _doFuncMatch( z, _toMatch, context, result ) ;
+               subUndefined = FALSE ;
+               rc = _doFuncMatch( z, toMatchEle, context, FALSE, result ) ;
                PD_RC_CHECK( rc, PDERROR, "_doFuncMatch failed:rc=%d", rc ) ;
 
                if ( result )
@@ -2196,7 +2301,8 @@ namespace engine
             if ( z.type() == Object )
             {
                BSONObj subObj = z.embeddedObject() ;
-               rc = _execute( pFieldName, subObj, FALSE, context, result ) ;
+               rc = _execute( pFieldName, subObj, FALSE, context, result,
+                              subUndefined ) ;
                PD_RC_CHECK( rc, PDERROR, "_execute failed:rc=%d", rc ) ;
 
                if ( result )
@@ -2204,19 +2310,25 @@ namespace engine
                   goto done ;
                }
             }
+            tmpUndefined = tmpUndefined && subUndefined ;
+         }
+         gotUndefined = tmpUndefined ;
+
+         if ( gotUndefined && _flagAcceptUndefined() )
+         {
+            rc = _execute( pFieldName, BSONObj(), FALSE, context, result,
+                           tmpUndefined ) ;
+            PD_RC_CHECK( rc, PDERROR, "_execute failed:rc=%d", rc ) ;
          }
 
          goto done ;
       }
 
-      if ( p )
+      if ( p && !_flagAcceptUndefined() )
       {
-         if ( EN_MATCH_OPERATOR_EXISTS != getType() &&
-              EN_MATCH_OPERATOR_ISNULL != getType() )
-         {
-            result = FALSE ;
-            goto done ;
-         }
+         gotUndefined = TRUE ;
+         result = FALSE ;
+         goto done ;
       }
 
       if ( _isCompareField )
@@ -2224,13 +2336,10 @@ namespace engine
          toMatchEle = context._originalObj.getFieldDotted( _cmpFieldName ) ;
          if ( toMatchEle.eoo() )
          {
+            gotUndefined = TRUE ;
             result = FALSE ;
             goto done ;
          }
-      }
-      else
-      {
-         toMatchEle = _toMatch ;
       }
 
       recordEle = obj.getField( pTmpFieldName ) ;
@@ -2244,10 +2353,19 @@ namespace engine
          }
 
          recordEle = funcResultObj.firstElement() ;
+
+         mixCmp = FALSE ;
       }
 
-      rc = _valueMatch( recordEle, toMatchEle, context, result ) ;
-      PD_RC_CHECK( rc, PDERROR, "_doFuncMatch failed:rc=%d", rc ) ;
+      if ( recordEle.eoo() && !_flagAcceptUndefined() )
+      {
+         gotUndefined = TRUE ;
+         result = FALSE ;
+         goto done ;
+      }
+
+      rc = _valueMatch( recordEle, toMatchEle, mixCmp, context, result ) ;
+      PD_RC_CHECK( rc, PDERROR, "_valueMatch failed:rc=%d", rc ) ;
 
       if ( EN_MATCH_OPERATOR_EXISTS == getType() ||
            EN_MATCH_OPERATOR_ISNULL == getType() ||
@@ -2265,11 +2383,14 @@ namespace engine
             BSONObj eEmbObj = recordEle.embeddedObject() ;
             BSONObjIterator iter( eEmbObj ) ;
             INT32 index = 0 ;
+            BOOLEAN innerMixCmp = toMatchEle.type() == Array ? FALSE : mixCmp ;
             while ( iter.more() )
             {
                BOOLEAN tmpResult = FALSE ;
                BSONElement innerEle = iter.next() ;
-               rc = _valueMatch( innerEle, toMatchEle, context, tmpResult ) ;
+
+               rc = _valueMatch( innerEle, toMatchEle, innerMixCmp, context,
+                                 tmpResult ) ;
                PD_RC_CHECK( rc, PDERROR, "_valueMatch failed:rc=%d", rc ) ;
                if ( EN_MATCH_OPERATOR_NE == getType() )
                {
@@ -2313,14 +2434,17 @@ namespace engine
                                    BOOLEAN &result )
    {
       PD_TRACE_ENTRY( SDB__MTHMATCHOPNODE_EXECUTE ) ;
+
       INT32 rc = SDB_OK ;
+      BOOLEAN gotUndefined = FALSE ;
 
       if ( _hasReturnMatch )
       {
          context.setReturnMatchExecuted( TRUE ) ;
       }
 
-      rc = _execute( _fieldName.getFieldName(), obj, FALSE, context, result ) ;
+      rc = _execute( _fieldName.getFieldName(), obj, FALSE, context, result,
+                     gotUndefined ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "_execute failed:rc=%d", rc ) ;
@@ -2358,6 +2482,18 @@ namespace engine
    void _mthMatchOpNode::delChild( _mthMatchNode *child )
    {
       SDB_ASSERT( FALSE, "_mthMatchOpNode can't have child" ) ;
+   }
+
+   void _mthMatchOpNode::setDoneByPred ( BOOLEAN doneByPred )
+   {
+      if ( doneByPred && _addedToPred )
+      {
+         _doneByPred = TRUE ;
+      }
+      else
+      {
+         _doneByPred = FALSE ;
+      }
    }
 
    INT32 _mthMatchOpNode::addFunc( _mthMatchFunc *func )
@@ -2459,7 +2595,7 @@ namespace engine
       return _hasReturnMatch ;
    }
 
-   BSONObj _mthMatchOpNode::toBson()
+   BSONObj _mthMatchOpNode::_toBson ( const rtnParamList &parameters )
    {
       BSONObjBuilder builder ;
       MTH_FUNC_LIST::iterator iter ;
@@ -2490,15 +2626,19 @@ namespace engine
          iter++ ;
       }
 
-      if ( !_isCompareField )
-      {
-         b.appendAs( _toMatch, getOperatorStr() ) ;
-      }
-      else
+      if ( _isCompareField )
       {
          BSONObj fieldObj = BSON( MTH_OPERATOR_STR_FIELD <<
                                   _toMatch.valuestrsafe() ) ;
          b.append( getOperatorStr(), fieldObj ) ;
+      }
+      else if ( _paramIndex != -1 )
+      {
+         _toParamBson( b, parameters ) ;
+      }
+      else
+      {
+         b.appendAs( _toMatch, getOperatorStr() ) ;
       }
 
       b.doneFast() ;
@@ -2506,8 +2646,267 @@ namespace engine
       return builder.obj() ;
    }
 
-   _mthMatchOpNodeET::_mthMatchOpNodeET(  _mthNodeAllocator *allocator )
-                     :_mthMatchOpNode( allocator )
+   void _mthMatchOpNode::_toParamBson ( BSONObjBuilder &builder,
+                                        const rtnParamList &parameters )
+   {
+      SDB_ASSERT( -1 != _paramIndex, "_paramIndex is invalid" ) ;
+
+      if ( parameters.isEmpty() )
+      {
+         BSONObjBuilder paramBuilder( builder.subobjStart( getOperatorStr() ) ) ;
+         if ( -1 == _getFuzzyIndex() )
+         {
+            paramBuilder.append( FIELD_NAME_PARAM, (INT32)_paramIndex ) ;
+         }
+         else
+         {
+            BSONArrayBuilder paramArrBuilder(
+                  paramBuilder.subarrayStart( FIELD_NAME_PARAM ) ) ;
+            paramArrBuilder.append( (INT32)_paramIndex ) ;
+            paramArrBuilder.append( (INT32)_getFuzzyIndex() ) ;
+            paramArrBuilder.done() ;
+         }
+         if ( mthEnabledMixCmp() )
+         {
+            paramBuilder.append( FIELD_NAME_CTYPE,
+                                 (INT32)_toMatch.canonicalType() ) ;
+         }
+         paramBuilder.done() ;
+      }
+      else
+      {
+         builder.appendAs( parameters.getParam( _paramIndex ),
+                           getOperatorStr() ) ;
+      }
+   }
+
+   INT32 _mthMatchOpNode::_addPredicate ( rtnPredicateSet & predicateSet,
+                                          const CHAR * fieldName,
+                                          const rtnParamList * paramList )
+   {
+      BSONElement toMatch = _toMatch ;
+      INT8 paramIndex = _paramIndex ;
+      BOOLEAN addToParam = mthEnabledParameterized() ;
+
+      if ( NULL != paramList && !paramList->isEmpty() && _paramIndex > 0 )
+      {
+         toMatch = paramList->getParam( _paramIndex ) ;
+         paramIndex = -1 ;
+         addToParam = FALSE ;
+      }
+
+      return predicateSet.addPredicate(
+                  fieldName, toMatch, getBSONOpType(), _isUnderLogicNot,
+                  mthEnabledMixCmp(), addToParam, paramIndex, -1 ) ;
+   }
+
+   static BSONObj _mthFuzzyOptrObj ( BOOLEAN inclusive )
+   {
+      BSONObjBuilder b ;
+      b.appendBool( "", inclusive ) ;
+      return b.obj() ;
+   }
+
+   BSONObj _mthFuzzyIncOptr = _mthFuzzyOptrObj( TRUE ) ;
+   BSONObj _mthFuzzyExcOptr = _mthFuzzyOptrObj( FALSE ) ;
+
+   _mthMatchFuzzyOpNode::_mthMatchFuzzyOpNode ( _mthNodeAllocator *allocator,
+                                                const mthNodeConfig *config )
+   : _mthMatchOpNode( allocator, config )
+   {
+      _fuzzyOpType = MTH_FUZZY_TYPE_EXCLUSIVE ;
+   }
+
+   _mthMatchFuzzyOpNode::~_mthMatchFuzzyOpNode ()
+   {
+      clear() ;
+   }
+
+   BOOLEAN _mthMatchFuzzyOpNode::isTotalConverted()
+   {
+      if ( _mthMatchOpNode::isTotalConverted() )
+      {
+         if ( _toMatch.type() == Array )
+         {
+            return FALSE ;
+         }
+         else
+         {
+            return TRUE ;
+         }
+      }
+      return FALSE ;
+   }
+
+   void _mthMatchFuzzyOpNode::setFuzzyOpType ( EN_MATCH_OP_FUNC_TYPE nodeType )
+   {
+      INT8 fuzzyType = MTH_FUZZY_TYPE_EXCLUSIVE ;
+
+      if ( mthEnabledFuzzyOptr() )
+      {
+         if ( EN_MATCH_OPERATOR_LTE == nodeType ||
+              EN_MATCH_OPERATOR_GTE == nodeType )
+         {
+            fuzzyType = MTH_FUZZY_TYPE_FUZZY_INC ;
+         }
+         else if ( EN_MATCH_OPERATOR_LT == nodeType ||
+                   EN_MATCH_OPERATOR_GT == nodeType )
+         {
+            fuzzyType = MTH_FUZZY_TYPE_FUZZY_EXC ;
+         }
+      }
+      else
+      {
+         if ( EN_MATCH_OPERATOR_LTE == nodeType ||
+              EN_MATCH_OPERATOR_GTE == nodeType )
+         {
+            fuzzyType = MTH_FUZZY_TYPE_INCLUSIVE ;
+         }
+         else
+         {
+            fuzzyType = MTH_FUZZY_TYPE_EXCLUSIVE ;
+         }
+      }
+
+      if ( MTH_FUZZY_TYPE_FUZZY_EXC == fuzzyType ||
+           MTH_FUZZY_TYPE_FUZZY_INC == fuzzyType )
+      {
+         if ( _canSelfParameterize() )
+         {
+            _fuzzyOpType = fuzzyType ;
+         }
+         else if ( MTH_FUZZY_TYPE_FUZZY_EXC == fuzzyType )
+         {
+            _fuzzyOpType = MTH_FUZZY_TYPE_EXCLUSIVE ;
+         }
+         else
+         {
+            _fuzzyOpType = MTH_FUZZY_TYPE_INCLUSIVE ;
+         }
+      }
+      else
+      {
+         _fuzzyOpType = fuzzyType ;
+      }
+   }
+
+   INT32 _mthMatchFuzzyOpNode::_valueMatch ( const BSONElement &left,
+                                             const BSONElement &right,
+                                             BOOLEAN mixCmp,
+                                             _mthMatchTreeContext &context,
+                                             BOOLEAN &result )
+   {
+      INT32 rc = SDB_OK ;
+
+      switch ( _fuzzyOpType )
+      {
+         case MTH_FUZZY_TYPE_EXCLUSIVE :
+         case MTH_FUZZY_TYPE_FUZZY_EXC :
+         {
+            rc = _excValueMatch( left, right, mixCmp, context, result ) ;
+            break ;
+         }
+         case MTH_FUZZY_TYPE_INCLUSIVE :
+         case MTH_FUZZY_TYPE_FUZZY_INC :
+         {
+            rc = _incValueMatch( left, right, mixCmp, context, result ) ;
+            break ;
+         }
+         default :
+         {
+            PD_CHECK( _fuzzyOpType >= 0, SDB_INVALIDARG, error, PDERROR,
+                      "Wrong fuzzy type of operator [%s]", getOperatorStr() ) ;
+            BSONElement inclusive = context.getParameter( _fuzzyOpType ) ;
+            if ( inclusive.booleanSafe() )
+            {
+               rc = _incValueMatch( left, right, mixCmp, context, result ) ;
+            }
+            else
+            {
+               rc = _excValueMatch( left, right, mixCmp, context, result ) ;
+            }
+         }
+      }
+
+   done :
+      return rc ;
+   error :
+      goto done ;
+   }
+
+   void _mthMatchFuzzyOpNode::_toParamBson ( BSONObjBuilder &builder,
+                                             const rtnParamList &parameters )
+   {
+      SDB_ASSERT( -1 != _paramIndex, "_paramIndex is invalid" ) ;
+
+      if ( parameters.isEmpty() )
+      {
+         return _mthMatchOpNode::_toParamBson( builder, parameters ) ;
+      }
+      else
+      {
+         const CHAR *opStr = NULL ;
+         if ( _fuzzyOpType >= 0 )
+         {
+            if ( parameters.getParam( _fuzzyOpType ).booleanSafe() )
+            {
+               opStr = _getIncOperatorStr() ;
+            }
+            else
+            {
+               opStr = _getExcOperatorStr() ;
+            }
+         }
+         else if ( MTH_FUZZY_TYPE_INCLUSIVE == _fuzzyOpType ||
+                   MTH_FUZZY_TYPE_FUZZY_INC == _fuzzyOpType )
+         {
+            opStr = _getIncOperatorStr() ;
+         }
+         else
+         {
+            opStr = _getExcOperatorStr() ;
+         }
+         builder.appendAs( parameters.getParam( _paramIndex ), opStr ) ;
+      }
+   }
+
+   INT32 _mthMatchFuzzyOpNode::_addPredicate ( rtnPredicateSet & predicateSet,
+                                               const CHAR * fieldName,
+                                               const rtnParamList * paramList )
+   {
+      BSONElement toMatch = _toMatch ;
+      INT8 paramIndex = _paramIndex ;
+      INT8 fuzzyOpType = _fuzzyOpType >= 0 ? _fuzzyOpType : -1 ;
+      INT32 opType = getBSONOpType() ;
+      BOOLEAN addToParam = mthEnabledParameterized() ;
+
+      if ( NULL != paramList && !paramList->isEmpty() && _paramIndex > 0 )
+      {
+         toMatch = paramList->getParam( _paramIndex ) ;
+         paramIndex = -1 ;
+         fuzzyOpType = -1 ;
+         if ( _fuzzyOpType > 0 )
+         {
+            if ( paramList->getParam( _fuzzyOpType ).booleanSafe() )
+            {
+               opType = _getIncBSONOpType() ;
+            }
+            else
+            {
+               opType = _getExcBSONOpType() ;
+            }
+         }
+         addToParam = FALSE ;
+      }
+
+      return predicateSet.addPredicate(
+                  fieldName, toMatch, opType, _isUnderLogicNot,
+                  mthEnabledMixCmp(), addToParam, paramIndex, fuzzyOpType ) ;
+   }
+
+   _mthMatchOpNodeET::_mthMatchOpNodeET( _mthNodeAllocator *allocator,
+                                         const mthNodeConfig *config )
+                     :_mthMatchOpNode( allocator, config )
    {
    }
 
@@ -2519,6 +2918,11 @@ namespace engine
    INT32 _mthMatchOpNodeET::getType()
    {
       return ( INT32 )EN_MATCH_OPERATOR_ET ;
+   }
+
+   INT32 _mthMatchOpNodeET::getBSONOpType ()
+   {
+      return BSONObj::Equality ;
    }
 
    const CHAR* _mthMatchOpNodeET::getOperatorStr()
@@ -2546,12 +2950,19 @@ namespace engine
       return TRUE ;
    }
 
-   INT32 _mthMatchOpNodeET::extraEqualityMatches( BSONObjBuilder &builder )
+   INT32 _mthMatchOpNodeET::extraEqualityMatches( BSONObjBuilder &builder,
+                                                  const rtnParamList *parameters )
    {
       BSONElement ele = _toMatch ;
+
       if ( _funcList.size() > 0 )
       {
          return SDB_OK ;
+      }
+
+      if ( -1 != _paramIndex && NULL != parameters )
+      {
+         ele = parameters->getParam( _paramIndex ) ;
       }
 
       if ( !ele.eoo() )
@@ -2568,6 +2979,7 @@ namespace engine
 
    INT32 _mthMatchOpNodeET::_valueMatch( const BSONElement &left,
                                          const BSONElement &right,
+                                         BOOLEAN mixCmp,
                                          _mthMatchTreeContext &context,
                                          BOOLEAN &result )
    {
@@ -2596,8 +3008,23 @@ namespace engine
       }
    }
 
-   _mthMatchOpNodeNE::_mthMatchOpNodeNE( _mthNodeAllocator *allocator )
-                     :_mthMatchOpNodeET( allocator )
+   void _mthMatchOpNodeET::_evalEstimation ( const optCollectionStat *pCollectionStat,
+                                             double &selectivity,
+                                             UINT32 &cpuCost )
+   {
+      selectivity = OPT_MTH_OPTR_DEFAULT_SELECTIVITY ;
+      cpuCost = OPT_MTH_OPTR_BASE_CPU_COST + _evalFuncCPUCost() ;
+
+      if ( _funcList.empty() && pCollectionStat )
+      {
+         selectivity = pCollectionStat->evalETOpterator( _fieldName.getFieldName() ,
+                                                         _toMatch ) ;
+      }
+   }
+
+   _mthMatchOpNodeNE::_mthMatchOpNodeNE( _mthNodeAllocator *allocator,
+                                         const mthNodeConfig *config )
+                     :_mthMatchOpNodeET( allocator, config )
    {
    }
 
@@ -2609,6 +3036,11 @@ namespace engine
    INT32 _mthMatchOpNodeNE::getType()
    {
       return EN_MATCH_OPERATOR_NE ;
+   }
+
+   INT32 _mthMatchOpNodeNE::getBSONOpType ()
+   {
+      return BSONObj::NE ;
    }
 
    const CHAR* _mthMatchOpNodeNE::getOperatorStr()
@@ -2626,7 +3058,8 @@ namespace engine
       return FALSE ;
    }
 
-   INT32 _mthMatchOpNodeNE::extraEqualityMatches( BSONObjBuilder &builder )
+   INT32 _mthMatchOpNodeNE::extraEqualityMatches( BSONObjBuilder &builder,
+                                                  const rtnParamList *parameters )
    {
       return SDB_OK ;
    }
@@ -2636,15 +3069,31 @@ namespace engine
                                      BOOLEAN &result )
    {
       INT32 rc = SDB_OK ;
+
       BOOLEAN tmpResult = FALSE ;
-      rc = _mthMatchOpNodeET::execute( obj, context, tmpResult ) ;
+      BOOLEAN gotUndefined = FALSE ;
+
+      if ( _hasReturnMatch )
+      {
+         context.setReturnMatchExecuted( TRUE ) ;
+      }
+
+      rc = _mthMatchOpNodeET::_execute( _fieldName.getFieldName(), obj, FALSE,
+                                        context, tmpResult, gotUndefined ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "failed to execute _mthMatchOpNodeNE:rc=%d", rc ) ;
          goto error ;
       }
 
-      result = !tmpResult ;
+      if ( gotUndefined )
+      {
+         result = FALSE ;
+      }
+      else
+      {
+         result = !tmpResult ;
+      }
 
    done:
       return rc ;
@@ -2664,8 +3113,25 @@ namespace engine
       }
    }
 
-   _mthMatchOpNodeLT::_mthMatchOpNodeLT( _mthNodeAllocator *allocator )
-                     :_mthMatchOpNode( allocator )
+   void _mthMatchOpNodeNE::_evalEstimation ( const optCollectionStat *pCollectionStat,
+                                             double &selectivity,
+                                             UINT32 &cpuCost )
+   {
+      selectivity = OPT_MTH_OPTR_DEFAULT_SELECTIVITY ;
+      cpuCost = OPT_MTH_OPTR_BASE_CPU_COST + _evalFuncCPUCost() ;
+
+      if ( _funcList.empty() && pCollectionStat )
+      {
+         selectivity = pCollectionStat->evalETOpterator( _fieldName.getFieldName() ,
+                                                         _toMatch ) ;
+      }
+
+      selectivity = 1.0 - selectivity ;
+   }
+
+   _mthMatchOpNodeLT::_mthMatchOpNodeLT( _mthNodeAllocator *allocator,
+                                         const mthNodeConfig *config )
+                     :_mthMatchFuzzyOpNode( allocator, config )
    {
    }
 
@@ -2674,45 +3140,82 @@ namespace engine
       clear() ;
    }
 
-   INT32 _mthMatchOpNodeLT::getType()
+   INT32 _mthMatchOpNodeLT::_incValueMatch ( const BSONElement &left,
+                                             const BSONElement &right,
+                                             BOOLEAN mixCmp,
+                                             _mthMatchTreeContext &context,
+                                             BOOLEAN &result )
    {
-      return ( INT32 ) EN_MATCH_OPERATOR_LT ;
-   }
-
-   const CHAR* _mthMatchOpNodeLT::getOperatorStr()
-   {
-      return MTH_OPERATOR_STR_LT ;
-   }
-
-   BOOLEAN _mthMatchOpNodeLT::isTotalConverted()
-   {
-      if ( _mthMatchOpNode::isTotalConverted() )
+      if ( right.canonicalType() == MinKey )
       {
-         if ( _toMatch.type() == Array )
+         result = ( left.canonicalType() == MinKey ) ;
+         return SDB_OK ;
+      }
+      else if ( right.canonicalType() == MaxKey )
+      {
+         result = TRUE ;
+         return SDB_OK ;
+      }
+
+      if ( left.canonicalType() == right.canonicalType() )
+      {
+         if ( compareElementValues ( left, right ) <= 0 )
          {
-            return FALSE ;
-         }
-         else
-         {
-            return TRUE ;
+            result = TRUE ;
+            return SDB_OK ;
          }
       }
-      return FALSE ;
+      else if ( mixCmp )
+      {
+         if ( left.type() == Array && right.type() != Array )
+         {
+            result = FALSE ;
+            return SDB_OK ;
+         }
+         if ( left.woCompare( right, FALSE ) <= 0 )
+         {
+            result = TRUE ;
+            return SDB_OK ;
+         }
+      }
+
+      result = FALSE ;
+      return SDB_OK ;
    }
 
-   UINT32 _mthMatchOpNodeLT::getWeight()
+   INT32 _mthMatchOpNodeLT::_excValueMatch ( const BSONElement &left,
+                                             const BSONElement &right,
+                                             BOOLEAN mixCmp,
+                                             _mthMatchTreeContext &context,
+                                             BOOLEAN &result )
    {
-      return MTH_WEIGHT_LT ;
-   }
+      if ( right.canonicalType() == MinKey )
+      {
+         result = FALSE ;
+         return SDB_OK ;
+      }
+      else if ( right.canonicalType() == MaxKey )
+      {
+         result = ( left.canonicalType() != MaxKey ) ;
+         return SDB_OK ;
+      }
 
-   INT32 _mthMatchOpNodeLT::_valueMatch( const BSONElement &left,
-                                         const BSONElement &right,
-                                         _mthMatchTreeContext &context,
-                                         BOOLEAN &result )
-   {
       if ( left.canonicalType() == right.canonicalType() )
       {
          if ( compareElementValues ( left, right ) < 0 )
+         {
+            result = TRUE ;
+            return SDB_OK ;
+         }
+      }
+      else if ( mixCmp )
+      {
+         if ( left.type() == Array && right.type() != Array )
+         {
+            result = FALSE ;
+            return SDB_OK ;
+         }
+         if ( left.woCompare( right, FALSE ) < 0 )
          {
             result = TRUE ;
             return SDB_OK ;
@@ -2735,55 +3238,65 @@ namespace engine
       }
    }
 
-   _mthMatchOpNodeLTE::_mthMatchOpNodeLTE( _mthNodeAllocator *allocator )
-                      :_mthMatchOpNode( allocator )
+   void _mthMatchOpNodeLT::_evalEstimation ( const optCollectionStat *pCollectionStat,
+                                             double &selectivity,
+                                             UINT32 &cpuCost )
+   {
+      selectivity = OPT_MTH_OPTR_DEFAULT_SELECTIVITY ;
+      cpuCost = OPT_MTH_OPTR_BASE_CPU_COST + _evalFuncCPUCost() ;
+
+      if ( _funcList.empty() && pCollectionStat )
+      {
+         selectivity = pCollectionStat->evalLTOpterator(
+               _fieldName.getFieldName(), _toMatch,
+               _isExclusive() ? FALSE : TRUE ) ;
+      }
+   }
+
+   _mthMatchOpNodeGT::_mthMatchOpNodeGT( _mthNodeAllocator *allocator,
+                                         const mthNodeConfig *config )
+                     :_mthMatchFuzzyOpNode( allocator, config )
    {
    }
 
-   _mthMatchOpNodeLTE::~_mthMatchOpNodeLTE()
+   _mthMatchOpNodeGT::~_mthMatchOpNodeGT()
    {
       clear() ;
    }
 
-   INT32 _mthMatchOpNodeLTE::getType()
+   INT32 _mthMatchOpNodeGT::_incValueMatch ( const BSONElement &left,
+                                             const BSONElement &right,
+                                             BOOLEAN mixCmp,
+                                             _mthMatchTreeContext &context,
+                                             BOOLEAN &result )
    {
-      return ( INT32 ) EN_MATCH_OPERATOR_LTE ;
-   }
-
-   const CHAR* _mthMatchOpNodeLTE::getOperatorStr()
-   {
-      return MTH_OPERATOR_STR_LTE ;
-   }
-
-   UINT32 _mthMatchOpNodeLTE::getWeight()
-   {
-      return MTH_WEIGHT_LTE ;
-   }
-
-   BOOLEAN _mthMatchOpNodeLTE::isTotalConverted()
-   {
-      if ( _mthMatchOpNode::isTotalConverted() )
+      if ( right.canonicalType() == MinKey )
       {
-         if ( _toMatch.type() == Array )
-         {
-            return FALSE ;
-         }
-         else
-         {
-            return TRUE ;
-         }
+         result = TRUE ;
+         return SDB_OK ;
       }
-      return FALSE ;
-   }
+      else if ( right.canonicalType() == MaxKey )
+      {
+         result = ( left.canonicalType() == MaxKey ) ;
+         return SDB_OK ;
+      }
 
-   INT32 _mthMatchOpNodeLTE::_valueMatch( const BSONElement &left,
-                                          const BSONElement &right,
-                                          _mthMatchTreeContext &context,
-                                          BOOLEAN &result )
-   {
       if ( left.canonicalType() == right.canonicalType() )
       {
-         if ( compareElementValues ( left, right ) <= 0 )
+         if ( compareElementValues ( left, right ) >= 0 )
+         {
+            result = TRUE ;
+            return SDB_OK ;
+         }
+      }
+      else if ( mixCmp )
+      {
+         if ( left.type() == Array && right.type() != Array )
+         {
+            result = FALSE ;
+            return SDB_OK ;
+         }
+         if ( left.woCompare( right, FALSE ) >= 0 )
          {
             result = TRUE ;
             return SDB_OK ;
@@ -2794,67 +3307,39 @@ namespace engine
       return SDB_OK ;
    }
 
-   void _mthMatchOpNodeLTE::release()
+   INT32 _mthMatchOpNodeGT::_excValueMatch ( const BSONElement &left,
+                                             const BSONElement &right,
+                                             BOOLEAN mixCmp,
+                                             _mthMatchTreeContext &context,
+                                             BOOLEAN &result )
    {
-      if ( NULL != _allocator && _allocator->isAllocatedByme( this ) )
+      if ( right.canonicalType() == MinKey )
       {
-         this->~_mthMatchOpNodeLTE() ;
+         result = ( left.canonicalType() != MinKey ) ;
+         return SDB_OK ;
       }
-      else
+      else if ( right.canonicalType() == MaxKey )
       {
-         delete this ;
+         result = FALSE ;
+         return SDB_OK ;
       }
-   }
 
-   _mthMatchOpNodeGT::_mthMatchOpNodeGT( _mthNodeAllocator *allocator )
-                     :_mthMatchOpNode( allocator )
-   {
-   }
-
-   _mthMatchOpNodeGT::~_mthMatchOpNodeGT()
-   {
-      clear() ;
-   }
-
-   INT32 _mthMatchOpNodeGT::getType()
-   {
-      return EN_MATCH_OPERATOR_GT ;
-   }
-
-   const CHAR* _mthMatchOpNodeGT::getOperatorStr()
-   {
-      return MTH_OPERATOR_STR_GT ;
-   }
-
-   UINT32 _mthMatchOpNodeGT::getWeight()
-   {
-      return MTH_WEIGHT_GT ;
-   }
-
-   BOOLEAN _mthMatchOpNodeGT::isTotalConverted()
-   {
-      if ( _mthMatchOpNode::isTotalConverted() )
-      {
-         if ( _toMatch.type() == Array )
-         {
-            return FALSE ;
-         }
-         else
-         {
-            return TRUE ;
-         }
-      }
-      return FALSE ;
-   }
-
-   INT32 _mthMatchOpNodeGT::_valueMatch( const BSONElement &left,
-                                         const BSONElement &right,
-                                         _mthMatchTreeContext &context,
-                                         BOOLEAN &result )
-   {
       if ( left.canonicalType() == right.canonicalType() )
       {
          if ( compareElementValues ( left, right ) > 0 )
+         {
+            result = TRUE ;
+            return SDB_OK ;
+         }
+      }
+      else if ( mixCmp )
+      {
+         if ( left.type() == Array && right.type() != Array )
+         {
+            result = FALSE ;
+            return SDB_OK ;
+         }
+         if ( left.woCompare( right, FALSE ) > 0 )
          {
             result = TRUE ;
             return SDB_OK ;
@@ -2877,79 +3362,24 @@ namespace engine
       }
    }
 
-   _mthMatchOpNodeGTE::_mthMatchOpNodeGTE( _mthNodeAllocator *allocator )
-                      :_mthMatchOpNode( allocator )
+   void _mthMatchOpNodeGT::_evalEstimation ( const optCollectionStat *pCollectionStat,
+                                             double &selectivity,
+                                             UINT32 &cpuCost )
    {
-   }
+      selectivity = OPT_MTH_OPTR_DEFAULT_SELECTIVITY ;
+      cpuCost = OPT_MTH_OPTR_BASE_CPU_COST + _evalFuncCPUCost() ;
 
-   _mthMatchOpNodeGTE::~_mthMatchOpNodeGTE()
-   {
-      clear() ;
-   }
-
-   INT32 _mthMatchOpNodeGTE::getType()
-   {
-      return EN_MATCH_OPERATOR_GTE ;
-   }
-
-   const CHAR* _mthMatchOpNodeGTE::getOperatorStr()
-   {
-      return MTH_OPERATOR_STR_GTE ;
-   }
-
-   UINT32 _mthMatchOpNodeGTE::getWeight()
-   {
-      return MTH_WEIGHT_GTE ;
-   }
-
-   BOOLEAN _mthMatchOpNodeGTE::isTotalConverted()
-   {
-      if ( _mthMatchOpNode::isTotalConverted() )
+      if ( _funcList.empty() && pCollectionStat )
       {
-         if ( _toMatch.type() == Array )
-         {
-            return FALSE ;
-         }
-         else
-         {
-            return TRUE ;
-         }
-      }
-      return FALSE ;
-   }
-
-   INT32 _mthMatchOpNodeGTE::_valueMatch( const BSONElement &left,
-                                          const BSONElement &right,
-                                          _mthMatchTreeContext &context,
-                                          BOOLEAN &result )
-   {
-      if ( left.canonicalType() == right.canonicalType() )
-      {
-         if ( compareElementValues ( left, right ) >= 0 )
-         {
-            result = TRUE ;
-            return SDB_OK ;
-         }
-      }
-
-      result = FALSE ;
-      return SDB_OK ;
-   }
-
-   void _mthMatchOpNodeGTE::release()
-   {
-      if ( NULL != _allocator && _allocator->isAllocatedByme( this ) )
-      {
-         this->~_mthMatchOpNodeGTE() ;
-      }
-      else
-      {
-         delete this ;
+         selectivity = pCollectionStat->evalGTOpterator(
+               _fieldName.getFieldName(), _toMatch,
+               _isExclusive() ? FALSE : TRUE ) ;
       }
    }
 
-   _mthMatchOpNodeIN::_mthMatchOpNodeIN( _mthNodeAllocator *allocator )
-                     :_mthMatchOpNode( allocator )
+   _mthMatchOpNodeIN::_mthMatchOpNodeIN( _mthNodeAllocator *allocator,
+                                         const mthNodeConfig *config )
+                     :_mthMatchOpNode( allocator, config )
    {
    }
 
@@ -2975,12 +3405,16 @@ namespace engine
          while ( iter.more() )
          {
             BSONElement subEle = iter.next() ;
-            if ( subEle.type() == RegEx )
+            if ( _flagExpandRegex() &&
+                 ( subEle.type() == RegEx ||
+                   ( subEle.type() == Object &&
+                     !subEle.embeddedObject()[ "$regex" ].eoo() ) ) )
             {
                _mthMatchNode *node             = NULL ;
                _mthMatchOpNodeRegex *regexNode = NULL ;
-               node = mthGetMatchNodeFactory()->createOpNode( _allocator,
-                                                     EN_MATCH_OPERATOR_REGEX ) ;
+               node = mthGetMatchNodeFactory()->createOpNode(
+                                             _allocator, getMatchConfigPtr(),
+                                             EN_MATCH_OPERATOR_REGEX ) ;
                if ( NULL == node )
                {
                   rc = SDB_INVALIDARG ;
@@ -2999,8 +3433,18 @@ namespace engine
                   goto error ;
                }
 
-               rc = regexNode->init( fieldName, subEle.regex(),
-                                     subEle.regexFlags() ) ;
+               if ( subEle.type() == RegEx )
+               {
+                  rc = regexNode->init( fieldName, subEle.regex(),
+                                        subEle.regexFlags() ) ;
+               }
+               else
+               {
+                  rc = regexNode->init(
+                        fieldName,
+                        subEle.embeddedObject()["$regex"].valuestrsafe(),
+                        subEle.embeddedObject()["$options"].valuestrsafe() ) ;
+               }
                if ( SDB_OK != rc )
                {
                   PD_LOG( PDERROR, "init regexNode failed:regex=%s,rc=%d",
@@ -3011,10 +3455,8 @@ namespace engine
 
                _regexVector.push_back( regexNode ) ;
             }
-            else
-            {
-               _valueSet.insert( subEle ) ;
-            }
+
+            _valueSet.insert( subEle ) ;
          }
       }
 
@@ -3043,6 +3485,11 @@ namespace engine
    INT32 _mthMatchOpNodeIN::getType()
    {
       return EN_MATCH_OPERATOR_IN ;
+   }
+
+   INT32 _mthMatchOpNodeIN::getBSONOpType ()
+   {
+      return BSONObj::opIN ;
    }
 
    const CHAR* _mthMatchOpNodeIN::getOperatorStr()
@@ -3091,6 +3538,7 @@ namespace engine
 
    INT32 _mthMatchOpNodeIN::_valueMatch( const BSONElement &left,
                                          const BSONElement &right,
+                                         BOOLEAN mixCmp,
                                          _mthMatchTreeContext &context,
                                          BOOLEAN &result )
    {
@@ -3168,8 +3616,25 @@ namespace engine
       }
    }
 
-   _mthMatchOpNodeNIN::_mthMatchOpNodeNIN( _mthNodeAllocator *allocator )
-                      :_mthMatchOpNodeIN( allocator )
+   void _mthMatchOpNodeIN::_evalEstimation ( const optCollectionStat *pCollectionStat,
+                                             double &selectivity,
+                                             UINT32 &cpuCost )
+   {
+      selectivity = OPT_MTH_OPTR_DEFAULT_SELECTIVITY ;
+      if ( _valueSet.empty() && _regexVector.empty() )
+      {
+         cpuCost = OPT_MTH_OPTR_BASE_CPU_COST ;
+      }
+      else
+      {
+         cpuCost = OPT_MTH_OPTR_BASE_CPU_COST *
+                   ( _valueSet.size() + _regexVector.size() ) ;
+      }
+   }
+
+   _mthMatchOpNodeNIN::_mthMatchOpNodeNIN( _mthNodeAllocator *allocator,
+                                           const mthNodeConfig *config )
+                      :_mthMatchOpNodeIN( allocator, config )
    {
    }
 
@@ -3181,6 +3646,11 @@ namespace engine
    INT32 _mthMatchOpNodeNIN::getType()
    {
       return EN_MATCH_OPERATOR_NIN ;
+   }
+
+   INT32 _mthMatchOpNodeNIN::getBSONOpType ()
+   {
+      return BSONObj::NIN ;
    }
 
    const CHAR* _mthMatchOpNodeNIN::getOperatorStr()
@@ -3200,6 +3670,7 @@ namespace engine
 
    INT32 _mthMatchOpNodeNIN::_valueMatch( const BSONElement &left,
                                           const BSONElement &right,
+                                          BOOLEAN mixCmp,
                                           _mthMatchTreeContext &context,
                                           BOOLEAN &result )
    {
@@ -3272,8 +3743,9 @@ namespace engine
       }
    }
 
-   _mthMatchOpNodeALL::_mthMatchOpNodeALL( _mthNodeAllocator *allocator )
-                      :_mthMatchOpNodeIN( allocator )
+   _mthMatchOpNodeALL::_mthMatchOpNodeALL( _mthNodeAllocator *allocator,
+                                           const mthNodeConfig *config )
+                      :_mthMatchOpNodeIN( allocator, config )
    {
    }
 
@@ -3285,6 +3757,11 @@ namespace engine
    INT32 _mthMatchOpNodeALL::getType()
    {
       return EN_MATCH_OPERATOR_ALL ;
+   }
+
+   INT32 _mthMatchOpNodeALL::getBSONOpType ()
+   {
+      return BSONObj::opALL ;
    }
 
    const CHAR* _mthMatchOpNodeALL::getOperatorStr()
@@ -3302,13 +3779,19 @@ namespace engine
       return FALSE ;
    }
 
-   INT32 _mthMatchOpNodeALL::extraEqualityMatches( BSONObjBuilder &builder )
+   INT32 _mthMatchOpNodeALL::extraEqualityMatches( BSONObjBuilder &builder,
+                                                   const rtnParamList *parameters )
    {
       BSONElement ele = _toMatch ;
 
       if ( _funcList.size() > 0 )
       {
          return SDB_OK ;
+      }
+
+      if ( -1 != _paramIndex && NULL != parameters )
+      {
+         ele = parameters->getParam( _paramIndex ) ;
       }
 
       if ( !ele.eoo() )
@@ -3504,6 +3987,7 @@ namespace engine
 
    INT32 _mthMatchOpNodeALL::_valueMatch( const BSONElement &left,
                                           const BSONElement &right,
+                                          BOOLEAN mixCmp,
                                           _mthMatchTreeContext &context,
                                           BOOLEAN &result )
    {
@@ -3547,8 +4031,9 @@ namespace engine
       }
    }
 
-   _mthMatchOpNodeEXISTS::_mthMatchOpNodeEXISTS( _mthNodeAllocator *allocator )
-                         :_mthMatchOpNode( allocator )
+   _mthMatchOpNodeEXISTS::_mthMatchOpNodeEXISTS( _mthNodeAllocator *allocator,
+                                                 const mthNodeConfig *config )
+                         :_mthMatchOpNode( allocator, config )
    {
    }
 
@@ -3560,6 +4045,11 @@ namespace engine
    INT32 _mthMatchOpNodeEXISTS::getType()
    {
       return EN_MATCH_OPERATOR_EXISTS ;
+   }
+
+   INT32 _mthMatchOpNodeEXISTS::getBSONOpType ()
+   {
+      return BSONObj::opEXISTS ;
    }
 
    const CHAR* _mthMatchOpNodeEXISTS::getOperatorStr()
@@ -3579,6 +4069,7 @@ namespace engine
 
    INT32 _mthMatchOpNodeEXISTS::_valueMatch( const BSONElement &left,
                                              const BSONElement &right,
+                                             BOOLEAN mixCmp,
                                              _mthMatchTreeContext &context,
                                              BOOLEAN &result )
    {
@@ -3618,8 +4109,9 @@ namespace engine
       }
    }
 
-   _mthMatchOpNodeMOD::_mthMatchOpNodeMOD( _mthNodeAllocator *allocator )
-                      :_mthMatchOpNode( allocator )
+   _mthMatchOpNodeMOD::_mthMatchOpNodeMOD( _mthNodeAllocator *allocator,
+                                           const mthNodeConfig *config )
+                      :_mthMatchOpNode( allocator, config )
    {
    }
 
@@ -3686,6 +4178,11 @@ namespace engine
       return EN_MATCH_OPERATOR_MOD ;
    }
 
+   INT32 _mthMatchOpNodeMOD::getBSONOpType ()
+   {
+      return BSONObj::opMOD ;
+   }
+
    const CHAR* _mthMatchOpNodeMOD::getOperatorStr()
    {
       return MTH_OPERATOR_STR_MOD ;
@@ -3703,6 +4200,7 @@ namespace engine
 
    INT32 _mthMatchOpNodeMOD::_valueMatch( const BSONElement &left,
                                           const BSONElement &right,
+                                          BOOLEAN mixCmp,
                                           _mthMatchTreeContext &context,
                                           BOOLEAN &result )
    {
@@ -3719,6 +4217,7 @@ namespace engine
          bsonDecimal decimalMod ;
          bsonDecimal decimalModm ;
          bsonDecimal resultDecimal ;
+
          decimal    = left.numberDecimal() ;
          decimalMod = _mod.numberDecimal() ;
          rc         = decimal.mod( decimalMod, resultDecimal ) ;
@@ -3774,8 +4273,9 @@ namespace engine
       }
    }
 
-   _mthMatchOpNodeTYPE::_mthMatchOpNodeTYPE( _mthNodeAllocator *allocator )
-                       :_mthMatchOpNode( allocator )
+   _mthMatchOpNodeTYPE::_mthMatchOpNodeTYPE( _mthNodeAllocator *allocator,
+                                             const mthNodeConfig *config )
+                       :_mthMatchOpNode( allocator, config )
    {
    }
 
@@ -3796,6 +4296,11 @@ namespace engine
       return EN_MATCH_OPERATOR_TYPE ;
    }
 
+   INT32 _mthMatchOpNodeTYPE::getBSONOpType ()
+   {
+      return BSONObj::opTYPE ;
+   }
+
    const CHAR* _mthMatchOpNodeTYPE::getOperatorStr()
    {
       return MTH_OPERATOR_STR_TYPE ;
@@ -3813,6 +4318,7 @@ namespace engine
 
    INT32 _mthMatchOpNodeTYPE::_valueMatch( const BSONElement &left,
                                            const BSONElement &right,
+                                           BOOLEAN mixCmp,
                                            _mthMatchTreeContext &context,
                                            BOOLEAN &result )
    {
@@ -3832,8 +4338,9 @@ namespace engine
       }
    }
 
-   _mthMatchOpNodeISNULL::_mthMatchOpNodeISNULL( _mthNodeAllocator *allocator )
-                         :_mthMatchOpNode( allocator )
+   _mthMatchOpNodeISNULL::_mthMatchOpNodeISNULL( _mthNodeAllocator *allocator,
+                                                 const mthNodeConfig *config )
+                         :_mthMatchOpNode( allocator, config )
    {
    }
 
@@ -3845,6 +4352,11 @@ namespace engine
    INT32 _mthMatchOpNodeISNULL::getType()
    {
       return EN_MATCH_OPERATOR_ISNULL ;
+   }
+
+   INT32 _mthMatchOpNodeISNULL::getBSONOpType ()
+   {
+      return BSONObj::opISNULL ;
    }
 
    const CHAR* _mthMatchOpNodeISNULL::getOperatorStr()
@@ -3864,6 +4376,7 @@ namespace engine
 
    INT32 _mthMatchOpNodeISNULL::_valueMatch( const BSONElement &left,
                                              const BSONElement &right,
+                                             BOOLEAN mixCmp,
                                              _mthMatchTreeContext &context,
                                              BOOLEAN &result )
    {
@@ -3905,8 +4418,9 @@ namespace engine
       }
    }
 
-   _mthMatchOpNodeEXPAND::_mthMatchOpNodeEXPAND( _mthNodeAllocator *allocator )
-                         :_mthMatchOpNode( allocator )
+   _mthMatchOpNodeEXPAND::_mthMatchOpNodeEXPAND( _mthNodeAllocator *allocator,
+                                                 const mthNodeConfig *config )
+                         :_mthMatchOpNode( allocator, config )
    {
    }
 
@@ -3918,6 +4432,11 @@ namespace engine
    INT32 _mthMatchOpNodeEXPAND::getType()
    {
       return EN_MATCH_ATTR_EXPAND ;
+   }
+
+   INT32 _mthMatchOpNodeEXPAND::getBSONOpType ()
+   {
+      return -1 ;
    }
 
    const CHAR* _mthMatchOpNodeEXPAND::getOperatorStr()
@@ -3935,13 +4454,15 @@ namespace engine
       return FALSE ;
    }
 
-   INT32 _mthMatchOpNodeEXPAND::calcPredicate( _rtnPredicateSet &predicateSet )
+   INT32 _mthMatchOpNodeEXPAND::calcPredicate( rtnPredicateSet &predicateSet,
+                                               const rtnParamList * paramList )
    {
       return SDB_OK ;
    }
 
    INT32 _mthMatchOpNodeEXPAND::_valueMatch( const BSONElement &left,
                                              const BSONElement &right,
+                                             BOOLEAN mixCmp,
                                              _mthMatchTreeContext &context,
                                              BOOLEAN &result )
    {
@@ -3962,8 +4483,10 @@ namespace engine
    }
 
    _mthMatchOpNodeELEMMATCH::_mthMatchOpNodeELEMMATCH(
-                                              _mthNodeAllocator *allocator )
-                            :_mthMatchOpNode( allocator ), _subTree( NULL )
+                                              _mthNodeAllocator *allocator,
+                                              const mthNodeConfig *config )
+                            :_mthMatchOpNode( allocator, config ),
+                             _subTree( NULL )
    {
    }
 
@@ -3992,6 +4515,8 @@ namespace engine
          PD_LOG( PDERROR, "create subTree failed:rc=%d", rc) ;
          goto error ;
       }
+
+      _subTree->setMthEnableMixCmp( mthEnabledMixCmp() ) ;
 
       rc = _subTree->loadPattern( element.embeddedObject(), FALSE ) ;
       PD_RC_CHECK( rc, PDERROR, "failed to loadPattern:obj=%s,rc=%d",
@@ -4031,6 +4556,11 @@ namespace engine
       return EN_MATCH_OPERATOR_ELEMMATCH ;
    }
 
+   INT32 _mthMatchOpNodeELEMMATCH::getBSONOpType ()
+   {
+      return BSONObj::opELEM_MATCH ;
+   }
+
    const CHAR* _mthMatchOpNodeELEMMATCH::getOperatorStr()
    {
       return MTH_OPERATOR_STR_ELEMMATCH ;
@@ -4048,6 +4578,7 @@ namespace engine
 
    INT32 _mthMatchOpNodeELEMMATCH::_valueMatch( const BSONElement &left,
                                                 const BSONElement &right,
+                                                BOOLEAN mixCmp,
                                                 _mthMatchTreeContext &context,
                                                 BOOLEAN &result )
    {
@@ -4063,6 +4594,11 @@ namespace engine
       if ( context.isDollarListEnabled() )
       {
          subContext.enableDollarList() ;
+      }
+
+      if ( mixCmp != mthEnabledMixCmp() )
+      {
+         _subTree->setMthEnableMixCmp( mixCmp ) ;
       }
 
       if ( Array == left.type() )
@@ -4104,6 +4640,11 @@ namespace engine
          context.appendDollarList( subContext._dollarList ) ;
       }
 
+      if ( mixCmp != mthEnabledMixCmp() )
+      {
+         _subTree->setMthEnableMixCmp( mthEnabledMixCmp() ) ;
+      }
+
    done:
       return rc ;
    error:
@@ -4122,8 +4663,25 @@ namespace engine
       }
    }
 
-   _mthMatchOpNodeRegex::_mthMatchOpNodeRegex( _mthNodeAllocator *allocator )
-                        :_mthMatchOpNode( allocator )
+   void _mthMatchOpNodeELEMMATCH::_evalEstimation ( const optCollectionStat *pCollectionStat,
+                                                    double &selectivity,
+                                                    UINT32 &cpuCost )
+   {
+      double tempSelectivity = OPT_MTH_OPTR_DEFAULT_SELECTIVITY ;
+      UINT32 tempCPUCost = OPT_MTH_OPTR_BASE_CPU_COST ;
+
+      if ( _subTree )
+      {
+         _subTree->evalEstimation( NULL, tempSelectivity, tempCPUCost ) ;
+      }
+
+      selectivity = OPT_ROUND_SELECTIVITY( tempSelectivity ) ;
+      cpuCost = OPT_MTH_OPTR_BASE_CPU_COST + tempCPUCost ;
+   }
+
+   _mthMatchOpNodeRegex::_mthMatchOpNodeRegex( _mthNodeAllocator *allocator,
+                                               const mthNodeConfig *config )
+                        :_mthMatchOpNode( allocator, config )
    {
       _regex   = NULL ;
       _options = NULL ;
@@ -4259,6 +4817,11 @@ namespace engine
       return ( INT32 ) EN_MATCH_OPERATOR_REGEX ;
    }
 
+   INT32 _mthMatchOpNodeRegex::getBSONOpType ()
+   {
+      return BSONObj::opREGEX ;
+   }
+
    const CHAR* _mthMatchOpNodeRegex::getOperatorStr()
    {
       return MTH_OPERATOR_STR_REGEX ;
@@ -4272,7 +4835,7 @@ namespace engine
       _re.reset() ;
    }
 
-   BSONObj _mthMatchOpNodeRegex::toBson()
+   BSONObj _mthMatchOpNodeRegex::_toBson ( const rtnParamList &parameters )
    {
       BSONObjBuilder builder ;
       if ( _funcList.size() == 0 && !_hasReturnMatch && !_hasExpand )
@@ -4330,6 +4893,7 @@ namespace engine
 
    INT32 _mthMatchOpNodeRegex::_valueMatch( const BSONElement &left,
                                             const BSONElement &right,
+                                            BOOLEAN mixCmp,
                                             _mthMatchTreeContext &context,
                                             BOOLEAN &result )
    {
@@ -4351,9 +4915,6 @@ namespace engine
          {
             return _re->PartialMatch( ele.valuestr() ) ;
          }
-      case RegEx:
-         return ( 0 == ossStrcmp( _regex, ele.regex() ) &&
-                  0 == ossStrcmp( _options, ele.regexFlags() ) ) ;
       default:
          return FALSE ;
       }
@@ -4369,6 +4930,14 @@ namespace engine
       {
          delete this ;
       }
+   }
+
+   void _mthMatchOpNodeRegex::_evalEstimation ( const optCollectionStat *pCollectionStat,
+                                                double &selectivity,
+                                                UINT32 &cpuCost )
+   {
+      selectivity = OPT_MTH_OPTR_DEFAULT_SELECTIVITY ;
+      cpuCost = OPT_MTH_REGEX_CPU_COST ;
    }
 }
 

@@ -103,11 +103,15 @@ namespace engine
 
    // PD_TRACE_DECLARE_FUNCTION ( SDB_CLSCATAPREDICATETREE_ADDPREDICATE, "clsCatalogPredicateTree::addPredicate" )
    INT32 clsCatalogPredicateTree::addPredicate( const CHAR *pFieldName,
-                                                BSONElement beField )
+                                                BSONElement beField,
+                                                INT32 opType )
    {
-      INT32 rc = SDB_OK;
+      INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB_CLSCATAPREDICATETREE_ADDPREDICATE ) ;
-      rc = _predicateSet.addPredicate( pFieldName, beField, FALSE ) ;
+
+      rc = _predicateSet.addPredicate( pFieldName, beField, opType, FALSE,
+                                       TRUE, FALSE, -1, -1 ) ;
+
       PD_TRACE_EXITRC ( SDB_CLSCATAPREDICATETREE_ADDPREDICATE, rc ) ;
       return rc ;
    }
@@ -119,8 +123,7 @@ namespace engine
       try
       {
          const CHAR *pFirstKeyName = _shardingKey.firstElementFieldName() ;
-         const map<string, rtnPredicate> &mapPredicate =
-            _predicateSet.predicates() ;
+         const RTN_PREDICATE_MAP &mapPredicate = _predicateSet.predicates() ;
 
          if ( _logicType != CLS_CATA_LOGIC_AND ||
               mapPredicate.size() == 0 ||
@@ -228,8 +231,8 @@ namespace engine
       BSONElement lowBound ;
       BSONElement upBound ;
       BSONElement beShardingKey ;
-      const map<string,rtnPredicate> &predicates = _predicateSet.predicates() ;
-      map<string, rtnPredicate>::const_iterator itr ;
+      const RTN_PREDICATE_MAP &predicates = _predicateSet.predicates() ;
+      RTN_PREDICATE_MAP::const_iterator itr ;
 
       if ( !itrSK.more() )
       {

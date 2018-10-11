@@ -1,4 +1,5 @@
-﻿(function(){
+﻿//@ sourceURL=Session.js
+(function(){
    var sacApp = window.SdbSacManagerModule ;
    //控制器
    sacApp.controllerProvider.register( 'Monitor.SdbNode.Session.Ctrl', function( $scope, $compile, $timeout, $location, SdbRest, SdbFunction ){
@@ -29,10 +30,12 @@
       //会话类型
       $scope.SessionType = 'all' ;
       //定时器
+      $scope.IntervalTimeConfig = {
+         'interval': 5,
+         'play': false
+      } ;
       $scope.Timer = {
-         'config': {
-            interval: 5
-         },
+         'config': $scope.IntervalTimeConfig,
          'callback': {}
       } ;
       //实时刷新设置 弹窗
@@ -40,6 +43,8 @@
          'config': {},
          'callback': {}
       } ;
+      //刷新状态
+      $scope.RefreshType = $scope.autoLanguage( '启动刷新' ) ;
       //会话详细信息 弹窗
       $scope.SessionInfo = {
          'config': {},
@@ -307,6 +312,8 @@
                   return true ;
                } ) ;
             }
+         },{
+            'showLoading': false
          } ) ;
       }
 
@@ -318,17 +325,20 @@
          var svcname = hostname[1] ;
          hostname = hostname[0] ;
          var data = { 'cmd': 'force session', 'SessionID': sessionId, 'Options': JSON.stringify( { 'HostName': hostname, 'svcname': svcname } ) } ;
-         SdbRest.DataOperation( data, function(){
-            $scope.SessionInfo['callback']['Close']() ;
-            if( $scope.Timer['callback']['GetStatus']() == 'stop' )
-            {
-               getSessionList() ;
+         SdbRest.DataOperation( data, {
+            'success': function(){
+               $scope.SessionInfo['callback']['Close']() ;
+               if( $scope.Timer['callback']['GetStatus']() == 'stop' )
+               {
+                  getSessionList() ;
+               }
+            },
+            'failed': function( errorInfo ){
+               _IndexPublic.createRetryModel( $scope, errorInfo, function(){
+                  forceSession( sessionId, nodeName ) ;
+                  return true ;
+               } ) ;
             }
-         }, function( errorInfo ){
-            _IndexPublic.createRetryModel( $scope, errorInfo, function(){
-               forceSession( sessionId, nodeName ) ;
-               return true ;
-            } ) ;
          } ) ;
       }
 
@@ -366,16 +376,6 @@
          var brushForm = {
             'inputList': [
                {
-                  "name": "play",
-                  "webName": $scope.autoLanguage( '自动刷新' ),
-                  "type": "select",
-                  "value": $scope.Timer['callback']['GetStatus']() != 'stop',
-                  "valid": [
-                     { 'key': $scope.autoLanguage( '开启' ), 'value': true },
-                     { 'key': $scope.autoLanguage( '停止' ), 'value': false }
-                  ]
-               },
-               {
                   "name": "interval",
                   "webName": $scope.autoLanguage( '刷新间距(秒)' ),
                   "type": "int",
@@ -393,15 +393,8 @@
             if( isAllClear )
             {
                var formVal = brushForm.getValue() ;
+               $scope.IntervalTimeConfig = formVal ;
                $scope.Timer['callback']['SetInterval']( formVal['interval'] ) ;
-               if( formVal['play'] == true )
-               {
-                  $scope.Timer['callback']['Start']( getSessionList ) ;
-               }
-               else
-               {
-                  $scope.Timer['callback']['Stop']() ;
-               }
             }
             return isAllClear ;
          } ) ;
@@ -411,6 +404,22 @@
          $scope.CreateBrush['callback']['SetIcon']( '' ) ;
          //打开窗口
          $scope.CreateBrush['callback']['Open']() ;
+      }
+
+      //是否刷新
+      $scope.RefreshCtrl = function(){
+         if( $scope.IntervalTimeConfig['play'] == true )
+         {
+            $scope.IntervalTimeConfig['play'] = false ; 
+            $scope.RefreshType = $scope.autoLanguage( '启动刷新' )
+            $scope.Timer['callback']['Stop']() ;
+         }
+         else
+         {
+            $scope.IntervalTimeConfig['play'] = true ; 
+            $scope.RefreshType = $scope.autoLanguage( '停止刷新' ) ;
+            $scope.Timer['callback']['Start']( getSessionList ) ;
+         }
       }
 
       //打开 显示列 下拉菜单
@@ -424,9 +433,8 @@
       //保存 显示列
       $scope.SaveField = function(){
          $.each( $scope.FieldDropdown['config'], function( index, fieldInfo ){
-            $scope.SessionTable['title'][fieldInfo['key']] = fieldInfo['show'] ? fieldInfo['key'] : false ;
+            $scope.SessionTable['title'][fieldInfo['key']] = fieldInfo['show'] ? ( fieldInfo['key'] == 'Contexts.length' ? 'Contexts' : fieldInfo['key'] )  : false ;
          } ) ;
-         $scope.FieldDropdown['callback']['Close']() ;
          $scope.SessionTable['callback']['ShowCurrentPage']() ;
       }
 

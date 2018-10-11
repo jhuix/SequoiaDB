@@ -147,7 +147,7 @@ namespace engine
       protected:
          BSONObj                          _rangeKeyObj ;
          BSONObj                          _rangeEndKeyObj ;
-         vector<_monIndex>                _indexs ;
+         MON_IDX_LIST                     _indexs ;
          _netRouteAgent                   *_agent ;
          DPS_LSN                          _lsn ;
          DPS_LSN_OFFSET                   _beginLSNOffset ;
@@ -263,6 +263,7 @@ namespace engine
 
       protected:
          INT32   _genKeyObj ( const BSONObj &obj, BSONObj &keyObj ) ;
+         BOOLEAN _containMultiKey ( const BSONObj &obj ) ;
          BOOLEAN _GEThanRangeKey ( const BSONObj &keyObj ) ;
          BOOLEAN _LThanRangeEndKey( const BSONObj &keyObj ) ;
          BOOLEAN _LEThanScanObj ( const BSONObj &keyObj ) ;

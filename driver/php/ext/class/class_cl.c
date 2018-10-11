@@ -618,9 +618,11 @@ error:
 PHP_METHOD( SequoiaCL, update )
 {
    INT32 rc = SDB_OK ;
+   INT32 flag       = 0 ;
    zval *pRule      = NULL ;
    zval *pCondition = NULL ;
    zval *pHint      = NULL ;
+   zval *pFlag      = NULL ;
    zval *pThisObj   = getThis() ;
    sdbCollectionHandle cl = SDB_INVALID_HANDLE ;
    bson rule ;
@@ -630,10 +632,11 @@ PHP_METHOD( SequoiaCL, update )
    bson_init( &condition ) ;
    bson_init( &hint ) ;
    PHP_SET_ERRNO_OK( FALSE, pThisObj ) ;
-   if ( PHP_GET_PARAMETERS( "|zzz",
+   if ( PHP_GET_PARAMETERS( "|zzzz",
                             &pRule,
                             &pCondition,
-                            &pHint ) == FAILURE )
+                            &pHint,
+                            &pFlag ) == FAILURE )
    {
       rc = SDB_INVALIDARG ;
       goto error ;
@@ -653,12 +656,17 @@ PHP_METHOD( SequoiaCL, update )
    {
       goto error ;
    }
+   rc = php_zval2Int( pFlag, &flag TSRMLS_CC ) ;
+   if( rc )
+   {
+      goto error ;
+   }
    PHP_READ_HANDLE( pThisObj,
                     cl,
                     sdbCollectionHandle,
                     SDB_CL_HANDLE_NAME,
                     clDesc ) ;
-   rc = sdbUpdate( cl, &rule, &condition, &hint ) ;
+   rc = sdbUpdate1( cl, &rule, &condition, &hint, flag ) ;
    if( rc )
    {
       goto error ;
@@ -676,23 +684,30 @@ error:
 
 PHP_METHOD( SequoiaCL, upsert )
 {
-   INT32 rc = SDB_OK ;
-   zval *pRule      = NULL ;
-   zval *pCondition = NULL ;
-   zval *pHint      = NULL ;
-   zval *pThisObj   = getThis() ;
+   INT32 rc               = SDB_OK ;
+   INT32 flag             = 0 ;
+   zval *pRule            = NULL ;
+   zval *pCondition       = NULL ;
+   zval *pHint            = NULL ;
+   zval *pSetOnInsert     = NULL ;
+   zval *pFlag            = NULL ;
+   zval *pThisObj         = getThis() ;
    sdbCollectionHandle cl = SDB_INVALID_HANDLE ;
    bson rule ;
    bson condition ;
    bson hint ;
+   bson setOnInsert ;
    bson_init( &rule ) ;
    bson_init( &condition ) ;
    bson_init( &hint ) ;
+   bson_init( &setOnInsert ) ;
    PHP_SET_ERRNO_OK( FALSE, pThisObj ) ;
-   if ( PHP_GET_PARAMETERS( "|zzz",
+   if ( PHP_GET_PARAMETERS( "|zzzzz",
                             &pRule,
                             &pCondition,
-                            &pHint ) == FAILURE )
+                            &pHint,
+                            &pSetOnInsert,
+                            &pFlag ) == FAILURE )
    {
       rc = SDB_INVALIDARG ;
       goto error ;
@@ -712,12 +727,22 @@ PHP_METHOD( SequoiaCL, upsert )
    {
       goto error ;
    }
+   rc = php_auto2Bson( pSetOnInsert, &setOnInsert TSRMLS_CC ) ;
+   if( rc )
+   {
+      goto error ;
+   }
+   rc = php_zval2Int( pFlag, &flag TSRMLS_CC ) ;
+   if( rc )
+   {
+      goto error ;
+   }
    PHP_READ_HANDLE( pThisObj,
                     cl,
                     sdbCollectionHandle,
                     SDB_CL_HANDLE_NAME,
                     clDesc ) ;
-   rc = sdbUpsert( cl, &rule, &condition, &hint ) ;
+   rc = sdbUpsert2( cl, &rule, &condition, &hint, &setOnInsert, flag ) ;
    if( rc )
    {
       goto error ;
@@ -727,6 +752,7 @@ done:
    bson_destroy( &rule ) ;
    bson_destroy( &condition ) ;
    bson_destroy( &hint ) ;
+   bson_destroy( &setOnInsert ) ;
    return ;
 error:
    PHP_SET_ERROR( FALSE, pThisObj, rc ) ;
@@ -1588,6 +1614,48 @@ PHP_METHOD( SequoiaCL, removeLob )
    {
       goto error ;
    }
+done:
+   PHP_RETURN_AUTO_ERROR( FALSE, pThisObj, rc ) ;
+   return ;
+error:
+   PHP_SET_ERROR( FALSE, pThisObj, rc ) ;
+   goto done ;
+}
+
+PHP_METHOD( SequoiaCL, truncateLob )
+{
+   INT32 rc = SDB_OK ;
+   PHP_LONG oidLen = 0 ;
+   INT64 length    = 0 ;
+   CHAR *pOid      = NULL ;
+   zval *pLength   = NULL ;
+   zval *pThisObj  = getThis() ;
+   sdbCollectionHandle cl = SDB_INVALID_HANDLE ;
+   bson_oid_t bot ;
+
+   PHP_SET_ERRNO_OK( FALSE, pThisObj ) ;
+
+   if ( PHP_GET_PARAMETERS( "sz", &pOid, &oidLen, &pLength ) == FAILURE )
+   {
+      rc = SDB_INVALIDARG ;
+      goto error ;
+   }
+
+   rc = php_zval2Long( pLength, &length TSRMLS_CC ) ;
+   if ( rc )
+   {
+      goto error ;
+   }
+
+   PHP_READ_HANDLE( pThisObj, cl, sdbCollectionHandle,
+                    SDB_CL_HANDLE_NAME, clDesc ) ;
+   bson_oid_from_string( &bot, pOid ) ;
+   rc = sdbTruncateLob( cl, &bot, length ) ;
+   if( rc )
+   {
+      goto error ;
+   }
+
 done:
    PHP_RETURN_AUTO_ERROR( FALSE, pThisObj, rc ) ;
    return ;

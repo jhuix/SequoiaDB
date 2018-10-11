@@ -1,3 +1,12 @@
+// File open option define
+const SDB_FILE_CREATEONLY =    0x00000001 ;
+const SDB_FILE_REPLACE =       0x00000002 ;
+const SDB_FILE_CREATE =        SDB_FILE_CREATEONLY | SDB_FILE_REPLACE ;
+const SDB_FILE_SHAREREAD =     0x00000010 ;
+const SDB_FILE_SHAREWROTE =    SDB_FILE_SHAREREAD | 0x00000020 ;
+const SDB_FILE_READONLY =      0x00000004 | SDB_FILE_SHAREREAD ;
+const SDB_FILE_WRITEONLY =     0x00000008 ;
+const SDB_FILE_READWRITE =     0x00000004 | SDB_FILE_WRITEONLY ;
 
 // BSONObj
 BSONObj.prototype.toObj = function() {
@@ -499,54 +508,6 @@ Oma.prototype.reloadConfigs = function()
 {
    this._runCommand( "reload config" ) ;
 }
-
-Oma.prototype.help = function( val ) {
-   if ( val == undefined )
-   {
-      println("OMA methods:") ;
-      println("   oma.help(<method>)          help on specified method of oma, e.g. oma.help(\'createData\')");
-      println("   getOmaInstallFile()         - Get the configuration information of sdbcm."        ) ;
-      println("   getOmaInstallInfo()         - Get the installation information from the installation file.") ;
-      println("   getOmaConfigFile()          - Get the installation information file.") ;
-      println("   getOmaConfigs( [confFile] ) - Get the installation information file.") ;
-      println("   setOmaConfigs( obj, [confFile] )") ;
-      println("                               - Set the configuration information to the") ;
-      println("                                 configuration file of sdbcm.") ;
-      println("   getAOmaSvcName( hostname, [confFile] )") ;
-      println("                               - Get the service name of sdbcm in target host.") ;
-      println("   addAOmaSvcName( hostname, svcname, [isReplace], [confFile] )") ;
-      println("                               - Specify the service name of sdbcm in target host.") ;
-      println("   delAOmaSvcName( hostname, [confFile] )") ;
-      println("                               - Delete the service name of sdbcm from its") ;
-      println("                                 configuration file in target host.") ;
-      println("   listNodes( optionObj, [filterObj] )") ;
-      println("                               - Lists all nodes in the host where the current") ;
-      println("                                 Oma object is connected to.") ;
-      println("   getNodeConfigs( svcname )   - Get the configuration information from the") ;
-      println("                                 configuration file of specified SequoiaDB node.") ;
-      println("   setNodeConfigs( svcname, configsObj )") ;
-      println("                               - Use the new configuration information to") ;
-      println("                                 overwrite the contents in the configuration file") ;
-      println("                                 of the specified SequoiaDB node.") ;
-      println("   updateNodeConfigs( svcname, configsObj )") ;
-      println("                               - Use the new configuration information to") ;
-      println("                                 update the contents in the configuration file of") ;
-      println("                                 the specified SequoiaDB node.") ;
-      println("   reloadConfigs()             - Sdbcm reload the configuration information") ;
-      println("                                 from the configuration file.") ;
-      println("   startAllNodes( [businessName] )") ;
-      println("                               - Start all nodes with the specified business name") ;
-      println("                                 in target host of sdbcm") ;
-      println("   stopAllNodes( [businessName] )") ;
-      println("                               - Stop all nodes with the specified business name") ;
-      println("                                 in target host of sdbcm") ;
-      man( "oma" ) ;
-   }
-   else
-   {
-      man( "oma", val ) ;
-   }
-}
 // end Oma
 
 // Remote member function
@@ -556,9 +517,11 @@ Remote.prototype.getSystem = function() {
    return system ;
 }
 
-Remote.prototype.getFile = function( filename, mode ) {
+Remote.prototype.getFile = function( filename, permission, openMode ) {
    var file = File._getFileObj() ;
+   var option = {} ;
    file._remote = this ;
+
 
    if ( 1 <= arguments.length )
    {
@@ -568,19 +531,19 @@ Remote.prototype.getFile = function( filename, mode ) {
          throw SDB_INVALIDARG ;
       }
 
-      if ( undefined != mode )
+      if( undefined != permission )
       {
-         this._runCommand( "file open",{ "mode": mode }, {},
-                           { "filename": filename } ) ;
+         option.permission = permission ;
+         if( undefined != openMode )
+         {
+            option.mode = openMode ;
+         }
       }
-      else
-      {
-         this._runCommand( "file open",{}, {},
-                           { "filename": filename } ) ;
-      }
+
+      var retObj = this._runCommand( "file open", option, {},
+                                     { "Filename": filename } ) ;
+      file._FID = retObj.toObj().FID ;
       file._filename = filename ;
-      file._location = 0 ;
-      file._isOpened = true ;
    }
    return file ;
 }
@@ -598,26 +561,44 @@ Remote.prototype._runCommand = function( command, optionObj,
                                          matchObj, valueObj ) {
    var bsonObj ;
    var retObj ;
-   if ( 6 < arguments.length )
+   var option = {} ;
+   var match = {} ;
+   var value = {} ;
+   if ( 4 < arguments.length )
    {
-      setLastErrMsg( "too much arguments" ) ;
+      setLastErrMsg( "Too much arguments" ) ;
       throw SDB_INVALIDARG ;
    }
-   else if ( undefined != valueObj )
+   if( undefined != optionObj )
    {
-      bsonObj = this.__runCommand( command, optionObj, matchObj, valueObj ) ;
+      option = optionObj ;
    }
-   else if ( undefined != matchObj )
+   if( undefined != matchObj )
    {
-      bsonObj = this.__runCommand( command, optionObj, matchObj ) ;
+      match = matchObj ;
    }
-   else if ( undefined != optionObj  )
+   if( undefined != valueObj )
    {
-      bsonObj = this.__runCommand( command, optionObj ) ;
+      value = valueObj ;
    }
-   else
+
+   try
    {
-      bsonObj = this.__runCommand( command ) ;
+      bsonObj = this.__runCommand( command, option, match, value ) ;
+   }
+   catch( e )
+   {
+      if( SDB_INVALIDARG == e || SDB_OUT_OF_BOUND == e )
+      {
+         var errMsg = getLastErrMsg() ;
+         var errObj = getLastErrObj().toObj() ;
+         var extraErrMsg = ": the cause of this error may be that the server version "
+                           + "is not consistent with the client version" ;
+         errObj.detail = errObj.detail + extraErrMsg ;
+         setLastErrMsg( errMsg + extraErrMsg  ) ;
+         setLastErrObj( errObj ) ;
+      }
+      throw e ;
    }
 
    return bsonObj ;
@@ -633,7 +614,7 @@ _Filter.prototype.match = function( BSONArrObj ) {
    }
    else
    {
-      setLastErrMsg( "argument must be objArray" ) ;
+      setLastErrMsg( "Argument must be objArray" ) ;
       throw SDB_INVALIDARG ;
    }
 }
@@ -1591,8 +1572,8 @@ System.prototype.killProcess = function( optionObj ) {
    if ( undefined != this._remote )
    {
       this._remote._runCommand( "system kill process",
-                                { "sig" : optionObj.sig },
-                                { "pid": optionObj.pid } ) ;
+                                { "sig" : optionObj.sig,
+                                  "pid": optionObj.pid } ) ;
    }
    else
    {
@@ -1933,25 +1914,28 @@ Cmd.prototype.run = function( cmd, args, timeout, useShell ) {
    // remote call
    if ( undefined != this._remote )
    {
+      var retObj ;
 
-      var retObj = this._remote._runCommand( "cmd run",
-                                             { "timeout": timeout,
-                                               "useShell": useShell }, {},
-                                             { "command": cmd,
-                                               "args": args } ).toObj() ;
-
-      this._retCode = retObj.retCode ;
-      this._strOut = retObj.strOut ;
-
-      if ( 0 != this._retCode )
+      try
       {
-         setLastErrMsg( this._strOut ) ;
-         throw this._retCode ;
+         retObj = this._remote._runCommand( "cmd run",
+                                            { "timeout": timeout,
+                                              "useShell": useShell }, {},
+                                            { "command": cmd,
+                                              "args": args } ).toObj() ;
+         this._retCode = getLastError() ;
+         this._strOut = retObj.strOut ;
       }
-      else
+      catch( e )
       {
-         retStr = this._strOut ;
+         if( 0 <= e )
+         {
+            this._retCode = e ;
+            this._strOut = getLastErrMsg() ;
+         }
+         throw e ;
       }
+      retStr = this._strOut ;
    }
    else
    {
@@ -1964,7 +1948,7 @@ Cmd.prototype.run = function( cmd, args, timeout, useShell ) {
 }
 
 Cmd.prototype.start = function( cmd, args, useShell, timeout ) {
-   var retStr ;
+   var retPid ;
 
    // check argument
    if ( 1 > arguments.length )
@@ -2005,32 +1989,33 @@ Cmd.prototype.start = function( cmd, args, useShell, timeout ) {
 
    if ( undefined != this._remote )
    {
-      var recvObj = this._remote._runCommand( "cmd start",
-                                              { "useShell": useShell,
-                                                "timeout": timeout }, {},
-                                               { "command": cmd,
-                                                 "args": args } ) ;
-      var getObj = recvObj.toObj() ;
-
-      this._retCode = getObj.retCode ;
-      this._strOut = getObj.strOut ;
-
-      if ( 0 != this._retCode )
+      var recvObj ;
+      try
       {
-         setLastErrMsg( getObj.strOut ) ;
-         throw getObj.retCode ;
+         recvObj = this._remote._runCommand( "cmd start",
+                                             { "useShell": useShell,
+                                               "timeout": timeout }, {},
+                                             { "command": cmd,
+                                               "args": args } ).toObj() ;
+         this._retCode = getLastError() ;
+         this._strOut = recvObj.strOut ;
       }
-      else
+      catch( e )
       {
-         retStr = getObj.pid ;
+         if( 0 <= e )
+         {
+            this._retCode = e ;
+            this._strOut = getLastErrMsg() ;
+         }
+         throw e ;
       }
+      retPid = recvObj.pid ;
    }
    else
    {
-      retStr = this._start( cmd, args, useShell, timeout ) ;
+      retPid = this._start( cmd, args, useShell, timeout ) ;
    }
-
-   return retStr ;
+   return retPid ;
 }
 
 Cmd.prototype.runJS = function( code ) {
@@ -2058,7 +2043,7 @@ Cmd.prototype.runJS = function( code ) {
    }
    else
    {
-      setLastErrMsg( "runJS() should be called by remote obj" ) ;
+      setLastErrMsg( "runJS() should be called by remote cmd obj" ) ;
       throw SDB_SYS ;
    }
 }
@@ -2227,6 +2212,139 @@ File.getUmask = function( base ) {
    return umask ;
 }
 
+File.scp = function( src, dst, isReplace, mode ) {
+
+   if( undefined == src )
+   {
+      setLastErrMsg( "src must be config" ) ;
+      throw SDB_OUT_OF_BOUND ;
+   }
+   if( "string" != typeof( src ) )
+   {
+      setLastErrMsg( "src must be string" ) ;
+      throw SDB_INVALIDARG ;
+   }
+
+   if( undefined == dst )
+   {
+      setLastErrMsg( "dst must be config" ) ;
+      throw SDB_OUT_OF_BOUND ;
+   }
+   if( "string" != typeof( dst ) )
+   {
+      setLastErrMsg( "dst must be string" ) ;
+      throw SDB_INVALIDARG ;
+   }
+
+   var srcFile ;
+   var dstFile ;
+   var COPY_UNIT = 4*1024*1024 ;
+   var srcArr = src.split( "@" ) ;
+   var dstFilename ;
+   if( srcArr.length > 1 )
+   {
+      var hostPortSplit = srcArr[0].split( ":" ) ;
+      var remote = new Remote( hostPortSplit[0], hostPortSplit[1] ) ;
+      var fileMgr = remote.getFile() ;
+
+      if( false == fileMgr.exist( srcArr[1] ) )
+      {
+         setLastErrMsg( "src not exist" ) ;
+         throw SDB_FNE ;
+      }
+      if( undefined == mode )
+      {
+         mode = fileMgr._getPermission( srcArr[1] ) ;
+      }
+      srcFile = remote.getFile( srcArr[1], 0644, SDB_FILE_READONLY ) ;
+   }
+   else
+   {
+      if( false == File.exist( srcArr[0] ) )
+      {
+         setLastErrMsg( "src not exist" ) ;
+         throw SDB_FNE ;
+      }
+      if( undefined == mode )
+      {
+         mode = File._getPermission( srcArr[0] ) ;
+      }
+      srcFile = new File( srcArr[0], 0644, SDB_FILE_READONLY ) ;
+   }
+
+   var dstArr = dst.split( "@" ) ;
+   if( dstArr.length > 1 )
+   {
+      var hostPortSplit = dstArr[0].split( ":" ) ;
+      var remote = new Remote( hostPortSplit[0], hostPortSplit[1] ) ;
+      var fileMgr = remote.getFile() ;
+      dstFilename = dstArr[1] ;
+      if( true == fileMgr.exist( dstFilename ) )
+      {
+         if( false == isReplace )
+         {
+            setLastErrMsg( "dst exist" ) ;
+            throw SDB_FE ;
+         }
+         else
+         {
+            dstFile = remote.getFile( dstFilename, mode,
+                                      SDB_FILE_REPLACE| SDB_FILE_READWRITE ) ;
+         }
+      }
+      else
+      {
+         dstFile = remote.getFile( dstFilename, mode,
+                                   SDB_FILE_CREATEONLY | SDB_FILE_READWRITE ) ;
+      }
+   }
+   else
+   {
+      dstFilename = dstArr[0] ;
+      if( true == File.exist( dstFilename ) )
+      {
+         if( false == isReplace )
+         {
+            setLastErrMsg( "dst exist" ) ;
+            throw SDB_FE ;
+         }
+         else
+         {
+            dstFile = new File( dstFilename, mode,
+                                SDB_FILE_REPLACE | SDB_FILE_READWRITE ) ;
+         }
+      }
+      else
+      {
+         dstFile = new File( dstFilename, mode,
+                             SDB_FILE_CREATEONLY | SDB_FILE_READWRITE ) ;
+      }
+   }
+
+   try
+   {
+      while( true )
+      {
+         var fileContent = srcFile.readContent( COPY_UNIT ) ;
+         dstFile.writeContent( fileContent ) ;
+         fileContent.clear() ;
+      }
+   }
+   catch( e )
+   {
+      srcFile.close() ;
+      dstFile.close() ;
+      if( -9 == e )
+      {
+         println( "Success to copy file from " + src + " to " + dst ) ;
+      }
+      else
+      {
+         throw e ;
+      }
+   }
+}
+
 // File member function
 File.prototype.getInfo = function() {
    var result ;
@@ -2252,28 +2370,20 @@ File.prototype.read = function( size ) {
 
    if ( undefined != this._remote )
    {
-      if ( true != this._isOpened )
-      {
-         setLastErrMsg( "file is not opened" ) ;
-         throw SDB_IO ;
-      }
-
       var retObj ;
       if ( undefined != size )
       {
-         retObj= this._remote._runCommand( "file read",{}, {},
-                                          { "size":size,
-                                            "filename": this._filename,
-                                            "location": this._location } ) ;
+         retObj = this._remote._runCommand( "file read", {},
+                                            { "FID": this._FID },
+                                            { "Size": size } ) ;
       }
       else
       {
-         retObj= this._remote._runCommand( "file read",{}, {},
-                                          { "filename": this._filename,
-                                            "location": this._location } ) ;
+         retObj = this._remote._runCommand( "file read", {},
+                                            { "FID": this._FID } ) ;
       }
-      str = retObj.toObj().readStr ;
-      this._location += str.length ;
+      var recvObj = retObj.toObj() ;
+      str = recvObj.Content ;
    }
    else
    {
@@ -2289,25 +2399,56 @@ File.prototype.read = function( size ) {
    return str ;
 }
 
+File.prototype.readContent = function( size )
+{
+   var retObj ;
+   if ( undefined != this._remote )
+   {
+      if( undefined != size )
+      {
+         retObj = this._readContent( this._remote, this._FID, size ) ;
+      }
+      else
+      {
+         retObj = this._readContent( this._remote, this._FID ) ;
+      }
+   }
+   else
+   {
+      if( undefined != size )
+      {
+         retObj = this._readContent( size ) ;
+      }
+      else
+      {
+         retObj = this._readContent() ;
+      }
+   }
+   return retObj ;
+}
+
 File.prototype.write = function( content ){
 
    if ( undefined != this._remote )
    {
-      if ( true != this._isOpened )
-      {
-         setLastErrMsg( "file is not opened" ) ;
-         throw SDB_IO ;
-      }
-
-      this._remote._runCommand( "file write", {}, {},
-                                { "filename": this._filename,
-                                  "location": this._location,
-                                  "content": content } ) ;
-      this._location += content.length ;
+      this._remote._runCommand( "file write", {}, { "FID": this._FID },
+                                { "Content": content } ) ;
    }
    else
    {
       this._write( content ) ;
+   }
+}
+
+File.prototype.writeContent = function( content )
+{
+   if( undefined != this._remote )
+   {
+      this._writeContent( this._remote, this._FID, content ) ;
+   }
+   else
+   {
+      this._writeContent( content ) ;
    }
 }
 
@@ -2316,60 +2457,24 @@ File.prototype.seek = function( offset, where ) {
    // check argument
    if ( undefined == offset )
    {
-      setLastErrMsg( "offset must be config" ) ;
+      setLastErrMsg( "Offset must be config" ) ;
       throw SDB_OUT_OF_BOUND ;
    }
 
-   if ( undefined == where )
+   var optionObj = {} ;
+   if ( undefined != where )
    {
-      where = 'b' ;
+      optionObj.where = where ;
    }
 
    if ( undefined != this._remote )
    {
-      if ( true != this._isOpened )
-      {
-         setLastErrMsg( "file is not opened" ) ;
-         throw SDB_IO ;
-      }
-
-      if ( 'b' == where )
-      {
-         if ( offset < 0 )
-         {
-            throw SDB_INVALIDARG ;
-         }
-         this._location = offset ;
-      }
-      else if ( 'c' == where )
-      {
-         if ( 0 > this._location + offset )
-         {
-            throw SDB_INVALIDARG ;
-         }
-         this._location += offset ;
-      }
-      else if ( 'e' == where )
-      {
-         var recvObj = this._remote._runCommand( "file get content size", {},
-                                                 { "name": this._filename } ) ;
-         var size = recvObj.toObj().size ;
-
-         if ( 0 > size + offset )
-         {
-            throw SDB_INVALIDARG ;
-         }
-         this._location = size + offset ;
-      }
-      else
-      {
-         setLastErrMsg( "where must be string(b/c/e)" ) ;
-         throw SDB_INVALIDARG ;
-      }
+      this._remote._runCommand( "file seek", optionObj, { "FID": this._FID },
+                                { "SeekSize": offset } ) ;
    }
    else
    {
-      this._seek( offset, where ) ;
+      this._seek( offset, optionObj ) ;
    }
 }
 
@@ -2380,7 +2485,10 @@ File.prototype.close = function() {
    }
    else
    {
-      this._isOpened = false ;
+      if( this._FID != undefined )
+      {
+         this._remote._runCommand( "file close", {}, { "FID": this._FID } ) ;
+      }
    }
 }
 
@@ -2396,7 +2504,7 @@ File.prototype.remove = function( filepath ) {
    if ( undefined != this._remote )
    {
       this._remote._runCommand( "file remove", {}, {},
-                               { "filepath" : filepath } ) ;
+                               { "Pathname" : filepath } ) ;
    }
    else
    {
@@ -2417,8 +2525,8 @@ File.prototype.exist = function( filepath ) {
    if ( undefined != this._remote )
    {
       var recvObj = this._remote._runCommand( "file is exist", {}, {},
-                                              { "filepath" : filepath } ) ;
-      isExist = recvObj.toObj().isExist ;
+                                              { "Pathname" : filepath } ) ;
+      isExist = recvObj.toObj().IsExist ;
    }
    else
    {
@@ -2432,12 +2540,12 @@ File.prototype.copy = function( src, dst, replace, mode ) {
    // check argument
    if ( undefined == src )
    {
-      setLastErrMsg( "src must be config" ) ;
+      setLastErrMsg( "Src must be config" ) ;
       throw SDB_OUT_OF_BOUND ;
    }
    if ( undefined == dst )
    {
-      setLastErrMsg( "dst must be config" ) ;
+      setLastErrMsg( "Dst must be config" ) ;
       throw SDB_OUT_OF_BOUND ;
    }
 
@@ -2450,10 +2558,10 @@ File.prototype.copy = function( src, dst, replace, mode ) {
       }
       if ( undefined != replace )
       {
-         optionObj.replace = replace ;
+         optionObj.isReplace = replace ;
       }
       this._remote._runCommand( "file copy", optionObj,
-                                { "src": src }, { "dst": dst } ) ;
+                                { "Src": src }, { "Dst": dst } ) ;
    }
    else
    {
@@ -2477,19 +2585,19 @@ File.prototype.move = function( src, dst ) {
    // check argument
    if ( undefined == src )
    {
-      setLastErrMsg( "src must be config" ) ;
+      setLastErrMsg( "Src must be config" ) ;
       throw SDB_OUT_OF_BOUND ;
    }
    if ( undefined == dst )
    {
-      setLastErrMsg( "dst must be config" ) ;
+      setLastErrMsg( "Dst must be config" ) ;
       throw SDB_OUT_OF_BOUND ;
    }
 
    if ( undefined != this._remote )
    {
-      this._remote._runCommand( "file move", {}, { "src": src },
-                              { "dst": dst } ) ;
+      this._remote._runCommand( "file move", {}, { "Src": src },
+                              { "Dst": dst } ) ;
    }
    else
    {
@@ -2502,28 +2610,25 @@ File.prototype.mkdir = function( name, mode ) {
    // check argument
    if ( undefined == name )
    {
-      setLastErrMsg( "name must be config" ) ;
+      setLastErrMsg( "Name must be config" ) ;
       throw SDB_OUT_OF_BOUND ;
    }
 
-   if ( undefined != mode )
+   if ( undefined != this._remote )
    {
-      if ( undefined != this._remote )
+      var optionObj = {} ;
+      if( undefined != mode )
       {
-         this._remote._runCommand( "file mkdir", { "mode": mode }, {},
-                                  { "name": name } ) ;
+         optionObj.mode = mode ;
       }
-      else
-      {
-         File.mkdir( name, mode ) ;
-      }
+      this._remote._runCommand( "file mkdir", optionObj, {},
+                               { "Dirname": name } ) ;
    }
    else
    {
-      if ( undefined != this._remote )
+      if( undefined != mode )
       {
-         this._remote._runCommand( "file mkdir", {}, {},
-                                  { "name": name } ) ;
+         File.mkdir( name, mode ) ;
       }
       else
       {
@@ -2537,12 +2642,12 @@ File.prototype.find = function( optionObj, filterObj ) {
    // check argument
    if ( undefined == optionObj )
    {
-      setLastErrMsg( "optionObj must be config" ) ;
+      setLastErrMsg( "OptionObj must be config" ) ;
       throw SDB_OUT_OF_BOUND  ;
    }
    if ( false == optionObj instanceof Object )
    {
-      setLastErrMsg( "optionObj must be Object" ) ;
+      setLastErrMsg( "OptionObj must be Object" ) ;
       throw SDB_INVALIDARG  ;
    }
 
@@ -2593,17 +2698,13 @@ File.prototype.chmod = function( filename, mode, recursive ) {
 
    if ( undefined != this._remote )
    {
+      var optionObj = {} ;
       if ( undefined != recursive )
       {
-         this._remote._runCommand( "file chmod", { "recursive": recursive },
-                                   { "pathname": filename },
-                                   { "mode": mode } ) ;
+         optionObj.isRecursive = recursive ;
       }
-      else
-      {
-         this._remote._runCommand( "file chmod", {}, { "pathname": filename },
-                                   { "mode": mode } ) ;
-      }
+      this._remote._runCommand( "file chmod", optionObj, { "Pathname": filename },
+                                { "Mode": mode } ) ;
    }
    else
    {
@@ -2644,12 +2745,12 @@ File.prototype.chown = function( filename, optionObj, recursive ) {
    {
       if ( undefined != recursive )
       {
-         this._remote._runCommand( "file chown", { "recursive": recursive },
-                                   { "filename": filename }, optionObj ) ;
+         this._remote._runCommand( "file chown", { "isRecursive": recursive },
+                                   { "Pathname": filename }, optionObj ) ;
       }
       else
       {
-         this._remote._runCommand( "file chown", {}, { "filename": filename },
+         this._remote._runCommand( "file chown", {}, { "Pathname": filename },
                                   optionObj ) ;
       }
    }
@@ -2671,14 +2772,14 @@ File.prototype.chgrp = function( filename, groupname, recursive ) {
    {
       if ( undefined != recursive )
       {
-         this._remote._runCommand( "file chgrp", { "recursive": recursive },
-                                   { "filename": filename },
-                                   { "groupname": groupname } ) ;
+         this._remote._runCommand( "file chgrp", { "isRecursive": recursive },
+                                   { "Pathname": filename },
+                                   { "Groupname": groupname } ) ;
       }
       else
       {
-         this._remote._runCommand( "file chgrp", {}, { "filename": filename },
-                                  { "groupname": groupname } ) ;
+         this._remote._runCommand( "file chgrp", {}, { "Pathname": filename },
+                                  { "Groupname": groupname } ) ;
       }
    }
    else
@@ -2699,13 +2800,13 @@ File.prototype.setUmask = function( mask ) {
    // check argument
    if ( undefined == mask )
    {
-      setLastErrMsg( "mask must be config" ) ;
+      setLastErrMsg( "Mask must be config" ) ;
       throw SDB_OUT_OF_BOUND ;
    }
 
    if ( undefined != this._remote )
    {
-      this._remote._runCommand( "file set umask", {}, {}, { "mask": mask } ) ;
+      this._remote._runCommand( "file set umask", {}, {}, { "Mask": mask } ) ;
    }
    else
    {
@@ -2719,7 +2820,7 @@ File.prototype.getUmask = function( base ) {
    if ( undefined != this._remote )
    {
       var recvObj = this._remote._runCommand( "file get umask" ) ;
-      var umask = parseInt( recvObj.toObj().mask, 8 ) ;
+      var umask = parseInt( recvObj.toObj().Mask, 8 ) ;
       if ( undefined != base )
       {
          if ( "string" == typeof( base ) )
@@ -2811,8 +2912,8 @@ File.prototype.isFile = function( pathname ) {
    if ( undefined != this._remote )
    {
       var recvObj = this._remote._runCommand( "file get path type", {},
-                                             { "pathname":pathname } ) ;
-      if ( "FIL" == recvObj.toObj().pathType )
+                                             { "Pathname":pathname } ) ;
+      if ( "FIL" == recvObj.toObj().PathType )
       {
          result = true ;
       }
@@ -2837,8 +2938,8 @@ File.prototype.isDir = function( pathname ) {
    if ( undefined != this._remote )
    {
       var recvObj = this._remote._runCommand( "file get path type", {},
-                                             { "pathname":pathname } ) ;
-      if ( "DIR" == recvObj.toObj().pathType )
+                                             { "Pathname":pathname } ) ;
+      if ( "DIR" == recvObj.toObj().PathType )
       {
          result = true ;
       }
@@ -2855,7 +2956,7 @@ File.prototype.isEmptyDir = function( pathname ) {
    // check argument
    if ( undefined == pathname )
    {
-      setLastErrMsg( "pathname must be config" ) ;
+      setLastErrMsg( "Pathname must be config" ) ;
       throw SDB_OUT_OF_BOUND ;
    }
 
@@ -2863,9 +2964,9 @@ File.prototype.isEmptyDir = function( pathname ) {
    if ( undefined != this._remote )
    {
       var recvObj = this._remote._runCommand( "file is empty dir", {},
-                                             { "pathname":pathname } ) ;
+                                             { "Pathname":pathname } ) ;
 
-      var isEmpty = recvObj.toObj().isEmpty ;
+      var isEmpty = recvObj.toObj().IsEmpty ;
       if ( isEmpty )
       {
          result = true ;
@@ -2887,7 +2988,7 @@ File.prototype.stat = function( filename ) {
    // check argument
    if ( undefined == filename )
    {
-      setLastErrMsg( "filename must be config" ) ;
+      setLastErrMsg( "Filename must be config" ) ;
       throw SDB_OUT_OF_BOUND ;
    }
 
@@ -2895,7 +2996,7 @@ File.prototype.stat = function( filename ) {
    if ( undefined != this._remote )
    {
       result = this._remote._runCommand( "file stat", {},
-                                        { "filename": filename } ) ;
+                                        { "Filename": filename } ) ;
    }
    else
    {
@@ -2909,7 +3010,7 @@ File.prototype.md5 = function( filename ) {
    // check argument
    if ( undefined == filename )
    {
-      setLastErrMsg( "filename must be config" ) ;
+      setLastErrMsg( "Filename must be config" ) ;
       throw SDB_OUT_OF_BOUND ;
    }
 
@@ -2917,8 +3018,8 @@ File.prototype.md5 = function( filename ) {
    if ( undefined != this._remote )
    {
       var recvObj = this._remote._runCommand( "file md5", {},
-                                           { "filename": filename } ) ;
-      result = recvObj.toObj().md5 ;
+                                              { "Filename": filename } ) ;
+      result = recvObj.toObj().MD5 ;
    }
    else
    {
@@ -2927,4 +3028,58 @@ File.prototype.md5 = function( filename ) {
    return result ;
 
 }
+
+File.prototype._getPermission = function( pathname ) {
+
+   if( undefined == pathname )
+   {
+      setLastErrMsg( "Pathname must be config" ) ;
+      throw SDB_OUT_OF_BOUND ;
+   }
+   else if( "string" != typeof( pathname ) )
+   {
+      setLastErrMsg( "Pathname must be string" ) ;
+      throw SDB_INVALIDARG ;
+   }
+
+   if( undefined != this._remote )
+   {
+      var retObj = this._remote._runCommand( "file get permission", {}, {},
+                                             { "Pathname": pathname } ).toObj() ;
+      return retObj.Permission ;
+   }
+   else
+   {
+      return File._getPermission( pathname ) ;
+   }
+}
+
+File.prototype.getSize = function( filename ) {
+   if( undefined != this._remote )
+   {
+      var retObj = this._remote._runCommand( "file get content size", {},
+                                             { "Filename": filename } ).toObj() ;
+      return retObj.Size ;
+   }
+   else
+   {
+      return File.getSize( filename ) ;
+   }
+}
+
+File.prototype.readLine = function() {
+   var retStr ;
+   if( undefined != this._remote )
+   {
+      var retObj = this._remote._runCommand( "file read line", {},
+                                             { "FID": this._FID } ) ;
+      retStr = retObj.toObj().Content ;
+   }
+   else
+   {
+      retStr = this._readLine() ;
+   }
+   return retStr ;
+}
+
 // end File

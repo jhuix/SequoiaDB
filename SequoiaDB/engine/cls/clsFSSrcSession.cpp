@@ -50,6 +50,7 @@
 #include "rtnLob.hpp"
 #include "pmdStartup.hpp"
 #include "rtnContextLob.hpp"
+#include "rtnContextData.hpp"
 #include "msgMessageFormat.hpp"
 #include <set>
 
@@ -287,7 +288,7 @@ namespace engine
    void _clsDataSrcBaseSession::_eraseDefaultIndex ()
    {
       PD_TRACE_ENTRY ( SDB__CLSDSBS__ERSDFTINX );
-      vector<monIndex>::iterator itr = _indexs.begin() ;
+      MON_IDX_LIST::iterator itr = _indexs.begin() ;
       while ( itr != _indexs.end() )
       {
          BSONElement nameE = itr->_indexDef.getField ( IXM_NAME_FIELD ) ;
@@ -303,7 +304,7 @@ namespace engine
 
    BOOLEAN _clsDataSrcBaseSession::_existIndex( const CHAR * indexName )
    {
-      vector<monIndex>::iterator itr = _indexs.begin() ;
+      MON_IDX_LIST::iterator itr = _indexs.begin() ;
       while ( itr != _indexs.end() )
       {
          BSONElement nameE = itr->_indexDef.getField ( IXM_NAME_FIELD ) ;
@@ -327,11 +328,12 @@ namespace engine
       BSONObjBuilder builder ;
       builder.appendNull( "" ) ;
       BSONObj hint = builder.obj() ;
-      CHAR fullName[DMS_COLLECTION_NAME_SZ +
-                    DMS_COLLECTION_SPACE_NAME_SZ + 2] = {0} ;
-      clsJoin2Full( cs, collection, fullName ) ;
+      CHAR fullName[DMS_COLLECTION_FULL_NAME_SZ + 1] = {0} ;
       SDB_RTNCB *pRtnCB = pmdGetKRCB()->getRTNCB() ;
       rtnContextLobFetcher *pContextLob = NULL ;
+
+      ossSnprintf( fullName, DMS_COLLECTION_FULL_NAME_SZ, "%s.%s",
+                   cs, collection ) ;
 
       if ( -1 != _contextID )
       {
@@ -433,7 +435,7 @@ namespace engine
       {
          builder.appendBool( CLS_FS_NOMORE, FALSE ) ;
          BSONArrayBuilder array ;
-         vector<monIndex>::const_iterator itr = _indexs.begin() ;
+         MON_IDX_LIST::const_iterator itr = _indexs.begin() ;
          for ( ; itr != _indexs.end(); itr++ )
          {
             BSONObjBuilder index ;
@@ -457,14 +459,22 @@ namespace engine
       BSONObjBuilder builder2 ;
       UINT32 attributes = 0 ;
       UTIL_COMPRESSOR_TYPE compType = UTIL_COMPRESSOR_INVALID ;
+      BSONObj extOptions ;
+
       su->getCollectionAttributes( collection, attributes ) ;
       su->getCollectionCompType( collection, compType ) ;
+      su->getCollectionExtOptions( collection, extOptions ) ;
 
-      builder1.append( CLS_FS_PAGE_SIZE,
-                       su->getPageSize() ) ;
+      builder1.append( CLS_FS_PAGE_SIZE, su->getPageSize() ) ;
       builder1.append( CLS_FS_ATTRIBUTES, attributes ) ;
       builder1.append( CLS_FS_COMP_TYPE, (INT32)compType ) ;
+      if ( !extOptions.isEmpty() )
+      {
+         builder1.append( CLS_FS_EXT_OPTION, extOptions ) ;
+      }
+
       builder1.append( CLS_FS_LOB_PAGE_SIZE, su->getLobPageSize() ) ;
+      builder1.append( CLS_FS_CS_TYPE, (INT32)su->type() ) ;
       builder2.append( CLS_FS_CS_META_NAME, builder1.obj() ) ;
       builder2.append( CLS_FS_CS_NAME, cs ) ;
       builder2.append( CLS_FS_COLLECTION_NAME, collection ) ;
@@ -485,20 +495,20 @@ namespace engine
          BSONElement ele = obj.getField( CLS_FS_CS_NAME ) ;
          if ( ele.eoo() || String != ele.type() )
          {
-            PD_LOG( PDWARNING, "Session[%s]: failed to parse cs element",
-                    sessionName() ) ;
+            PD_LOG( PDWARNING, "Session[%s]: Failed to parse cs element[%s]",
+                    sessionName(), ele.toString().c_str() ) ;
             rc = SDB_INVALIDARG ;
             goto error ;
          }
-         if ( len < ele.String().length() + 1 )
+         if ( len < (UINT32)ele.valuestrsize() )
          {
-            PD_LOG( PDWARNING, "Session[%s]: name's is too long. %s",
-                    sessionName(), ele.String().c_str() ) ;
+            PD_LOG( PDWARNING, "Session[%s]: CS Name[%s] is too long",
+                    sessionName(), ele.valuestr() ) ;
             rc = SDB_INVALIDARG ;
             goto error ;
          }
-         ossMemcpy( cs, ele.String().c_str(), ele.String().length() ) ;
-         cs[ele.String().length()] = '\0' ;
+         ossStrncpy( cs, ele.valuestr(), len - 1 ) ;
+         cs[ len - 1 ] = '\0' ;
       }
       catch ( std::exception &e )
       {
@@ -526,21 +536,20 @@ namespace engine
          BSONElement ele = obj.getField( CLS_FS_COLLECTION_NAME ) ;
          if ( ele.eoo() || String != ele.type() )
          {
-            PD_LOG( PDWARNING, "Session[%s]: failed to parse collection element",
-                    sessionName() ) ;
+            PD_LOG( PDWARNING, "Session[%s]: Failed to parse collection "
+                    "element[%s]", sessionName(), ele.toString().c_str() ) ;
             rc = SDB_INVALIDARG ;
             goto error ;
          }
-         if ( len < ele.String().length() + 1 )
+         if ( len < (UINT32)ele.valuestrsize() )
          {
-            PD_LOG( PDWARNING, "Session[%s]: name's is too long. %s",
-                    sessionName(), ele.String().c_str() ) ;
+            PD_LOG( PDWARNING, "Session[%s]: CL Name[%s] is too long",
+                    sessionName(), ele.valuestr() ) ;
             rc = SDB_INVALIDARG ;
             goto error ;
          }
-         ossMemcpy( collection, ele.String().c_str(),
-                    ele.String().length() ) ;
-         collection[ele.String().length()] = '\0';
+         ossStrncpy( collection, ele.valuestr(), len - 1 ) ;
+         collection[ len - 1 ] = '\0' ;
       }
       catch ( std::exception &e )
       {
@@ -659,7 +668,9 @@ namespace engine
          if ( rc )
          {
             _mb.writePtr( oldSize ) ;
-            if ( SDB_DMS_EOC == rc || SDB_DMS_NOTEXIST == rc )
+            if ( SDB_DMS_EOC == rc ||
+                 SDB_DMS_NOTEXIST == rc ||
+                 SDB_DMS_TRUNCATED == rc )
             {
                rc = SDB_OK ;
                break ;
@@ -983,7 +994,8 @@ namespace engine
 
       if ( SDB_DMS_EOC == rc ||
            SDB_RTN_CONTEXT_NOTEXIST == rc ||
-           SDB_DMS_NOTEXIST == rc )
+           SDB_DMS_NOTEXIST == rc ||
+           SDB_DMS_TRUNCATED == rc )
       {
          _findEnd = TRUE ;
 
@@ -1123,7 +1135,7 @@ namespace engine
 
          curCollection = ossPack32To64 ( su->LogicalCSID(),
                                          mbContext->clLID() ) ;
-         rc = su->getIndexes( collection, _indexs, mbContext ) ;
+         rc = su->getIndexes( mbContext, _indexs ) ;
          if ( rc )
          {
             PD_LOG( PDWARNING, "Session[%s]:Failed to get indexs of "
@@ -1793,16 +1805,16 @@ namespace engine
                                                    MAP_SU_STATUS &validCLs )
    {
       INT32 rc = SDB_OK ;
-      std::set< monCollectionSpace > csList ;
+      MON_CS_LIST csList ;
       pmdGetKRCB()->getDMSCB()->dumpInfo( csList, TRUE ) ;
-      std::set<_monCollection> collectionList ;
+      MON_CL_LIST collectionList ;
       pmdGetKRCB()->getDMSCB()->dumpInfo( collectionList, TRUE ) ;
       BSONObjBuilder b ;
 
       try
       {
          BSONArrayBuilder csArrayBuilder ;
-         std::set< monCollectionSpace >::iterator itCS = csList.begin() ;
+         MON_CS_LIST::iterator itCS = csList.begin() ;
          for ( ; itCS != csList.end() ; ++itCS )
          {
             if ( 0 == itCS->_collections.size() )
@@ -1811,14 +1823,15 @@ namespace engine
                                             CLS_FS_PAGE_SIZE <<
                                             itCS->_pageSize <<
                                             CLS_FS_LOB_PAGE_SIZE <<
-                                            itCS->_lobPageSize ) ) ;
+                                            itCS->_lobPageSize <<
+                                            CLS_FS_CS_TYPE <<
+                                            itCS->_type ) ) ;
             }
          }
          b.appendArray( CLS_FS_CSNAMES, csArrayBuilder.arr() ) ;
 
          BSONArrayBuilder clArrayBuilder ;
-         std::set<_monCollection>::const_iterator itr =
-                                         collectionList.begin() ;
+         MON_CL_LIST::const_iterator itr = collectionList.begin() ;
          for ( ; itr != collectionList.end(); itr++ )
          {
             clArrayBuilder.append( BSON( CLS_FS_FULLNAME << itr->_name ) ) ;
@@ -2743,6 +2756,23 @@ namespace engine
       goto done ;
    }
 
+   BOOLEAN _clsSplitSrcSession::_containMultiKey ( const BSONObj & obj )
+   {
+      BSONObjIterator iter( _shardingKey ) ;
+      while ( iter.more() )
+      {
+         BSONElement key = iter.next() ;
+         BSONElement field = obj.getField( key.fieldName() ) ;
+         if ( field.type() == Array &&
+              field.embeddedObject().nFields() > 1 )
+         {
+            return TRUE ;
+         }
+      }
+
+      return FALSE ;
+   }
+
    BOOLEAN _clsSplitSrcSession::_GEThanRangeKey( const BSONObj & keyObj )
    {
       INT32 rc = 0 ;
@@ -2838,6 +2868,33 @@ namespace engine
 
       if ( IXSCAN == _scanType() && FALSE == _hasEndRange )
       {
+         try
+         {
+            while ( indexPos < inSize )
+            {
+               BSONObj recordObj ( pBuffIndex ) ;
+
+               if ( _containMultiKey( recordObj ) )
+               {
+                  PD_LOG ( PDERROR, "Session[%s]: More than one sharding key "
+                           "is detected[%s]", sessionName(),
+                           recordObj.toString().c_str() ) ;
+                  rc = SDB_MULTI_SHARDING_KEY ;
+                  goto error ;
+               }
+
+               indexPos += ossRoundUpToMultipleX ( recordObj.objsize(), 4 ) ;
+               pBuffIndex = inBuff + indexPos ;
+            }
+         }
+         catch( std::exception &e )
+         {
+            PD_LOG ( PDERROR, "Session[%s]: filter object exception: %s",
+                     sessionName(), e.what() ) ;
+            rc = SDB_SYS ;
+            goto error ;
+         }
+
          outSize = inSize ;
          goto done ;
       }

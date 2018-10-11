@@ -1,76 +1,60 @@
-/**
- * Copyright (C) 2012 SequoiaDB Inc.
- * <p>
+/*
+ * Copyright 2017 SequoiaDB Inc.
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * <p>
+ *
  * http://www.apache.org/licenses/LICENSE-2.0
- * <p>
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *
- */
-/**
- * @package com.sequoiadb.base;
- * @brief SequoiaDB Driver for Java
- * @author Jacky Zhang
- */
+*/
+
 package com.sequoiadb.base;
 
-import com.sequoiadb.base.SequoiadbConstants.Operation;
 import com.sequoiadb.exception.BaseException;
 import com.sequoiadb.exception.SDBError;
-import com.sequoiadb.net.IConnection;
-import com.sequoiadb.util.IOBuffer;
-import com.sequoiadb.util.SDBMessageHelper;
+import com.sequoiadb.message.request.*;
+import com.sequoiadb.message.response.SdbReply;
+
 import org.bson.BSONObject;
 import org.bson.BasicBSONObject;
 import org.bson.types.ObjectId;
 import org.bson.util.JSON;
 
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.util.*;
 
 /**
- * @class DBCollection
- * @brief Database operation interfaces of collection.
+ * Collection of SequoiaDB.
  */
 public class DBCollection {
     private String name;
     private Sequoiadb sequoiadb;
     private CollectionSpace collectionSpace;
-    private IConnection connection;
     private String csName;
     private String collectionFullName;
     private Set<String> mainKeys;
     private boolean ensureOID;
 
-    private IOBuffer insertBuffer;
-    private static final int DEF_BUFFER_LENGTH = 64 * 1024;
-
     /**
-     * @memberof FLG_INSERT_CONTONDUP 0x00000001
-     * @brief this flags represent that bulkInsert will continue when
-     *        Duplicate key exist.(the duplicate record will be ignored)
+     * This flags represent that bulkInsert will continue when
+     * duplicate key exist(the duplicate record will be ignored).
      */
-    public final static int FLG_INSERT_CONTONDUP = 0x00000001;
-
-    public IConnection getConnection() {
-        return connection;
-    }
-
-    public void setConnection(IConnection connection) {
-        this.connection = connection;
-    }
+    public static final int FLG_INSERT_CONTONDUP = 0x00000001;
 
     /**
-     * @fn String getName()
-     * @brief Return the name of current collection
+     * The sharding key in update rule is not filtered,
+     * when executing update or upsert.
+     */
+    public static final int FLG_UPDATE_KEEP_SHARDINGKEY = 0x00008000;
+
+    /**
+     * Get the name of current collection.
+     *
      * @return The collection name
      */
     public String getName() {
@@ -78,9 +62,8 @@ public class DBCollection {
     }
 
     /**
-     * @fn String getFullName()
-     * @brief Get the full name of specified collection in current collection
-     *        space
+     * Get the full name of specified collection in current collection space.
+     *
      * @return The full name of specified collection
      */
     public String getFullName() {
@@ -88,64 +71,59 @@ public class DBCollection {
     }
 
     /**
-     * @fn String getCSName()
-     * @brief Get the full name of specified collection in current collection
-     *        space
-     * @return The full name of specified collection
+     * Get the full name of specified collection in current collection space.
+     *
+     * @return The full name of specified collection.
      */
     public String getCSName() {
         return csName;
     }
 
     /**
-     * @fn Sequoiadb getSequoiadb()
-     * @brief Return the Sequoiadb handle of current collection
-     * @return Sequoiadb object
+     * Get the Sequoiadb instance of current collection.
+     *
+     * @return Sequoiadb instance
      */
     public Sequoiadb getSequoiadb() {
         return sequoiadb;
     }
 
     /**
-     * @fn CollectionSpace getCollectionSpace()
-     * @brief Return the Collection Space handle of current collection
-     * @return CollectionSpace object
+     * Get the CollectionSpace instance of current collection.
+     *
+     * @return CollectionSpace instance
      */
     public CollectionSpace getCollectionSpace() {
         return collectionSpace;
     }
 
     /**
-     * @fn void setMainKeys(String[] keys)
-     * @brief Set the main keys used in save(). if no main keys are set, use the
-     * 		  default main key "_id".
-     * @param keys
-     * 		  the main keys specified by user. the main key should exist in the
-     *        object
-     * @exception com.sequoiadb.Exception.BaseException when keys is null
-     * @note
-     *        every time invokes the method,
-     *        it will remove the main keys set in last time
+     * Set the main keys used in save(). if no main keys are set, use the
+     * default main key "_id".
+     * Every time invokes this method, it will remove the main keys set in the last time.
+     *
+     * @param keys the main keys specified by user. the main key should exist in the
+     *             object
+     * @throws BaseException when keys is null
      */
     public void setMainKeys(String[] keys) throws BaseException {
         if (keys == null)
             throw new BaseException(SDBError.SDB_INVALIDARG, "keys is null");
         mainKeys.clear();
-        if (keys.length == 0)
+
+        if (keys.length == 0) {
             return;
-        for (String k : keys)
+        }
+
+        for (String k : keys) {
             mainKeys.add(k);
+        }
     }
 
     /**
-     * @fn DBCollection(Sequoiadb sequoiadb, CollectionSpace cs, String name)
-     * @brief Constructor
-     * @param sequoiadb
-     *            Sequoiadb object
-     * @param cs
-     *            CollectionSpace object
-     * @param name
-     *            Collection name
+     * @param sequoiadb Sequoiadb object
+     * @param cs        CollectionSpace object
+     * @param name      Collection name
      */
     DBCollection(Sequoiadb sequoiadb, CollectionSpace cs, String name) {
         this.name = name;
@@ -153,97 +131,108 @@ public class DBCollection {
         this.collectionSpace = cs;
         this.csName = cs.getName();
         this.collectionFullName = csName + "." + name;
-        this.connection = sequoiadb.getConnection();
-        this.insertBuffer = null;
         this.mainKeys = new HashSet<String>();
         this.ensureOID = true;
     }
 
-    private void ensureInsertBuffer() {
-        if (this.insertBuffer == null) {
-            this.insertBuffer = new IOBuffer(DEF_BUFFER_LENGTH);
-            ByteOrder order = sequoiadb.endianConvert ?
-                    ByteOrder.LITTLE_ENDIAN : ByteOrder.BIG_ENDIAN;
-            insertBuffer.order(order);
-        } else {
-            insertBuffer.clear();
-        }
-    }
-
     /**
-     * @fn Object insert(BSONObject insertor)
-     * @brief Insert a document into current collection, if the document
-     *        does not contain field "_id", it will be added.
-     * @param insertor
-     *            The Bson object of insertor, can't be null
-     * @return Object the value of the filed "_id"
-     * @exception com.sequoiadb.exception.BaseException
+     * Insert a document into current collection, if the document
+     * does not contain field "_id", it will be added.
+     *
+     * @param insertor The Bson object of insertor, can't be null
+     * @return the value of the filed "_id"
+     * @throws BaseException If error happens.
      */
     public Object insert(BSONObject insertor) throws BaseException {
-        if (insertor == null)
+        if (insertor == null) {
             throw new BaseException(SDBError.SDB_INVALIDARG);
+        }
 
-        ensureInsertBuffer();
-
-        Object retObj = insertor.get(SequoiadbConstants.OID);
+        Object retObj = insertor.get(SdbConstants.OID);
         if (retObj == null) {
             ObjectId objId = ObjectId.get();
-            insertor.put(SequoiadbConstants.OID, objId);
+            insertor.put(SdbConstants.OID, objId);
             retObj = objId;
         }
 
-        int message_length = SDBMessageHelper.buildInsertRequest(insertBuffer,
-                sequoiadb.getNextRequstID(), collectionFullName, insertor);
-
-        connection.sendMessage(insertBuffer.array(), 0, message_length);
-
-        ByteBuffer byteBuffer = connection.receiveMessage(sequoiadb.endianConvert);
-        SDBMessage rtnSDBMessage = SDBMessageHelper.msgExtractReply(byteBuffer);
-        if (rtnSDBMessage.getOperationCode() != Operation.OP_INSERT_RES) {
-            throw new BaseException(SDBError.SDB_UNKNOWN_MESSAGE,
-                    rtnSDBMessage.getOperationCode().toString());
-        }
-        int flags = rtnSDBMessage.getFlags();
-        if (flags != 0) {
-            throw new BaseException(flags, insertor.toString());
-        }
+        InsertRequest request = new InsertRequest(collectionFullName, insertor);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+        sequoiadb.throwIfError(response, insertor);
         sequoiadb.upsertCache(collectionFullName);
         return retObj;
     }
 
     /**
-     * @fn Object insert(String insertor)
-     * @brief Insert a document into current collection, if the document
-     *        does not contain field "_id", it will be added.
-     * @param insertor
-     *            The string of insertor
-     * @return Object the value of the filed "_id"
-     * @exception com.sequoiadb.exception.BaseException
+     * Insert a document into current collection, if the document
+     * does not contain field "_id", it will be added.
+     *
+     * @param insertor The string of insertor
+     * @return the value of the filed "_id"
+     * @throws BaseException If error happens.
      */
     public Object insert(String insertor) throws BaseException {
         BSONObject in = null;
-        if (insertor != null)
+        if (insertor != null) {
             in = (BSONObject) JSON.parse(insertor);
+        }
         return insert(in);
     }
 
     /**
-     * @fn <T> void save(T type, Boolean ignoreNullValue)
-     * @brief Insert an object into current collection
-     * @param type
-     *            The object of insertor, can't be null
-     * @param ignoreNullValue
-     *            true:if type's inner value is null, it will not save to collection;
-     *            false:if type's inner value is null, it will save to collection too.
-     * @exception com.sequoiadb.exception.BaseException
-     *            1.when the type is not support, throw BaseException with the type "SDB_INVALIDARG"
-     *            2.when offer main keys by setMainKeys(), and try to update "_id" field,
-     *              it may get a BaseException with the type of "SDB_IXM_DUP_KEY" 
-     * @note when save include update shardingKey field, the shardingKey modify action is not take effect, but the other
-     *       field update is take effect. Because of current version is not support update shardingKey field.
-     * @see com.sequoiadb.base.DBCollection.setMainKeys
+     * Insert a bulk of bson objects into current collection.
+     *
+     * @param insertor The Bson object of insertor list, can't be null
+     * @param flag     available value is FLG_INSERT_CONTONDUP or 0.
+     *                 if flag = FLG_INSERT_CONTONDUP, bulkInsert will continue when Duplicate
+     *                 key exist.(the duplicate record will be ignored);
+     *                 if flag = 0, bulkInsert will interrupt when Duplicate key exist.
+     * @throws BaseException If error happens.
+     * @since 2.9
      */
-    public /*! @cond x*/ <T> /*! @endcond */ void save(T type, Boolean ignoreNullValue) throws BaseException {
+    public void insert(List<BSONObject> insertor, int flag) throws BaseException {
+        if (flag != 0 && flag != FLG_INSERT_CONTONDUP) {
+            throw new BaseException(SDBError.SDB_INVALIDARG);
+        }
+        if (insertor == null || insertor.size() == 0) {
+            throw new BaseException(SDBError.SDB_INVALIDARG);
+        }
+
+        InsertRequest request = new InsertRequest(collectionFullName, insertor, flag, ensureOID);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+        sequoiadb.throwIfError(response);
+        sequoiadb.upsertCache(collectionFullName);
+    }
+
+    /**
+     * Insert a bulk of bson objects into current collection.
+     *
+     * @param insertor The Bson object of insertor list, can't be null.
+     *                 insert will interrupt when Duplicate key exist.
+     * @throws BaseException If error happens.
+     * @since 2.9
+     */
+    public void insert(List<BSONObject> insertor) throws BaseException {
+        insert(insertor, 0);
+    }
+
+    /**
+     * Insert an object into current collection.
+     * When flag is set to 0, it won't work to update the ShardingKey field, but the other fields take effect.
+     *
+     * @param type            The object of insertor, can't be null
+     * @param ignoreNullValue true:if type's inner value is null, it will not save to collection;
+     * @param flag            the update flag, default to be 0. Please see the definition
+     *                        of follow flags for more detail.
+     *                        <ul>
+     *                        <li>DBCollection.FLG_UPDATE_KEEP_SHARDINGKEY
+     *                        </ul>
+     * @throws BaseException 1.when the type is not support, throw BaseException with the type "SDB_INVALIDARG"
+     *                       2.when offer main keys by setMainKeys(), and try to update "_id" field,
+     *                       it may get a BaseException with the type of "SDB_IXM_DUP_KEY"
+     * @see com.sequoiadb.base.DBCollection#setMainKeys(String[])
+     */
+    public /*! @cond x*/ <T> /*! @endcond */ void save(T type, Boolean ignoreNullValue,
+                                                       int flag) throws BaseException {
         BSONObject obj;
         try {
             obj = BasicBSONObject.typeToBson(type, ignoreNullValue);
@@ -253,15 +242,15 @@ public class DBCollection {
         BSONObject matcher = new BasicBSONObject();
         BSONObject modifer = new BasicBSONObject();
         if (mainKeys.isEmpty()) {
-            Object id = obj.get(SequoiadbConstants.OID);
+            Object id = obj.get(SdbConstants.OID);
             if (id == null || (id instanceof ObjectId && ((ObjectId) id).isNew())) {
                 if (id != null && id instanceof ObjectId)
                     ((ObjectId) id).notNew();
                 insert(obj);
             } else {
-                matcher.put(SequoiadbConstants.OID, id);
+                matcher.put(SdbConstants.OID, id);
                 modifer.put("$set", obj);
-                upsert(matcher, modifer, null);
+                upsert(matcher, modifer, null, null, flag);
             }
         } else { // if user specify main keys, use these main keys
             Iterator<String> it = mainKeys.iterator();
@@ -272,7 +261,7 @@ public class DBCollection {
             }
             if (!matcher.isEmpty()) {
                 modifer.put("$set", obj);
-                upsert(matcher, modifer, null);
+                upsert(matcher, modifer, null, null, flag);
             } else {
                 insert(obj);
             }
@@ -280,41 +269,57 @@ public class DBCollection {
     }
 
     /**
-     * @fn <T> void save(T type)
-     * @brief Insert an object into current collection
-     * @param type
-     *            The object of insertor, can't be null
-     * @exception com.sequoiadb.exception.BaseException
-     * 			  1.when the type is not support, throw BaseException with the type "SDB_INVALIDARG"
-     *            2.when offer main keys by setMainKeys(), and try to update "_id" field,
-     *              it may get a BaseException with the type of "SDB_IXM_DUP_KEY"
-     * @note when save include update shardingKey field, the shardingKey modify action is not take effect, but the other
-     *       field update is take effect. Because of current version is not support update shardingKey field.
-     * @see com.sequoiadb.base.DBCollection.setMainKeys
+     * Insert an object into current collection
+     * when save include update shardingKey field, the shardingKey modify action is not take effect, but the other
+     * field update is take effect.
+     *
+     * @param type            The object of insertor, can't be null
+     * @param ignoreNullValue true:if type's inner value is null, it will not save to collection;
+     *                        false:if type's inner value is null, it will save to collection too.
+     * @throws BaseException 1.when the type is not support, throw BaseException with the type "SDB_INVALIDARG"
+     *                       2.when offer main keys by setMainKeys(), and try to update "_id" field,
+     *                       it may get a BaseException with the type of "SDB_IXM_DUP_KEY"
+     * @see com.sequoiadb.base.DBCollection#setMainKeys(String[])
+     */
+    public /*! @cond x*/ <T> /*! @endcond */ void save(T type, Boolean ignoreNullValue) throws BaseException {
+        save(type, ignoreNullValue, 0);
+    }
+
+    /**
+     * Insert an object into current collection.
+     * when save include update shardingKey field, the shardingKey modify action is not take effect, but the other
+     * field update is take effect.
+     *
+     * @param type The object of insertor, can't be null
+     * @throws BaseException 1.when the type is not support, throw BaseException with the type "SDB_INVALIDARG"
+     *                       2.when offer main keys by setMainKeys(), and try to update "_id" field,
+     *                       it may get a BaseException with the type of "SDB_IXM_DUP_KEY"
+     * @see com.sequoiadb.base.DBCollection#setMainKeys(String[])
      */
     public /*! @cond x*/ <T> /*! @endcond */ void save(T type) throws BaseException {
         save(type, false);
     }
 
     /**
-     * @fn <T> void save(List<T> type, Boolean ignoreNullValue)
-     * @brief Insert an object into current collection
-     * @param type
-     *            The List instance of insertor, can't be null or empty
-     * @param ignoreNullValue
-     *            true:if type's inner value is null, it will not save to collection;
-     *            false:if type's inner value is null, it will save to collection too.
-     * @exception com.sequoiadb.exception.BaseException
-     *            1.while the input argument is null or the List instance is empty
-     *            2.while the type is not support, throw BaseException with the type "SDB_INVALIDARG"
-     *            3.while offer main keys by setMainKeys(), and try to update "_id" field,
-     *              it may get a BaseException with the type of "SDB_IXM_DUP_KEY" when the "_id" field you
-     *              want to update to had been existing in database 
-     * @note when save include update shardingKey field, the shardingKey modify action is not take effect, but the other
-     *       field update is take effect. Because of current version is not support update shardingKey field.
-     * @see com.sequoiadb.base.DBCollection.setMainKeys
+     * Insert an object into current collection.
+     * When flag is set to 0, it won't work to update the ShardingKey field, but the other fields take effect.
+     *
+     * @param type            The List instance of insertor, can't be null or empty
+     * @param ignoreNullValue true:if type's inner value is null, it will not save to collection;
+     * @param flag            the update flag, default to be 0. Please see the definition
+     *                        of follow flags for more detail.
+     *                        <ul>
+     *                        <li>DBCollection.FLG_UPDATE_KEEP_SHARDINGKEY
+     *                        </ul>
+     * @throws BaseException 1.while the input argument is null or the List instance is empty
+     *                       2.while the type is not support, throw BaseException with the type "SDB_INVALIDARG"
+     *                       3.while offer main keys by setMainKeys(), and try to update "_id" field,
+     *                       it may get a BaseException with the type of "SDB_IXM_DUP_KEY" when the "_id" field you
+     *                       want to update to had been existing in database
+     * @see com.sequoiadb.base.DBCollection#setMainKeys(String[])
      */
-    public /*! @cond x*/ <T> /*! @endcond */ void save(List<T> type, Boolean ignoreNullValue) throws BaseException {
+    public /*! @cond x*/ <T> /*! @endcond */ void save(List<T> type, Boolean ignoreNullValue,
+                                                       int flag) throws BaseException {
         if (type == null || type.size() == 0)
             throw new BaseException(SDBError.SDB_INVALIDARG, "type is empty or null");
         List<BSONObject> objs = new ArrayList<BSONObject>();
@@ -333,15 +338,15 @@ public class DBCollection {
         if (mainKeys.isEmpty()) {
             while (ite != null && ite.hasNext()) {
                 obj = ite.next();
-                Object id = obj.get(SequoiadbConstants.OID);
+                Object id = obj.get(SdbConstants.OID);
                 if (id == null || (id instanceof ObjectId && ((ObjectId) id).isNew())) {
                     if (id != null && id instanceof ObjectId)
                         ((ObjectId) id).notNew();
                     insert(obj);
                 } else {
-                    matcher.put(SequoiadbConstants.OID, id);
+                    matcher.put(SdbConstants.OID, id);
                     modifer.put("$set", obj);
-                    upsert(matcher, modifer, null);
+                    upsert(matcher, modifer, null, null, flag);
                 }
             }
         } else { // if user specify main keys, use these main keys
@@ -355,7 +360,7 @@ public class DBCollection {
                 }
                 if (!matcher.isEmpty()) {
                     modifer.put("$set", obj);
-                    upsert(matcher, modifer, null);
+                    upsert(matcher, modifer, null, null, flag);
                 } else {
                     insert(obj);
                 }
@@ -364,197 +369,162 @@ public class DBCollection {
     }
 
     /**
-     * @fn <T> void save(List<T> type)
-     * @brief Insert an object into current collection
-     * @param type
-     *            The List instance of insertor, can't be null or empty
-     * @exception com.sequoiadb.exception.BaseException
-     *            1.while the input argument is null or the List instance is empty
-     *            2.while the type is not support, throw BaseException with the type "SDB_INVALIDARG"
-     *            3.while offer main keys by setMainKeys(), and try to update "_id" field,
-     *              it may get a BaseException with the type of "SDB_IXM_DUP_KEY" when the "_id" field you
-     *              want to update to had been existing in database
-     * @note when save include update shardingKey field, the shardingKey modify action is not take effect, but the other
-     *       field update is take effect. Because of current version is not support update shardingKey field.
-     * @see com.sequoiadb.base.DBCollection.setMainKeys
+     * Insert an object into current collection.
+     * when save include update shardingKey field, the shardingKey modify action is not take effect, but the other
+     * field update is take effect.
+     *
+     * @param type            The List instance of insertor, can't be null or empty
+     * @param ignoreNullValue true:if type's inner value is null, it will not save to collection;
+     *                        false:if type's inner value is null, it will save to collection too.
+     * @throws BaseException 1.while the input argument is null or the List instance is empty
+     *                       2.while the type is not support, throw BaseException with the type "SDB_INVALIDARG"
+     *                       3.while offer main keys by setMainKeys(), and try to update "_id" field,
+     *                       it may get a BaseException with the type of "SDB_IXM_DUP_KEY" when the "_id" field you
+     *                       want to update to had been existing in database
+     * @see com.sequoiadb.base.DBCollection#setMainKeys(String[])
+     */
+    public /*! @cond x*/ <T> /*! @endcond */ void save(List<T> type, Boolean ignoreNullValue) throws BaseException {
+        save(type, ignoreNullValue, 0);
+    }
+
+    /**
+     * Insert an object into current collection.
+     * when save include update shardingKey field, the shardingKey modify action is not take effect, but the other
+     * field update is take effect.
+     *
+     * @param type The List instance of insertor, can't be null or empty
+     * @throws BaseException 1.while the input argument is null or the List instance is empty
+     *                       2.while the type is not support, throw BaseException with the type "SDB_INVALIDARG"
+     *                       3.while offer main keys by setMainKeys(), and try to update "_id" field,
+     *                       it may get a BaseException with the type of "SDB_IXM_DUP_KEY" when the "_id" field you
+     *                       want to update to had been existing in database
+     * @see com.sequoiadb.base.DBCollection#setMainKeys(String[])
      */
     public /*! @cond x*/ <T> /*! @endcond */ void save(List<T> type) throws BaseException {
         save(type, false);
     }
 
+    /**
+     * Set whether ensure OID of record when bulk insert records to SequoiaDB.
+     *
+     * @param flag whether ensure OID of record
+     */
     public void ensureOID(boolean flag) {
         ensureOID = flag;
     }
 
+    /**
+     * @return True if ensure OID of record when bulk insert records to SequoiaDB and false if not.
+     */
     public boolean isOIDEnsured() {
         return ensureOID;
     }
 
     /**
-     * @fn void bulkInsert(List<BSONObject> insertor, int flag)
-     * @brief Insert a bulk of bson objects into current collection
-     * @param insertor
-     *            The Bson object of insertor list, can't be null
-     * @param flag
-     *            available value is FLG_INSERT_CONTONDUP or 0.
-     *            if flag = FLG_INSERT_CONTONDUP, bulkInsert will continue when Duplicate
-     *            key exist.(the duplicate record will be ignored);
-     *            if flag = 0, bulkInsert will interrupt when Duplicate key exist.
-     * @exception com.sequoiadb.exception.BaseException
+     * Insert a bulk of bson objects into current collection.
+     *
+     * @param insertor The Bson object of insertor list, can't be null
+     * @param flag     available value is FLG_INSERT_CONTONDUP or 0.
+     *                 if flag = FLG_INSERT_CONTONDUP, bulkInsert will continue when Duplicate
+     *                 key exist.(the duplicate record will be ignored);
+     *                 if flag = 0, bulkInsert will interrupt when Duplicate key exist.
+     * @throws BaseException If error happens.
+     * @deprecated use insert(List<BSONObject> insertor, int flag) instead
      */
-    public void bulkInsert(List<BSONObject> insertor, int flag)
-            throws BaseException {
-
-        if (flag != 0 && flag != FLG_INSERT_CONTONDUP)
-            throw new BaseException(SDBError.SDB_INVALIDARG);
-        if (insertor == null || insertor.size() == 0)
-            throw new BaseException(SDBError.SDB_INVALIDARG);
-
-        ensureInsertBuffer();
-
-        int messageLength = SDBMessageHelper.buildBulkInsertRequest(
-                insertBuffer, sequoiadb.getNextRequstID(), collectionFullName,
-                insertor, flag, this.ensureOID);
-
-        connection.sendMessage(insertBuffer.array(), 0, messageLength);
-
-        ByteBuffer byteBuffer = connection.receiveMessage(sequoiadb.endianConvert);
-        SDBMessage rtnSDBMessage = SDBMessageHelper.msgExtractReply(byteBuffer);
-        if (rtnSDBMessage.getOperationCode() != Operation.OP_INSERT_RES) {
-            throw new BaseException(SDBError.SDB_UNKNOWN_MESSAGE,
-                    rtnSDBMessage.getOperationCode().toString());
-        }
-        int flags = rtnSDBMessage.getFlags();
-        if (flags != 0) {
-            throw new BaseException(flags, insertor.toString());
-        }
-        sequoiadb.upsertCache(collectionFullName);
+    @Deprecated
+    public void bulkInsert(List<BSONObject> insertor, int flag) throws BaseException {
+        insert(insertor, flag);
     }
 
     /**
-     * @fn void delete(BSONObject matcher)
-     * @brief Delete the matching BSONObject of current collection
-     * @param matcher
-     *            The matching condition, delete all the documents if null
-     * @exception com.sequoiadb.exception.BaseException
+     * Delete the matching BSONObject of current collection.
+     *
+     * @param matcher The matching condition, delete all the documents if null
+     * @throws BaseException If error happens.
      */
     public void delete(BSONObject matcher) throws BaseException {
         delete(matcher, null);
     }
 
     /**
-     * @fn void delete(String matcher)
-     * @brief Delete the matching of current collection
-     * @param matcher
-     *            The matching condition, delete all the documents if null
-     * @exception com.sequoiadb.exception.BaseException
+     * Delete the matching of current collection.
+     *
+     * @param matcher The matching condition, delete all the documents if null
+     * @throws BaseException If error happens.
      */
     public void delete(String matcher) throws BaseException {
         BSONObject ma = null;
-        if (matcher != null)
+        if (matcher != null) {
             ma = (BSONObject) JSON.parse(matcher);
+        }
         delete(ma, null);
     }
 
     /**
-     * @fn void delete(String matcher, String hint)
-     * @brief Delete the matching bson's string of current collection
-     * @param matcher
-     *            The matching condition, delete all the documents if null
-     * @param hint
-     *            Specified the index used to scan data. e.g. {"":"ageIndex"} means 
-     *            using index "ageIndex" to scan data(index scan); 
-     *            {"":null} means table scan. when hint is null, 
-     *            database automatically match the optimal index to scan data.
-     * @exception com.sequoiadb.exception.BaseException
+     * Delete the matching bson's string of current collection.
+     *
+     * @param matcher The matching condition, delete all the documents if null
+     * @param hint    Specified the index used to scan data. e.g. {"":"ageIndex"} means
+     *                using index "ageIndex" to scan data(index scan);
+     *                {"":null} means table scan. when hint is null,
+     *                database automatically match the optimal index to scan data.
+     * @throws BaseException If error happens.
      */
     public void delete(String matcher, String hint) throws BaseException {
         BSONObject ma = null;
         BSONObject hi = null;
-        if (matcher != null)
+        if (matcher != null) {
             ma = (BSONObject) JSON.parse(matcher);
-        if (hint != null)
+        }
+        if (hint != null) {
             hi = (BSONObject) JSON.parse(hint);
+        }
         delete(ma, hi);
     }
 
     /**
-     * @fn void delete(BSONObject matcher, BSONObject hint)
-     * @brief Delete the matching BSONObject of current collection
-     * @param matcher
-     *            The matching condition, delete all the documents if null
-     * @param hint
-     *            Specified the index used to scan data. e.g. {"":"ageIndex"} means 
-     *            using index "ageIndex" to scan data(index scan); 
-     *            {"":null} means table scan. when hint is null, 
-     *            database automatically match the optimal index to scan data.
-     * @exception com.sequoiadb.exception.BaseException
+     * Delete the matching BSONObject of current collection.
+     *
+     * @param matcher The matching condition, delete all the documents if null
+     * @param hint    Specified the index used to scan data. e.g. {"":"ageIndex"} means
+     *                using index "ageIndex" to scan data(index scan);
+     *                {"":null} means table scan. when hint is null,
+     *                database automatically match the optimal index to scan data.
+     * @throws BaseException If error happens.
      */
     public void delete(BSONObject matcher, BSONObject hint)
             throws BaseException {
-        BSONObject dummy = new BasicBSONObject();
-        if (matcher == null)
-            matcher = dummy;
-        if (hint == null)
-            hint = dummy;
-        SDBMessage sdbMessage = new SDBMessage();
-
-        sdbMessage.setVersion(1);
-        sdbMessage.setW((short) 0);
-        sdbMessage.setPadding((short) 0);
-        sdbMessage.setFlags(0);
-        sdbMessage.setNodeID(SequoiadbConstants.ZERO_NODEID);
-        sdbMessage.setCollectionFullName(collectionFullName);
-        sdbMessage.setRequestID(sequoiadb.getNextRequstID());
-        sdbMessage.setMatcher(matcher);
-        sdbMessage.setHint(hint);
-        sdbMessage.setOperationCode(Operation.OP_DELETE);
-
-        byte[] request = SDBMessageHelper.buildDeleteRequest(sdbMessage,
-                sequoiadb.endianConvert);
-        connection.sendMessage(request);
-
-        ByteBuffer byteBuffer = connection.receiveMessage(sequoiadb.endianConvert);
-        SDBMessage rtnSDBMessage = SDBMessageHelper.msgExtractReply(byteBuffer);
-        SDBMessageHelper.checkMessage(sdbMessage, rtnSDBMessage);
-        int flags = rtnSDBMessage.getFlags();
-        if (flags != 0) {
+        DeleteRequest request = new DeleteRequest(collectionFullName, matcher, hint);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+        if (response.getFlag() != 0) {
             String msg = "matcher = " + matcher + ", hint = " + hint;
-            throw new BaseException(flags, msg);
+            sequoiadb.throwIfError(response, msg);
         }
         sequoiadb.upsertCache(collectionFullName);
     }
 
     /**
-     * @fn void update(DBQuery query)
-     * @brief Update the document of current collection
-     * @param query
-     *            DBQuery with matching condition, updating rule and hint
-     * @exception com.sequoiadb.exception.BaseException
-     * @note when save include update shardingKey field, the shardingKey modify action is not take effect, but the other
-     *       field update is take effect.
-     *       Because of current version is not support update shardingKey field.
+     * Update the document of current collection.
+     * It won't work to update the ShardingKey field, but the other fields take effect.
+     *
+     * @param query DBQuery with matching condition, updating rule and hint
+     * @throws BaseException If error happens.
      */
     public void update(DBQuery query) throws BaseException {
-        _update(0, query.getMatcher(), query.getModifier(), query.getHint());
+        _update(query.getFlag(), query.getMatcher(), query.getModifier(), query.getHint());
     }
 
     /**
-     * @fn void update(BSONObject matcher, BSONObject modifier, BSONObject hint)
-     * @brief Update the BSONObject of current collection
-     * @param matcher
-     *            The matching condition, update all the documents if null
-     * @param modifier
-     *            The updating rule, can't be null
-     * @param hint
-     *            Specified the index used to scan data. e.g. {"":"ageIndex"} means 
-     *            using index "ageIndex" to scan data(index scan); 
-     *            {"":null} means table scan. when hint is null, 
-     *            database automatically match the optimal index to scan data.
-     * @exception com.sequoiadb.exception.BaseException
-     * @note when save include update shardingKey field, the shardingKey modify action is not take effect, but the other
-     *       field update is take effect.
-     *       Because of current version is not support update shardingKey field.
+     * Update the BSONObject of current collection.
+     * It won't work to update the ShardingKey field, but the other fields take effect.
+     *
+     * @param matcher  The matching condition, update all the documents if null
+     * @param modifier The updating rule, can't be null
+     * @param hint     Specified the index used to scan data. e.g. {"":"ageIndex"} means
+     *                 using index "ageIndex" to scan data(index scan);
+     *                 {"":null} means table scan. when hint is null,
+     *                 database automatically match the optimal index to scan data.
+     * @throws BaseException If error happens.
      */
     public void update(BSONObject matcher, BSONObject modifier, BSONObject hint)
             throws BaseException {
@@ -562,134 +532,193 @@ public class DBCollection {
     }
 
     /**
-     * @fn void update(String matcher, String modifier, String hint)
-     * @brief Update the BSONObject of current collection
-     * @param matcher
-     *            The matching condition, update all the documents if null
-     * @param modifier
-     *            The updating rule, can't be null or empty
-     * @param hint
-     *            Specified the index used to scan data. e.g. {"":"ageIndex"} means 
-     *            using index "ageIndex" to scan data(index scan); 
-     *            {"":null} means table scan. when hint is null, 
-     *            database automatically match the optimal index to scan data.
-     * @exception com.sequoiadb.exception.BaseException
-     * @note when save include update shardingKey field, the shardingKey modify action is not take effect, but the other
-     *       field update is take effect.
-     *       Because of current version is not support update shardingKey field.
+     * Update the BSONObject of current collection.
+     * When flag is set to 0, it won't work to update the ShardingKey field, but the other fields take effect.
+     *
+     * @param matcher  The matching condition, update all the documents if null
+     * @param modifier The updating rule, can't be null
+     * @param hint     Specified the index used to scan data. e.g. {"":"ageIndex"} means
+     *                 using index "ageIndex" to scan data(index scan);
+     *                 {"":null} means table scan. when hint is null,
+     *                 database automatically match the optimal index to scan data.
+     * @param flag     the update flag, default to be 0. Please see the definition
+     *                 of follow flags for more detail.
+     *                 <ul>
+     *                 <li>DBCollection.FLG_UPDATE_KEEP_SHARDINGKEY
+     *                 </ul>
+     * @throws BaseException If error happens.
+     */
+    public void update(BSONObject matcher, BSONObject modifier, BSONObject hint,
+                       int flag) throws BaseException {
+        _update(flag, matcher, modifier, hint);
+    }
+
+    /**
+     * Update the BSONObject of current collection.
+     * It won't work to update the ShardingKey field, but the other fields take effect.
+     *
+     * @param matcher  The matching condition, update all the documents if null
+     * @param modifier The updating rule, can't be null or empty
+     * @param hint     Specified the index used to scan data. e.g. {"":"ageIndex"} means
+     *                 using index "ageIndex" to scan data(index scan);
+     *                 {"":null} means table scan. when hint is null,
+     *                 database automatically match the optimal index to scan data.
+     * @throws BaseException If error happens.
      */
     public void update(String matcher, String modifier, String hint)
             throws BaseException {
         BSONObject ma = null;
         BSONObject mo = null;
         BSONObject hi = null;
-        if (matcher != null)
+        if (matcher != null) {
             ma = (BSONObject) JSON.parse(matcher);
-        if (modifier != null)
+        }
+        if (modifier != null) {
             mo = (BSONObject) JSON.parse(modifier);
-        if (hint != null)
+        }
+        if (hint != null) {
             hi = (BSONObject) JSON.parse(hint);
+        }
         _update(0, ma, mo, hi);
     }
 
     /**
-     * @fn void upsert(BSONObject matcher, BSONObject modifier, BSONObject hint)
-     * @brief Update the BSONObject of current collection, insert if no matching
-     * @param matcher
-     *            The matching condition, update all the documents 
-     *            if null(that's to say, we match all the documents)
-     * @param modifier
-     *            The updating rule, can't be null
-     * @param hint
-     *            Specified the index used to scan data. e.g. {"":"ageIndex"} means 
-     *            using index "ageIndex" to scan data(index scan); 
-     *            {"":null} means table scan. when hint is null, 
-     *            database automatically match the optimal index to scan data.
-     * @exception com.sequoiadb.exception.BaseException
-     * @note when save include update shardingKey field, the shardingKey modify action is not take effect, but the other
-     *       field update is take effect.
-     *       Because of current version is not support update shardingKey field.
+     * Update the BSONObject of current collection.
+     * When flag is set to 0, it won't work to update the ShardingKey field, but the other fields take effect.
+     *
+     * @param matcher  The matching condition, update all the documents if null
+     * @param modifier The updating rule, can't be null or empty
+     * @param hint     Specified the index used to scan data. e.g. {"":"ageIndex"} means
+     *                 using index "ageIndex" to scan data(index scan);
+     *                 {"":null} means table scan. when hint is null,
+     *                 database automatically match the optimal index to scan data.
+     * @param flag     the update flag, default to be 0. Please see the definition
+     *                 of follow flags for more detail.
+     *                 <ul>
+     *                 <li>DBCollection.FLG_UPDATE_KEEP_SHARDINGKEY
+     *                 </ul>
+     * @throws BaseException If error happens.
      */
-    public void upsert(BSONObject matcher, BSONObject modifier, BSONObject hint)
+    public void update(String matcher, String modifier, String hint, int flag)
             throws BaseException {
-        _update(SequoiadbConstants.FLG_UPDATE_UPSERT, matcher, modifier, hint);
+        BSONObject ma = null;
+        BSONObject mo = null;
+        BSONObject hi = null;
+        if (matcher != null) {
+            ma = (BSONObject) JSON.parse(matcher);
+        }
+        if (modifier != null) {
+            mo = (BSONObject) JSON.parse(modifier);
+        }
+        if (hint != null) {
+            hi = (BSONObject) JSON.parse(hint);
+        }
+        _update(flag, ma, mo, hi);
     }
 
     /**
-     * @fn void upsert(BSONObject matcher, BSONObject modifier, BSONObject hint, BSONObject setOnInsert)
-     * @brief Update the BSONObject of current collection, insert if no matching
-     * @param matcher
-     *            The matching condition, update all the documents 
-     *            if null(that's to say, we match all the documents)
-     * @param modifier
-     *            The updating rule, can't be null
-     * @param hint
-     *            Specified the index used to scan data. e.g. {"":"ageIndex"} means 
-     *            using index "ageIndex" to scan data(index scan); 
-     *            {"":null} means table scan. when hint is null, 
-     *            database automatically match the optimal index to scan data.
-     * @param setOnInsert
-     *            The setOnInsert assigns the specified values to the fileds when insert
-     * @exception com.sequoiadb.exception.BaseException
-     * @note when save include update shardingKey field, the shardingKey modify action is not take effect, but the other
-     *       field update is take effect.
-     *       Because of current version is not support update shardingKey field.
+     * Update the BSONObject of current collection, insert if no matching.
+     * It won't work to update the ShardingKey field, but the other fields take effect.
+     *
+     * @param matcher  The matching condition, update all the documents
+     *                 if null(that's to say, we match all the documents)
+     * @param modifier The updating rule, can't be null
+     * @param hint     Specified the index used to scan data. e.g. {"":"ageIndex"} means
+     *                 using index "ageIndex" to scan data(index scan);
+     *                 {"":null} means table scan. when hint is null,
+     *                 database automatically match the optimal index to scan data.
+     * @throws BaseException If error happens.
      */
-    public void upsert(BSONObject matcher, BSONObject modifier, BSONObject hint, BSONObject setOnInsert)
+    public void upsert(BSONObject matcher, BSONObject modifier, BSONObject hint)
             throws BaseException {
+        _update(SdbConstants.FLG_UPDATE_UPSERT, matcher, modifier, hint);
+    }
+
+    /**
+     * Update the BSONObject of current collection, insert if no matching.
+     * It won't work to update the ShardingKey field, but the other fields take effect.
+     *
+     * @param matcher     The matching condition, update all the documents
+     *                    if null(that's to say, we match all the documents)
+     * @param modifier    The updating rule, can't be null
+     * @param hint        Specified the index used to scan data. e.g. {"":"ageIndex"} means
+     *                    using index "ageIndex" to scan data(index scan);
+     *                    {"":null} means table scan. when hint is null,
+     *                    database automatically match the optimal index to scan data.
+     * @param setOnInsert The setOnInsert assigns the specified values to the fileds when insert
+     * @throws BaseException If error happens.
+     */
+    public void upsert(BSONObject matcher, BSONObject modifier, BSONObject hint,
+                       BSONObject setOnInsert) throws BaseException {
+        upsert(matcher, modifier, hint, setOnInsert, 0);
+    }
+
+    /**
+     * Update the BSONObject of current collection, insert if no matching.
+     * When flag is set to 0, it won't work to update the ShardingKey field, but the other fields take effect.
+     *
+     * @param matcher     The matching condition, update all the documents
+     *                    if null(that's to say, we match all the documents)
+     * @param modifier    The updating rule, can't be null
+     * @param hint        Specified the index used to scan data. e.g. {"":"ageIndex"} means
+     *                    using index "ageIndex" to scan data(index scan);
+     *                    {"":null} means table scan. when hint is null,
+     *                    database automatically match the optimal index to scan data.
+     * @param setOnInsert The setOnInsert assigns the specified values to the fileds when insert
+     * @param flag        the upsert flag, default to be 0. Please see the definition
+     *                    of follow flags for more detail.
+     *                    <ul>
+     *                    <li>DBCollection.FLG_UPDATE_KEEP_SHARDINGKEY
+     *                    </ul>
+     * @throws BaseException If error happens.
+     */
+    public void upsert(BSONObject matcher, BSONObject modifier, BSONObject hint,
+                       BSONObject setOnInsert, int flag) throws BaseException {
         BSONObject newHint;
         if (setOnInsert != null) {
             newHint = new BasicBSONObject();
             if (hint != null) {
                 newHint.putAll(hint);
             }
-            newHint.put(SequoiadbConstants.FIELD_NAME_SET_ON_INSERT, setOnInsert);
+            newHint.put(SdbConstants.FIELD_NAME_SET_ON_INSERT, setOnInsert);
         } else {
             newHint = hint;
         }
-        upsert(matcher, modifier, newHint);
+        flag |= SdbConstants.FLG_UPDATE_UPSERT;
+        _update(flag, matcher, modifier, newHint);
     }
 
     /**
-     * @fn DBCursor explain(BSONObject matcher, BSONObject selector,
-    BSONObject orderBy, BSONObject hint, long skipRows, long returnRows,
-    int flag, BSONObject options)
-     * @brief Get explain of current collection.
-     * @param matcher
-     *            the matching rule, return all the documents if null
-     * @param selector
-     *            the selective rule, return the whole document if null
-     * @param orderBy
-     *            the ordered rule, never sort if null
-     * @param hint
-     *            Specified the index used to scan data. e.g. {"":"ageIndex"} means 
-     *            using index "ageIndex" to scan data(index scan); 
-     *            {"":null} means table scan. when hint is null, 
-     *            database automatically match the optimal index to scan data.
-     * @param skipRows
-     *            skip the first numToSkip documents, never skip if this parameter is 0
-     * @param returnRows
-     *            return the specified amount of documents, 
-     *            when returnRows is 0, return nothing, 
-     *            when returnRows is -1, return all the documents
-     * @param flag
-     *            the query flag, default to be 0. Please see the definition
-     *            of follow flags for more detail. Usage:
-     *            e.g. set ( DBQuery.FLG_QUERY_FORCE_HINT | DBQuery.FLG_QUERY_WITH_RETURNDATA ) to param flag
-     * <ul>
-     * <li>DBQuery.FLG_QUERY_STRINGOUT
-     * <li>DBQuery.FLG_QUERY_FORCE_HINT 
-     * <li>DBQuery.FLG_QUERY_PARALLED
-     * <li>DBQuery.FLG_QUERY_WITH_RETURNDATA
-     * </ul>  
-     * @param options The rules of query explain, the options are as below:
-     *<ul>
-     *<li>Run     : Whether execute query explain or not, true for executing query explain then get
-     *              the data and time information; false for not executing query explain but get the
-     *              query explain information only. e.g. {Run:true}
-     *</ul>
+     * Explain query of current collection.
+     *
+     * @param matcher    the matching rule, return all the documents if null
+     * @param selector   the selective rule, return the whole document if null
+     * @param orderBy    the ordered rule, never sort if null
+     * @param hint       Specified the index used to scan data. e.g. {"":"ageIndex"} means
+     *                   using index "ageIndex" to scan data(index scan);
+     *                   {"":null} means table scan. when hint is null,
+     *                   database automatically match the optimal index to scan data.
+     * @param skipRows   skip the first numToSkip documents, never skip if this parameter is 0
+     * @param returnRows return the specified amount of documents,
+     *                   when returnRows is 0, return nothing,
+     *                   when returnRows is -1, return all the documents
+     * @param flag       the query flag, default to be 0. Please see the definition
+     *                   of follow flags for more detail. Usage:
+     *                   e.g. set ( DBQuery.FLG_QUERY_FORCE_HINT | DBQuery.FLG_QUERY_WITH_RETURNDATA ) to param flag
+     *                   <ul>
+     *                   <li>DBQuery.FLG_QUERY_STRINGOUT
+     *                   <li>DBQuery.FLG_QUERY_FORCE_HINT
+     *                   <li>DBQuery.FLG_QUERY_PARALLED
+     *                   <li>DBQuery.FLG_QUERY_WITH_RETURNDATA
+     *                   </ul>
+     * @param options    The rules of query explain, the options are as below:
+     *                   <ul>
+     *                   <li>Run     : Whether execute query explain or not, true for executing query explain then get
+     *                   the data and time information; false for not executing query explain but get the
+     *                   query explain information only. e.g. {Run:true}
+     *                   </ul>
      * @return a DBCursor instance of the result
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public DBCursor explain(BSONObject matcher, BSONObject selector,
                             BSONObject orderBy, BSONObject hint, long skipRows, long returnRows,
@@ -698,11 +727,11 @@ public class DBCollection {
         flag |= DBQuery.FLG_QUERY_EXPLAIN;
         BSONObject innerHint = new BasicBSONObject();
         if (null != hint) {
-            innerHint.put(SequoiadbConstants.FIELD_NAME_HINT, hint);
+            innerHint.put(SdbConstants.FIELD_NAME_HINT, hint);
         }
 
         if (null != options) {
-            innerHint.put(SequoiadbConstants.FIELD_NAME_OPTIONS, options);
+            innerHint.put(SdbConstants.FIELD_NAME_OPTIONS, options);
         }
 
         return query(matcher, selector, orderBy, innerHint, skipRows,
@@ -710,49 +739,44 @@ public class DBCollection {
     }
 
     /**
-     * @fn DBCursor query()
-     * @brief Get all documents of current collection.
+     * Get all documents of current collection.
+     *
      * @return a DBCursor instance of the result
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public DBCursor query() throws BaseException {
         return query("", "", "", "", 0, -1);
     }
 
     /**
-     * @fn DBCursor query(DBQuery matcher)
-     * @brief Get the matching documents in current collection.
-     * @param matcher
-     *            the matching rule, return all the documents if null
+     * Get the matching documents in current collection.
+     *
+     * @param matcher the matching rule, return all the documents if null
      * @return a DBCursor instance of the result or null if no any matched document
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      * @see com.sequoiadb.base.DBQuery
      */
     public DBCursor query(DBQuery matcher) throws BaseException {
-        if (matcher == null)
+        if (matcher == null) {
             return query();
+        }
         return query(matcher.getMatcher(), matcher.getSelector(),
                 matcher.getOrderBy(), matcher.getHint(), matcher.getSkipRowsCount(),
                 matcher.getReturnRowsCount(), matcher.getFlag());
     }
 
     /**
-     * @fn DBCursor query(BSONObject matcher, BSONObject selector, BSONObject
-     *     orderBy, BSONObject hint)
-     * @brief Get the matching documents in current collection.
-     * @param matcher
-     *            the matching rule, return all the documents if null
-     * @param selector
-     *            the selective rule, return the whole document if null
-     * @param orderBy
-     *            the ordered rule, never sort if null
-     * @param hint
-     *            Specified the index used to scan data. e.g. {"":"ageIndex"} means 
-     *            using index "ageIndex" to scan data(index scan); 
-     *            {"":null} means table scan. when hint is null, 
-     *            database automatically match the optimal index to scan data.
+     * Get the matching documents in current collection.
+     *
+     * @param matcher  the matching rule, return all the documents if null
+     * @param selector the selective rule, return the whole document if null
+     * @param orderBy  the ordered rule, never sort if null
+     * @param hint     Specified the index used to scan data. e.g. {"":"ageIndex"} means
+     *                 using index "ageIndex" to scan data(index scan);
+     *                 {"":null} means table scan. when hint is null,
+     *                 database automatically match the optimal index to scan data.
      * @return a DBCursor instance of the result or null if no any matched document
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public DBCursor query(BSONObject matcher, BSONObject selector,
                           BSONObject orderBy, BSONObject hint) throws BaseException {
@@ -760,32 +784,26 @@ public class DBCollection {
     }
 
     /**
-     * @fn DBCursor query(BSONObject matcher, BSONObject selector, BSONObject
-     *     orderBy, BSONObject hint, int flags)
-     * @brief Get the matching documents in current collection.
-     * @param matcher
-     *            the matching rule, return all the documents if null
-     * @param selector
-     *            the selective rule, return the whole document if null
-     * @param orderBy
-     *            the ordered rule, never sort if null
-     * @param hint
-     *            Specified the index used to scan data. e.g. {"":"ageIndex"} means 
-     *            using index "ageIndex" to scan data(index scan); 
-     *            {"":null} means table scan. when hint is null, 
-     *            database automatically match the optimal index to scan data.
-     * @param flag
-     *            the query flag, default to be 0. Please see the definition
-     *            of follow flags for more detail. Usage:
-     *            e.g. set ( DBQuery.FLG_QUERY_FORCE_HINT | DBQuery.FLG_QUERY_WITH_RETURNDATA ) to param flag
-     * <ul>
-     * <li>DBQuery.FLG_QUERY_STRINGOUT
-     * <li>DBQuery.FLG_QUERY_FORCE_HINT 
-     * <li>DBQuery.FLG_QUERY_PARALLED
-     * <li>DBQuery.FLG_QUERY_WITH_RETURNDATA
-     * </ul>  
+     * Get the matching documents in current collection.
+     *
+     * @param matcher  the matching rule, return all the documents if null
+     * @param selector the selective rule, return the whole document if null
+     * @param orderBy  the ordered rule, never sort if null
+     * @param hint     Specified the index used to scan data. e.g. {"":"ageIndex"} means
+     *                 using index "ageIndex" to scan data(index scan);
+     *                 {"":null} means table scan. when hint is null,
+     *                 database automatically match the optimal index to scan data.
+     * @param flag     the query flag, default to be 0. Please see the definition
+     *                 of follow flags for more detail. Usage:
+     *                 e.g. set ( DBQuery.FLG_QUERY_FORCE_HINT | DBQuery.FLG_QUERY_WITH_RETURNDATA ) to param flag
+     *                 <ul>
+     *                 <li>DBQuery.FLG_QUERY_STRINGOUT
+     *                 <li>DBQuery.FLG_QUERY_FORCE_HINT
+     *                 <li>DBQuery.FLG_QUERY_PARALLED
+     *                 <li>DBQuery.FLG_QUERY_WITH_RETURNDATA
+     *                 </ul>
      * @return a DBCursor instance of the result or null if no any matched document
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public DBCursor query(BSONObject matcher, BSONObject selector,
                           BSONObject orderBy, BSONObject hint, int flag) throws BaseException {
@@ -793,22 +811,17 @@ public class DBCollection {
     }
 
     /**
-     * @fn DBCursor query(String matcher, String selector, String orderBy, String
-     *     hint)
-     * @brief Get the matching documents in current collection.
-     * @param matcher
-     *            the matching rule, return all the documents if null
-     * @param selector
-     *            the selective rule, return the whole document if null
-     * @param orderBy
-     *            the ordered rule, never sort if null
-     * @param hint
-     *            Specified the index used to scan data. e.g. {"":"ageIndex"} means 
-     *            using index "ageIndex" to scan data(index scan); 
-     *            {"":null} means table scan. when hint is null, 
-     *            database automatically match the optimal index to scan data.
+     * Get the matching documents in current collection.
+     *
+     * @param matcher  the matching rule, return all the documents if null
+     * @param selector the selective rule, return the whole document if null
+     * @param orderBy  the ordered rule, never sort if null
+     * @param hint     Specified the index used to scan data. e.g. {"":"ageIndex"} means
+     *                 using index "ageIndex" to scan data(index scan);
+     *                 {"":null} means table scan. when hint is null,
+     *                 database automatically match the optimal index to scan data.
      * @return a DBCursor instance of the result or null if no any matched document
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public DBCursor query(String matcher, String selector, String orderBy,
                           String hint) throws BaseException {
@@ -816,32 +829,26 @@ public class DBCollection {
     }
 
     /**
-     * @fn DBCursor query(String matcher, String selector, String orderBy, String
-     *     hint, int flag)
-     * @brief Get the matching documents in current collection.
-     * @param matcher
-     *            the matching rule, return all the documents if null
-     * @param selector
-     *            the selective rule, return the whole document if null
-     * @param orderBy
-     *            the ordered rule, never sort if null
-     * @param hint
-     *            Specified the index used to scan data. e.g. {"":"ageIndex"} means 
-     *            using index "ageIndex" to scan data(index scan); 
-     *            {"":null} means table scan. when hint is null, 
-     *            database automatically match the optimal index to scan data.
-     * @param flag
-     *            the query flag, default to be 0. Please see the definition
-     *            of follow flags for more detail. Usage:
-     *            e.g. set ( DBQuery.FLG_QUERY_FORCE_HINT | DBQuery.FLG_QUERY_WITH_RETURNDATA ) to param flag
-     * <ul>
-     * <li>DBQuery.FLG_QUERY_STRINGOUT
-     * <li>DBQuery.FLG_QUERY_FORCE_HINT 
-     * <li>DBQuery.FLG_QUERY_PARALLED
-     * <li>DBQuery.FLG_QUERY_WITH_RETURNDATA
-     * </ul>  
+     * Get the matching documents in current collection.
+     *
+     * @param matcher  the matching rule, return all the documents if null
+     * @param selector the selective rule, return the whole document if null
+     * @param orderBy  the ordered rule, never sort if null
+     * @param hint     Specified the index used to scan data. e.g. {"":"ageIndex"} means
+     *                 using index "ageIndex" to scan data(index scan);
+     *                 {"":null} means table scan. when hint is null,
+     *                 database automatically match the optimal index to scan data.
+     * @param flag     the query flag, default to be 0. Please see the definition
+     *                 of follow flags for more detail. Usage:
+     *                 e.g. set ( DBQuery.FLG_QUERY_FORCE_HINT | DBQuery.FLG_QUERY_WITH_RETURNDATA ) to param flag
+     *                 <ul>
+     *                 <li>DBQuery.FLG_QUERY_STRINGOUT
+     *                 <li>DBQuery.FLG_QUERY_FORCE_HINT
+     *                 <li>DBQuery.FLG_QUERY_PARALLED
+     *                 <li>DBQuery.FLG_QUERY_WITH_RETURNDATA
+     *                 </ul>
      * @return a DBCursor instance of the result or null if no any matched document
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public DBCursor query(String matcher, String selector, String orderBy,
                           String hint, int flag) throws BaseException {
@@ -849,40 +856,37 @@ public class DBCollection {
         BSONObject se = null;
         BSONObject or = null;
         BSONObject hi = null;
-        if (matcher != null)
+        if (matcher != null) {
             ma = (BSONObject) JSON.parse(matcher);
-        if (selector != null)
+        }
+        if (selector != null) {
             se = (BSONObject) JSON.parse(selector);
-        if (orderBy != null && !orderBy.equals(""))
+        }
+        if (orderBy != null && !orderBy.equals("")) {
             or = (BSONObject) JSON.parse(orderBy);
-        if (hint != null)
+        }
+        if (hint != null) {
             hi = (BSONObject) JSON.parse(hint);
+        }
         return query(ma, se, or, hi, 0, -1, flag);
     }
 
     /**
-     * @fn DBCursor query(String matcher, String selector, String orderBy,
-    String hint, long skipRows, long returnRows)
-     * @brief Get the matching documents in current collection.
-     * @param matcher
-     *            the matching rule, return all the documents if null
-     * @param selector
-     *            the selective rule, return the whole document if null
-     * @param orderBy
-     *            the ordered rule, never sort if null
-     * @param hint
-     *            Specified the index used to scan data. e.g. {"":"ageIndex"} means 
-     *            using index "ageIndex" to scan data(index scan); 
-     *            {"":null} means table scan. when hint is null, 
-     *            database automatically match the optimal index to scan data.
-     * @param skipRows
-     *            skip the first numToSkip documents, never skip if this parameter is 0
-     * @param returnRows
-     *            return the specified amount of documents, 
-     *            when returnRows is 0, return nothing, 
-     *            when returnRows is -1, return all the documents
+     * Get the matching documents in current collection.
+     *
+     * @param matcher    the matching rule, return all the documents if null
+     * @param selector   the selective rule, return the whole document if null
+     * @param orderBy    the ordered rule, never sort if null
+     * @param hint       Specified the index used to scan data. e.g. {"":"ageIndex"} means
+     *                   using index "ageIndex" to scan data(index scan);
+     *                   {"":null} means table scan. when hint is null,
+     *                   database automatically match the optimal index to scan data.
+     * @param skipRows   skip the first numToSkip documents, never skip if this parameter is 0
+     * @param returnRows return the specified amount of documents,
+     *                   when returnRows is 0, return nothing,
+     *                   when returnRows is -1, return all the documents
      * @return a DBCursor instance of the result or null if no any matched document
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public DBCursor query(String matcher, String selector, String orderBy,
                           String hint, long skipRows, long returnRows) throws BaseException {
@@ -890,41 +894,37 @@ public class DBCollection {
         BSONObject se = null;
         BSONObject or = null;
         BSONObject hi = null;
-        if (matcher != null)
+        if (matcher != null) {
             ma = (BSONObject) JSON.parse(matcher);
-        if (selector != null)
+        }
+        if (selector != null) {
             se = (BSONObject) JSON.parse(selector);
-        if (orderBy != null)
+        }
+        if (orderBy != null) {
             or = (BSONObject) JSON.parse(orderBy);
-        if (hint != null)
+        }
+        if (hint != null) {
             hi = (BSONObject) JSON.parse(hint);
+        }
         return query(ma, se, or, hi, skipRows, returnRows, 0);
     }
 
-
     /**
-     * @fn DBCursor query(BSONObject matcher, BSONObject selector, BSONObject
-     *     orderBy, BSONObject hint, long skipRows, long returnRows)
-     * @brief Get the matching documents in current collection.
-     * @param matcher
-     *            the matching rule, return all the documents if null
-     * @param selector
-     *            the selective rule, return the whole document if null
-     * @param orderBy
-     *            the ordered rule, never sort if null
-     * @param hint
-     *            Specified the index used to scan data. e.g. {"":"ageIndex"} means 
-     *            using index "ageIndex" to scan data(index scan); 
-     *            {"":null} means table scan. when hint is null, 
-     *            database automatically match the optimal index to scan data.
-     * @param skipRows
-     *            skip the first numToSkip documents, never skip if this parameter is 0
-     * @param returnRows
-     *            return the specified amount of documents, 
-     *            when returnRows is 0, return nothing, 
-     *            when returnRows is -1, return all the documents
+     * Get the matching documents in current collection.
+     *
+     * @param matcher    the matching rule, return all the documents if null
+     * @param selector   the selective rule, return the whole document if null
+     * @param orderBy    the ordered rule, never sort if null
+     * @param hint       Specified the index used to scan data. e.g. {"":"ageIndex"} means
+     *                   using index "ageIndex" to scan data(index scan);
+     *                   {"":null} means table scan. when hint is null,
+     *                   database automatically match the optimal index to scan data.
+     * @param skipRows   skip the first numToSkip documents, never skip if this parameter is 0
+     * @param returnRows return the specified amount of documents,
+     *                   when returnRows is 0, return nothing,
+     *                   when returnRows is -1, return all the documents
      * @return a DBCursor instance of the result or null if no any matched document
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public DBCursor query(BSONObject matcher, BSONObject selector,
                           BSONObject orderBy, BSONObject hint, long skipRows, long returnRows) throws BaseException {
@@ -932,68 +932,52 @@ public class DBCollection {
     }
 
     /**
-     * @fn DBCursor query(BSONObject matcher, BSONObject selector,
-     *		              BSONObject orderBy, BSONObject hint,
-     *		              long skipRows, long returnRows,
-     *		              int flag)
-     * @brief Get the matching documents in current collection.
-     * @param matcher
-     *            the matching rule, return all the documents if null
-     * @param selector
-     *            the selective rule, return the whole document if null
-     * @param orderBy
-     *            the ordered rule, never sort if null
-     * @param hint
-     *            Specified the index used to scan data. e.g. {"":"ageIndex"} means 
-     *            using index "ageIndex" to scan data(index scan); 
-     *            {"":null} means table scan. when hint is null, 
-     *            database automatically match the optimal index to scan data.
-     * @param skipRows
-     *            skip the first numToSkip documents, never skip if this parameter is 0
-     * @param returnRows
-     *            return the specified amount of documents, 
-     *            when returnRows is 0, return nothing, 
-     *            when returnRows is -1, return all the documents
-     * @param flag
-     *            the query flag, default to be 0. Please see the definition
-     *            of follow flags for more detail. Usage:
-     *            e.g. set ( DBQuery.FLG_QUERY_FORCE_HINT | DBQuery.FLG_QUERY_WITH_RETURNDATA ) to param flag
-     * <ul>
-     * <li>DBQuery.FLG_QUERY_STRINGOUT
-     * <li>DBQuery.FLG_QUERY_FORCE_HINT 
-     * <li>DBQuery.FLG_QUERY_PARALLED
-     * <li>DBQuery.FLG_QUERY_WITH_RETURNDATA
-     * </ul>  
+     * Get the matching documents in current collection.
+     *
+     * @param matcher    the matching rule, return all the documents if null
+     * @param selector   the selective rule, return the whole document if null
+     * @param orderBy    the ordered rule, never sort if null
+     * @param hint       Specified the index used to scan data. e.g. {"":"ageIndex"} means
+     *                   using index "ageIndex" to scan data(index scan);
+     *                   {"":null} means table scan. when hint is null,
+     *                   database automatically match the optimal index to scan data.
+     * @param skipRows   skip the first numToSkip documents, never skip if this parameter is 0
+     * @param returnRows return the specified amount of documents,
+     *                   when returnRows is 0, return nothing,
+     *                   when returnRows is -1, return all the documents
+     * @param flags      the query flags, default to be 0. Please see the definition
+     *                   of follow flags for more detail. Usage:
+     *                   e.g. set ( DBQuery.FLG_QUERY_FORCE_HINT | DBQuery.FLG_QUERY_WITH_RETURNDATA ) to param flag
+     *                   <ul>
+     *                   <li>DBQuery.FLG_QUERY_STRINGOUT
+     *                   <li>DBQuery.FLG_QUERY_FORCE_HINT
+     *                   <li>DBQuery.FLG_QUERY_PARALLED
+     *                   <li>DBQuery.FLG_QUERY_WITH_RETURNDATA
+     *                   </ul>
      * @return a DBCursor instance of the result or null if no any matched document
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public DBCursor query(BSONObject matcher, BSONObject selector,
                           BSONObject orderBy, BSONObject hint,
                           long skipRows, long returnRows,
-                          int flag) throws BaseException {
-        BSONObject dummy = new BasicBSONObject();
-        int newFlag = flag;
-        newFlag = DBQuery.regulateFlag(flag);
-        if (matcher == null)
-            matcher = dummy;
-        if (selector == null)
-            selector = dummy;
-        if (orderBy == null)
-            orderBy = dummy;
-        if (hint == null)
-            hint = dummy;
+                          int flags) throws BaseException {
+        int newFlags = DBQuery.regulateFlags(flags);
+
         if (returnRows < 0) {
             returnRows = -1;
         }
         if (returnRows == 1) {
-            newFlag |= DBQuery.FLG_QUERY_WITH_RETURNDATA;
+            newFlags |= DBQuery.FLG_QUERY_WITH_RETURNDATA;
         }
-        SDBMessage rtnSDBMessage = adminCommand(collectionFullName, matcher,
-                selector, orderBy, hint, skipRows, returnRows, newFlag);
-        DBCursor cursor = null;
-        int flags = rtnSDBMessage.getFlags();
-        if (flags != 0) {
-            if (flags == SequoiadbConstants.SDB_DMS_EOC) {
+
+        QueryRequest request = new QueryRequest(collectionFullName,
+                matcher, selector, orderBy, hint,
+                skipRows, returnRows, newFlags);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+
+        int flag = response.getFlag();
+        if (flag != 0) {
+            if (flag == SDBError.SDB_DMS_EOC.getErrorCode()) {
                 return null;
             } else {
                 String msg = "matcher = " + matcher +
@@ -1002,92 +986,81 @@ public class DBCollection {
                         ", hint = " + hint +
                         ", skipRows = " + skipRows +
                         ", returnRows = " + returnRows;
-                throw new BaseException(flags, msg);
+                sequoiadb.throwIfError(response, msg);
             }
         }
+
         sequoiadb.upsertCache(collectionFullName);
-        cursor = new DBCursor(rtnSDBMessage, this);
+
+        DBCursor cursor = new DBCursor(response, sequoiadb);
         return cursor;
     }
 
     /**
-     * @fn BSONObject queryOne(BSONObject matcher, BSONObject selector, BSONObject
-     *     orderBy, BSONObject hint, int flag)
-     * @brief Returns one matched document from current collection.
-     * @param matcher
-     *            the matching rule, return all the documents if null
-     * @param selector
-     *            the selective rule, return the whole document if null
-     * @param orderBy
-     *            the ordered rule, never sort if null
-     * @param hint
-     *            Specified the index used to scan data. e.g. {"":"ageIndex"} means 
-     *            using index "ageIndex" to scan data(index scan); 
-     *            {"":null} means table scan. when hint is null, 
-     *            database automatically match the optimal index to scan data.
-     * @param flag
-     *            the query flag, default to be 0. Please see the definition
-     *            of follow flags for more detail. Usage:
-     *            e.g. set ( DBQuery.FLG_QUERY_FORCE_HINT | DBQuery.FLG_QUERY_WITH_RETURNDATA ) to param flag
-     * <ul>
-     * <li>DBQuery.FLG_QUERY_STRINGOUT
-     * <li>DBQuery.FLG_QUERY_FORCE_HINT 
-     * <li>DBQuery.FLG_QUERY_PARALLED
-     * <li>DBQuery.FLG_QUERY_WITH_RETURNDATA
-     * </ul>  
+     * Get one matched document from current collection.
+     *
+     * @param matcher  the matching rule, return all the documents if null
+     * @param selector the selective rule, return the whole document if null
+     * @param orderBy  the ordered rule, never sort if null
+     * @param hint     Specified the index used to scan data. e.g. {"":"ageIndex"} means
+     *                 using index "ageIndex" to scan data(index scan);
+     *                 {"":null} means table scan. when hint is null,
+     *                 database automatically match the optimal index to scan data.
+     * @param flag     the query flag, default to be 0. Please see the definition
+     *                 of follow flags for more detail. Usage:
+     *                 e.g. set ( DBQuery.FLG_QUERY_FORCE_HINT | DBQuery.FLG_QUERY_WITH_RETURNDATA ) to param flag
+     *                 <ul>
+     *                 <li>DBQuery.FLG_QUERY_STRINGOUT
+     *                 <li>DBQuery.FLG_QUERY_FORCE_HINT
+     *                 <li>DBQuery.FLG_QUERY_PARALLED
+     *                 <li>DBQuery.FLG_QUERY_WITH_RETURNDATA
+     *                 </ul>
      * @return the matched document or null if no such document
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public BSONObject queryOne(BSONObject matcher, BSONObject selector,
                                BSONObject orderBy, BSONObject hint,
                                int flag) throws BaseException {
         flag = flag | DBQuery.FLG_QUERY_WITH_RETURNDATA;
-        DBCursor cursor = null;
-        try {
-            cursor = query(matcher, selector, orderBy, hint, 0, 1, flag);
-        } catch (BaseException e) {
-            throw e;
-        }
+        DBCursor cursor = query(matcher, selector, orderBy, hint, 0, 1, flag);
         return cursor.getNext();
     }
 
     /**
-     * @fn BSONObject queryOne()
-     * @brief Returns one document from current collection.
+     * Get one document from current collection.
+     *
      * @return the document or null if no any document in current collection
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public BSONObject queryOne() throws BaseException {
-        BSONObject empty = new BasicBSONObject();
-        return queryOne(empty, empty, empty, empty, 0);
+        return queryOne(null, null, null, null, 0);
     }
 
     /**
-     * @fn DBCursor getIndexes()
-     * @brief Get all the indexes of current collection
+     * Get all the indexes of current collection
+     *
      * @return DBCursor of indexes
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public DBCursor getIndexes() throws BaseException {
-        String commandString = SequoiadbConstants.ADMIN_PROMPT
-                + SequoiadbConstants.GET_INXES;
-        BSONObject dummyObj = new BasicBSONObject();
         BSONObject obj = new BasicBSONObject();
-        obj.put(SequoiadbConstants.FIELD_COLLECTION, collectionFullName);
+        obj.put(SdbConstants.FIELD_COLLECTION, collectionFullName);
 
-        SDBMessage rtn = adminCommand(commandString, dummyObj, dummyObj,
-                dummyObj, obj, -1, -1, 0);
-        int flags = rtn.getFlags();
-        DBCursor cursor = null;
+        AdminRequest request = new AdminRequest(AdminCommand.GET_INDEXES, null, obj);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+
+        int flags = response.getFlag();
         if (flags != 0) {
-            if (flags == SequoiadbConstants.SDB_DMS_EOC) {
-                return cursor;
+            if (flags == SDBError.SDB_DMS_EOC.getErrorCode()) {
+                return null;
             } else {
-                throw new BaseException(flags);
+                sequoiadb.throwIfError(response);
             }
         }
+
         sequoiadb.upsertCache(collectionFullName);
-        cursor = new DBCursor(rtn, sequoiadb);
+
+        DBCursor cursor = new DBCursor(response, sequoiadb);
         return cursor;
     }
 
@@ -1103,21 +1076,21 @@ public class DBCollection {
                 throw new BaseException(SDBError.SDB_INVALIDARG, "update can't be empty");
             }
 
-            modify.put(SequoiadbConstants.FIELD_NAME_OP,
-                    SequoiadbConstants.FIELD_OP_VALUE_UPDATE);
-            modify.put(SequoiadbConstants.FIELD_NAME_OP_UPDATE, update);
-            modify.put(SequoiadbConstants.FIELD_NAME_RETURNNEW, returnNew);
+            modify.put(SdbConstants.FIELD_NAME_OP,
+                    SdbConstants.FIELD_OP_VALUE_UPDATE);
+            modify.put(SdbConstants.FIELD_NAME_OP_UPDATE, update);
+            modify.put(SdbConstants.FIELD_NAME_RETURNNEW, returnNew);
         } else {
-            modify.put(SequoiadbConstants.FIELD_NAME_OP,
-                    SequoiadbConstants.FIELD_OP_VALUE_REMOVE);
-            modify.put(SequoiadbConstants.FIELD_NAME_OP_REMOVE, true);
+            modify.put(SdbConstants.FIELD_NAME_OP,
+                    SdbConstants.FIELD_OP_VALUE_REMOVE);
+            modify.put(SdbConstants.FIELD_NAME_OP_REMOVE, true);
         }
 
         BSONObject newHint = new BasicBSONObject();
         if (hint != null) {
             newHint.putAll(hint);
         }
-        newHint.put(SequoiadbConstants.FIELD_NAME_MODIFY, modify);
+        newHint.put(SdbConstants.FIELD_NAME_MODIFY, modify);
 
         flag |= DBQuery.FLG_QUERY_MODIFY;
         return query(matcher, selector, orderBy, newHint,
@@ -1125,46 +1098,35 @@ public class DBCollection {
     }
 
     /**
-     * @fn DBCursor queryAndUpdate(BSONObject matcher, BSONObject selector,
-     *                             BSONObject orderBy, BSONObject hint, BSONObject update,
-     *                             long skipRows, long returnRows,
-     *                             int flag, boolean returnNew)
-     * @brief Get the matching documents in current collection and update.
-     *        in order to make the update take effect, user must travel
-     *        the DBCursor returned by this function.
-     * @param matcher
-     *            the matching rule, return all the documents if null
-     * @param selector
-     *            the selective rule, return the whole document if null
-     * @param orderBy
-     *            the ordered rule, never sort if null
-     * @param update
-     *            the update rule, can't be null
-     * @param hint
-     *            Specified the index used to scan data. e.g. {"":"ageIndex"} means 
-     *            using index "ageIndex" to scan data(index scan); 
-     *            {"":null} means table scan. when hint is null, 
-     *            database automatically match the optimal index to scan data.
-     * @param skipRows
-     *            skip the first numToSkip documents, never skip if this parameter is 0
-     * @param returnRows
-     *            return the specified amount of documents, 
-     *            when returnRows is 0, return nothing, 
-     *            when returnRows is -1, return all the documents
-     * @param flag
-     *            the query flags, default to be 0. Please see the definition
-     *            of follow flags for more detail. Usage:
-     *            e.g. set ( DBQuery.FLG_QUERY_FORCE_HINT | DBQuery.FLG_QUERY_WITH_RETURNDATA ) to param flag
-     * <ul>
-     * <li>DBQuery.FLG_QUERY_STRINGOUT
-     * <li>DBQuery.FLG_QUERY_FORCE_HINT 
-     * <li>DBQuery.FLG_QUERY_PARALLED
-     * <li>DBQuery.FLG_QUERY_WITH_RETURNDATA
-     * </ul>  
-     * @param returnNew
-     *            When true, returns the updated document rather than the original
+     * Get the matching documents in current collection and update.
+     * In order to make the update take effect, user must travel
+     * the DBCursor returned by this function.
+     *
+     * @param matcher    the matching rule, return all the documents if null
+     * @param selector   the selective rule, return the whole document if null
+     * @param orderBy    the ordered rule, never sort if null
+     * @param update     the update rule, can't be null
+     * @param hint       Specified the index used to scan data. e.g. {"":"ageIndex"} means
+     *                   using index "ageIndex" to scan data(index scan);
+     *                   {"":null} means table scan. when hint is null,
+     *                   database automatically match the optimal index to scan data.
+     * @param skipRows   skip the first numToSkip documents, never skip if this parameter is 0
+     * @param returnRows return the specified amount of documents,
+     *                   when returnRows is 0, return nothing,
+     *                   when returnRows is -1, return all the documents
+     * @param flag       the query flags, default to be 0. Please see the definition
+     *                   of follow flags for more detail. Usage:
+     *                   e.g. set ( DBQuery.FLG_QUERY_FORCE_HINT | DBQuery.FLG_QUERY_WITH_RETURNDATA ) to param flag
+     *                   <ul>
+     *                   <li>DBQuery.FLG_QUERY_STRINGOUT
+     *                   <li>DBQuery.FLG_QUERY_FORCE_HINT
+     *                   <li>DBQuery.FLG_QUERY_PARALLED
+     *                   <li>DBQuery.FLG_QUERY_WITH_RETURNDATA
+     *                   <li>DBQuery.FLG_QUERY_KEEP_SHARDINGKEY_IN_UPDATE
+     *                   </ul>
+     * @param returnNew  When true, returns the updated document rather than the original
      * @return a DBCursor instance of the result or null if no any matched document
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public DBCursor queryAndUpdate(BSONObject matcher, BSONObject selector,
                                    BSONObject orderBy, BSONObject hint, BSONObject update,
@@ -1175,42 +1137,32 @@ public class DBCollection {
     }
 
     /**
-     * @fn DBCursor queryAndRemove(BSONObject matcher, BSONObject selector,
-     *                             BSONObject orderBy, BSONObject hint,
-     *                             long skipRows, long returnRows,
-     *                             int flag)
-     * @brief Get the matching documents in current collection and remove.
-     *        in order to make the remove take effect, user must travel
-     *        the DBCursor returned by this function.
-     * @param matcher
-     *            the matching rule, return all the documents if null
-     * @param selector
-     *            the selective rule, return the whole document if null
-     * @param orderBy
-     *            the ordered rule, never sort if null
-     * @param hint
-     *            Specified the index used to scan data. e.g. {"":"ageIndex"} means 
-     *            using index "ageIndex" to scan data(index scan); 
-     *            {"":null} means table scan. when hint is null, 
-     *            database automatically match the optimal index to scan data.
-     * @param skipRows
-     *            skip the first numToSkip documents, never skip if this parameter is 0
-     * @param returnRows
-     *            return the specified amount of documents, 
-     *            when returnRows is 0, return nothing, 
-     *            when returnRows is -1, return all the documents
-     * @param flag
-     *            the query flag, default to be 0. Please see the definition
-     *            of follow flags for more detail. Usage:
-     *            e.g. set ( DBQuery.FLG_QUERY_FORCE_HINT | DBQuery.FLG_QUERY_WITH_RETURNDATA ) to param flag
-     * <ul>
-     * <li>DBQuery.FLG_QUERY_STRINGOUT
-     * <li>DBQuery.FLG_QUERY_FORCE_HINT 
-     * <li>DBQuery.FLG_QUERY_PARALLED
-     * <li>DBQuery.FLG_QUERY_WITH_RETURNDATA
-     * </ul>  
+     * Get the matching documents in current collection and remove.
+     * In order to make the remove take effect, user must travel
+     * the DBCursor returned by this function.
+     *
+     * @param matcher    the matching rule, return all the documents if null
+     * @param selector   the selective rule, return the whole document if null
+     * @param orderBy    the ordered rule, never sort if null
+     * @param hint       Specified the index used to scan data. e.g. {"":"ageIndex"} means
+     *                   using index "ageIndex" to scan data(index scan);
+     *                   {"":null} means table scan. when hint is null,
+     *                   database automatically match the optimal index to scan data.
+     * @param skipRows   skip the first numToSkip documents, never skip if this parameter is 0
+     * @param returnRows return the specified amount of documents,
+     *                   when returnRows is 0, return nothing,
+     *                   when returnRows is -1, return all the documents
+     * @param flag       the query flag, default to be 0. Please see the definition
+     *                   of follow flags for more detail. Usage:
+     *                   e.g. set ( DBQuery.FLG_QUERY_FORCE_HINT | DBQuery.FLG_QUERY_WITH_RETURNDATA ) to param flag
+     *                   <ul>
+     *                   <li>DBQuery.FLG_QUERY_STRINGOUT
+     *                   <li>DBQuery.FLG_QUERY_FORCE_HINT
+     *                   <li>DBQuery.FLG_QUERY_PARALLED
+     *                   <li>DBQuery.FLG_QUERY_WITH_RETURNDATA
+     *                   </ul>
      * @return a DBCursor instance of the result or null if no any matched document
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public DBCursor queryAndRemove(BSONObject matcher, BSONObject selector,
                                    BSONObject orderBy, BSONObject hint,
@@ -1221,361 +1173,287 @@ public class DBCollection {
     }
 
     /**
-     * @fn DBCursor getIndex(String name)
-     * @brief Get all of or one of the indexes in current collection
-     * @param name
-     *            The index name, returns all of the indexes if this parameter
-     *            is null
+     * Get all of or one of the indexes in current collection.
+     *
+     * @param name The index name, returns all of the indexes if this parameter
+     *             is null
      * @return DBCursor of indexes
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public DBCursor getIndex(String name) throws BaseException {
-        if (name == null)
+        if (name == null) {
             return getIndexes();
-        String commandString = SequoiadbConstants.ADMIN_PROMPT
-                + SequoiadbConstants.GET_INXES;
-        BSONObject dummyObj = new BasicBSONObject();
-        BSONObject condition = new BasicBSONObject();
-        BSONObject obj = new BasicBSONObject();
-        obj.put(SequoiadbConstants.FIELD_COLLECTION, collectionFullName);
-        condition.put(SequoiadbConstants.IXM_INDEXDEF + "."
-                + SequoiadbConstants.IXM_NAME, name);
+        }
 
-        SDBMessage rtn = adminCommand(commandString, condition, dummyObj,
-                dummyObj, obj, -1, -1, 0);
-        int flags = rtn.getFlags();
+        BSONObject condition = new BasicBSONObject();
+        condition.put(SdbConstants.IXM_INDEXDEF + "."
+                + SdbConstants.IXM_NAME, name);
+
+        BSONObject obj = new BasicBSONObject();
+        obj.put(SdbConstants.FIELD_COLLECTION, collectionFullName);
+
+        AdminRequest request = new AdminRequest(AdminCommand.GET_INDEXES, condition, obj);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+
+        int flags = response.getFlag();
         if (flags != 0) {
-            if (flags == SequoiadbConstants.SDB_DMS_EOC) {
+            if (flags == SDBError.SDB_DMS_EOC.getErrorCode()) {
                 return null;
             } else {
-                throw new BaseException(flags);
+                sequoiadb.throwIfError(response);
             }
         }
         sequoiadb.upsertCache(collectionFullName);
-        return new DBCursor(rtn, this);
+        return new DBCursor(response, sequoiadb);
     }
 
     /**
-     * @fn void createIndex(String name, BSONObject key, boolean isUnique,
-     *     boolean enforced, int sortBufferSize)
-     * @brief Create a index with name and key
-     * @param name
-     *            The index name
-     * @param key
-     *            The index key, like: {"key":1/-1}, ASC(1)/DESC(-1)
-     * @param isUnique
-     *            Whether the index elements are unique or not
-     * @param enforced
-     *            Whether the index is enforced unique This element is
-     *            meaningful when isUnique is set to true
-     * @param sortBufferSize
-     *            The size(MB) of sort buffer used when creating index,
-    zero means don't use sort buffer
-     * @exception com.sequoiadb.exception.BaseException
+     * Create a index with name and key.
+     *
+     * @param name           The index name
+     * @param key            The index key, like: {"key":1/-1}, ASC(1)/DESC(-1)
+     * @param isUnique       Whether the index elements are unique or not
+     * @param enforced       Whether the index is enforced unique This element is
+     *                       meaningful when isUnique is set to true
+     * @param sortBufferSize The size(MB) of sort buffer used when creating index,
+     *                       zero means don't use sort buffer
+     * @throws BaseException If error happens.
      */
     public void createIndex(String name, BSONObject key, boolean isUnique,
                             boolean enforced, int sortBufferSize) throws BaseException {
         if (sortBufferSize < 0) {
             throw new BaseException(SDBError.SDB_INVALIDARG, "sortBufferSize less than 0");
         }
-        String commandString = SequoiadbConstants.ADMIN_PROMPT
-                + SequoiadbConstants.CREATE_INX;
-        BSONObject hint = new BasicBSONObject();
-        BSONObject obj = new BasicBSONObject();
-        BSONObject dummyObj = new BasicBSONObject();
-        BSONObject createObj = new BasicBSONObject();
-        obj.put(SequoiadbConstants.IXM_KEY, key);
-        obj.put(SequoiadbConstants.IXM_NAME, name);
-        obj.put(SequoiadbConstants.IXM_UNIQUE, isUnique);
-        obj.put(SequoiadbConstants.IXM_ENFORCED, enforced);
-        createObj.put(SequoiadbConstants.FIELD_COLLECTION, collectionFullName);
-        createObj.put(SequoiadbConstants.FIELD_INDEX, obj);
-        hint.put(SequoiadbConstants.IXM_FIELD_NAME_SORT_BUFFER_SIZE,
-                sortBufferSize);
-        SDBMessage rtn = adminCommand(commandString, createObj, dummyObj,
-                dummyObj, hint, -1, -1, 0);
 
-        int flags = rtn.getFlags();
-        if (flags != 0) {
+        BSONObject obj = new BasicBSONObject();
+        obj.put(SdbConstants.IXM_KEY, key);
+        obj.put(SdbConstants.IXM_NAME, name);
+        obj.put(SdbConstants.IXM_UNIQUE, isUnique);
+        obj.put(SdbConstants.IXM_ENFORCED, enforced);
+
+        BSONObject createObj = new BasicBSONObject();
+        createObj.put(SdbConstants.FIELD_COLLECTION, collectionFullName);
+        createObj.put(SdbConstants.FIELD_INDEX, obj);
+
+        BSONObject hint = new BasicBSONObject();
+        hint.put(SdbConstants.IXM_FIELD_NAME_SORT_BUFFER_SIZE,
+                sortBufferSize);
+
+        AdminRequest request = new AdminRequest(AdminCommand.CREATE_INDEX, createObj, hint);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+
+        if (response.getFlag() != 0) {
             String msg = "name = " + name +
                     ", key = " + key +
                     ", isUnique = " + isUnique;
-            throw new BaseException(flags, msg);
+            sequoiadb.throwIfError(response, msg);
         }
+
         sequoiadb.upsertCache(collectionFullName);
     }
 
     /**
-     * @fn void createIndex(String name, String key, boolean isUnique,
-     *     boolean enforced, int sortBufferSize)
-     * @brief Create a index with name and key
-     * @param name
-     *            The index name
-     * @param key
-     *            The index key, like: {"key":1/-1}, ASC(1)/DESC(-1)
-     * @param isUnique
-     *            Whether the index elements are unique or not
-     * @param enforced
-     *            Whether the index is enforced unique This element is
-     *            meaningful when isUnique is set to true
-     * @param sortBufferSize
-     *            The size(MB) of sort buffer used when creating index,
-    zero means don't use sort buffer
-     * @exception com.sequoiadb.exception.BaseException
+     * Create a index with name and key.
+     *
+     * @param name           The index name
+     * @param key            The index key, like: {"key":1/-1}, ASC(1)/DESC(-1)
+     * @param isUnique       Whether the index elements are unique or not
+     * @param enforced       Whether the index is enforced unique This element is
+     *                       meaningful when isUnique is set to true
+     * @param sortBufferSize The size(MB) of sort buffer used when creating index,
+     *                       zero means don't use sort buffer
+     * @throws BaseException If error happens.
      */
     public void createIndex(String name, String key, boolean isUnique,
                             boolean enforced, int sortBufferSize) throws BaseException {
         BSONObject k = null;
-        if (key != null)
+        if (key != null) {
             k = (BSONObject) JSON.parse(key);
+        }
         createIndex(name, k, isUnique, enforced, sortBufferSize);
     }
 
     /**
-     * @fn void createIndex(String name, BSONObject key, boolean isUnique,
-     *     boolean enforced)
-     * @brief Create a index with name and key
-     * @param name
-     *            The index name
-     * @param key
-     *            The index key, like: {"key":1/-1}, ASC(1)/DESC(-1)
-     * @param isUnique
-     *            Whether the index elements are unique or not
-     * @param enforced
-     *            Whether the index is enforced unique This element is
-     *            meaningful when isUnique is set to true
-     * @exception com.sequoiadb.exception.BaseException
+     * Create a index with name and key
+     *
+     * @param name     The index name
+     * @param key      The index key, like: {"key":1/-1}, ASC(1)/DESC(-1)
+     * @param isUnique Whether the index elements are unique or not
+     * @param enforced Whether the index is enforced unique This element is
+     *                 meaningful when isUnique is set to true
+     * @throws BaseException If error happens.
      */
     public void createIndex(String name, BSONObject key, boolean isUnique,
                             boolean enforced) throws BaseException {
         createIndex(name, key, isUnique, enforced,
-                SequoiadbConstants.IXM_SORT_BUFFER_DEFAULT_SIZE);
+                SdbConstants.IXM_SORT_BUFFER_DEFAULT_SIZE);
     }
 
     /**
-     * @fn void createIndex(String name, String key, boolean isUnique, boolean
-     *     enforced)
-     * @brief Create a index with name and key
-     * @param name
-     *            The index name
-     * @param key
-     *            The index key, like: {"key":1/-1}, ASC(1)/DESC(-1)
-     * @param isUnique
-     *            Whether the index elements are unique or not
-     * @param enforced
-     *            Whether the index is enforced unique This element is
-     *            meaningful when isUnique is set to true
-     * @exception com.sequoiadb.exception.BaseException
+     * Create a index with name and key.
+     *
+     * @param name     The index name
+     * @param key      The index keys in JSON format, like: "{\"a\":1, \"b\":-1}"
+     * @param isUnique Whether the index elements are unique or not
+     * @param enforced Whether the index is enforced unique This element is
+     *                 meaningful when isUnique is set to true
+     * @throws BaseException If error happens.
      */
     public void createIndex(String name, String key, boolean isUnique,
                             boolean enforced) throws BaseException {
         BSONObject k = null;
-        if (key != null)
+        if (key != null) {
             k = (BSONObject) JSON.parse(key);
+        }
         createIndex(name, k, isUnique, enforced,
-                SequoiadbConstants.IXM_SORT_BUFFER_DEFAULT_SIZE);
+                SdbConstants.IXM_SORT_BUFFER_DEFAULT_SIZE);
     }
 
     /**
-     * @fn void createIdIndex(BSONObject options)
-     * @brief Create an id index
+     * Create the id index.
+     *
      * @param options can be empty or specify option. e.g. {SortBufferSize:64}
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public void createIdIndex(BSONObject options) throws BaseException {
         BSONObject tmp = new BasicBSONObject();
-        tmp.put(SequoiadbConstants.FIELD_NAME_NAME,
-                SequoiadbConstants.SDB_ALTER_CRT_ID_INDEX);
+        tmp.put(SdbConstants.FIELD_NAME_NAME,
+                SdbConstants.SDB_ALTER_CRT_ID_INDEX);
         if (options == null || options.isEmpty()) {
-            tmp.put(SequoiadbConstants.FIELD_NAME_ARGS, null);
+            tmp.put(SdbConstants.FIELD_NAME_ARGS, null);
         } else {
-            tmp.put(SequoiadbConstants.FIELD_NAME_ARGS, options);
+            tmp.put(SdbConstants.FIELD_NAME_ARGS, options);
         }
 
 
         BSONObject innerOptions = new BasicBSONObject();
-        innerOptions.put(SequoiadbConstants.FIELD_NAME_ALTER, tmp);
+        innerOptions.put(SdbConstants.FIELD_NAME_ALTER, tmp);
         alterCollection(innerOptions);
     }
 
     /**
-     * @fn void dropIdIndex()
-     * @brief drop an id index
-     * @param null
-     * @exception com.sequoiadb.exception.BaseException
+     * Drop the id index.
+     *
+     * @throws BaseException If error happens.
      */
     public void dropIdIndex() throws BaseException {
         BSONObject tmp = new BasicBSONObject();
-        tmp.put(SequoiadbConstants.FIELD_NAME_NAME,
-                SequoiadbConstants.SDB_ALTER_DROP_ID_INDEX);
-        tmp.put(SequoiadbConstants.FIELD_NAME_ARGS, null);
+        tmp.put(SdbConstants.FIELD_NAME_NAME,
+                SdbConstants.SDB_ALTER_DROP_ID_INDEX);
+        tmp.put(SdbConstants.FIELD_NAME_ARGS, null);
 
         BSONObject options = new BasicBSONObject();
-        options.put(SequoiadbConstants.FIELD_NAME_ALTER, tmp);
+        options.put(SdbConstants.FIELD_NAME_ALTER, tmp);
         alterCollection(options);
     }
 
     /**
-     * @fn void dropIndex(String name)
-     * @brief Remove the named index of current collection
-     * @param name
-     *            The index name
-     * @exception com.sequoiadb.exception.BaseException
+     * Remove the named index of current collection.
+     *
+     * @param name The index name
+     * @throws BaseException If error happens.
      */
     public void dropIndex(String name) throws BaseException {
-        String commandString = SequoiadbConstants.ADMIN_PROMPT
-                + SequoiadbConstants.DROP_INX;
-        BSONObject dummyObj = new BasicBSONObject();
-        BSONObject dropObj = new BasicBSONObject();
         BSONObject index = new BasicBSONObject();
         index.put("", name);
-        dropObj.put(SequoiadbConstants.FIELD_COLLECTION, collectionFullName);
-        dropObj.put(SequoiadbConstants.FIELD_INDEX, index);
 
-        SDBMessage rtn = adminCommand(commandString, dropObj, dummyObj,
-                dummyObj, dummyObj, -1, -1, 0);
+        BSONObject dropObj = new BasicBSONObject();
+        dropObj.put(SdbConstants.FIELD_COLLECTION, collectionFullName);
+        dropObj.put(SdbConstants.FIELD_INDEX, index);
 
-        int flags = rtn.getFlags();
-        if (flags != 0) {
-            throw new BaseException(flags, name);
-        }
+        AdminRequest request = new AdminRequest(AdminCommand.DROP_INDEX, dropObj);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+        sequoiadb.throwIfError(response, name);
         sequoiadb.upsertCache(collectionFullName);
     }
 
     /**
-     * @fn long getCount()
-     * @brief Get the amount of documents in current collection.
+     * Get the amount of documents in current collection.
+     *
      * @return the amount of matching documents
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public long getCount() throws BaseException {
         return getCount("");
     }
 
     /**
-     * @fn long getCount(String matcher)
-     * @brief Get the amount of matching documnets in current collection.
-     * @param matcher
-     *            the matching rule
+     * Get the amount of matching documents in current collection.
+     *
+     * @param matcher the matching rule
      * @return the amount of matching documents
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public long getCount(String matcher) throws BaseException {
         BSONObject con = null;
-        if (matcher != null)
+        if (matcher != null) {
             con = (BSONObject) JSON.parse(matcher);
+        }
         return getCount(con);
     }
 
     /**
-     * @fn long getCount(BSONObject matcher)
-     * @brief Get the amount of matching documents in current collection.
-     * @param matcher
-     *            The matching rule, when condition is null, the return amount contains all the records.
+     * Get the amount of matching documents in current collection.
+     *
+     * @param matcher The matching rule, when condition is null, the return amount contains all the records.
      * @return the amount of matching documents
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public long getCount(BSONObject matcher) throws BaseException {
-        String commandString = SequoiadbConstants.ADMIN_PROMPT
-                + SequoiadbConstants.GET_COUNT;
-        BSONObject dummyObj = new BasicBSONObject();
-        BSONObject newobj = new BasicBSONObject();
-        newobj.put(SequoiadbConstants.FIELD_COLLECTION, collectionFullName);
-        SDBMessage rtnSDBMessage = adminCommand(commandString, matcher,
-                dummyObj, dummyObj, newobj, -1, -1, 0);
-        int flags = rtnSDBMessage.getFlags();
-        if (flags != 0) {
-            throw new BaseException(flags, "matcher = " + matcher);
-        }
-        sequoiadb.upsertCache(collectionFullName);
-        List<BSONObject> rtn = getMoreCommand(rtnSDBMessage);
-        return Long.valueOf(rtn.get(0).get(SequoiadbConstants.FIELD_TOTAL)
-                .toString());
+        return getCount(matcher, null);
     }
 
     /**
-     * @fn long getCount(BSONObject matcher, BSONObject hint)
-     * @brief Get the count of matching BSONObject in current collection
-     * @param matcher
-     *            The matching rule, when condition is null, the return amount contains all the records. 
-     * @param hint
-     *            Specified the index used to scan data. e.g. {"":"ageIndex"} means 
-     *            using index "ageIndex" to scan data(index scan); 
-     *            {"":null} means table scan. when hint is null, 
-     *            database automatically match the optimal index to scan data.
+     * Get the count of matching BSONObject in current collection.
+     *
+     * @param matcher The matching rule, when condition is null, the return amount contains all the records.
+     * @param hint    Specified the index used to scan data. e.g. {"":"ageIndex"} means
+     *                using index "ageIndex" to scan data(index scan);
+     *                {"":null} means table scan. when hint is null,
+     *                database automatically match the optimal index to scan data.
      * @return The count of matching BSONObjects
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public long getCount(BSONObject matcher, BSONObject hint) throws BaseException {
-        String commandString = SequoiadbConstants.ADMIN_PROMPT
-                + SequoiadbConstants.GET_COUNT;
-        BSONObject dummyObj = new BasicBSONObject();
-        BSONObject newobj = new BasicBSONObject();
-        newobj.put(SequoiadbConstants.FIELD_COLLECTION, collectionFullName);
+        BSONObject newHint = new BasicBSONObject();
+        newHint.put(SdbConstants.FIELD_COLLECTION, collectionFullName);
         if (null != hint) {
-            try {
-                newobj.put(SequoiadbConstants.FIELD_NAME_HINT, hint);
-            } catch (Exception e) {
-                throw new BaseException(SDBError.SDB_SYS, e);
-            }
+            newHint.put(SdbConstants.FIELD_NAME_HINT, hint);
         }
-        SDBMessage rtnSDBMessage = adminCommand(commandString, matcher,
-                dummyObj, dummyObj, newobj, -1, -1, 0);
-        int flags = rtnSDBMessage.getFlags();
-        if (flags != 0) {
+
+        AdminRequest request = new AdminRequest(AdminCommand.GET_COUNT, matcher, newHint);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+
+        if (response.getFlag() != 0) {
             String msg = "condition = " + matcher +
                     ", hint = " + hint;
-            throw new BaseException(flags, msg);
+            sequoiadb.throwIfError(response, msg);
         }
+
         sequoiadb.upsertCache(collectionFullName);
-        List<BSONObject> rtn = getMoreCommand(rtnSDBMessage);
-        return Long.valueOf(rtn.get(0).get(SequoiadbConstants.FIELD_TOTAL)
-                .toString());
+
+        DBCursor cursor = new DBCursor(response, sequoiadb);
+        BSONObject object;
+        try {
+            object = cursor.getNext();
+        } finally {
+            cursor.close();
+        }
+        return (Long) object.get(SdbConstants.FIELD_TOTAL);
     }
 
-	/*
-     * @fn void rename(String newName)
-	 * @brief rename the current collection by new name
-	 * @param newName
-	 *            The new name of current DBCollection
-	 * @exception com.sequoiadb.exception.BaseException
-	 */
-    /*
-    public void rename(String newName) throws BaseException {
-		String commandString = SequoiadbConstants.ADMIN_PROMPT
-				+ SequoiadbConstants.RENAME_COLLECTION;
-		BSONObject dummyObj = new BasicBSONObject();
-		BSONObject obj = new BasicBSONObject();
-		obj.put(SequoiadbConstants.FIELD_NAME_COLLECTIONSPACE, csName);
-		obj.put(SequoiadbConstants.FIELD_NAME_OLDNAME, this.name);
-		obj.put(SequoiadbConstants.FIELD_NAME_NEWNAME, newName);
-		SDBMessage rtnSDBMessage = adminCommand(commandString, obj, dummyObj,
-				dummyObj, dummyObj, -1, -1);
-		int flags = rtnSDBMessage.getFlags();
-		if (flags != 0) {
-			throw new BaseException(flags, newName);
-		}
-		this.name = newName;
-		this.collectionFullName = csName + "." + this.name;
-	}*/
-
     /**
-     * @fn void split(String sourceGroupName, String destGroupName,
-     *                BSONObject splitCondition, BSONObject splitEndCondition)
-     * @brief Split the specified collection from source group to target group by range.
-     * @param sourceGroupName
-     *            the source group name
-     * @param destGroupName
-     *            the destination group name
-     * @param splitCondition
-     *            the split condition
-     * @param splitEndCondition
-     *            the split end condition or null
-     *            eg:If we create a collection with the option {ShardingKey:{"age":1},ShardingType:"hash",Partition:2^10},
-     *               we can fill {age:30} as the splitCondition, and fill {age:60} as the splitEndCondition. when split, 
-     *               the target group will get the records whose age's hash value are in [30,60). If splitEndCondition is null,
-     *               they are in [30,max).
-     * @exception com.sequoiadb.exception.BaseException
+     * Split the specified collection from source group to target group by range.
+     *
+     * @param sourceGroupName   the source group name
+     * @param destGroupName     the destination group name
+     * @param splitCondition    the split condition
+     * @param splitEndCondition the split end condition or null, only usable when "ShardingType" is "range".
+     *                          eg:If we create a collection with the option {ShardingKey:{"age":1},ShardingType:"range"},
+     *                          we can fill {age:30} as the splitCondition, and fill {age:60} as the splitEndCondition. when split,
+     *                          the target group will get the records whose age's hash value are in [30,60). If splitEndCondition is null,
+     *                          they are in [30,max).
+     * @throws BaseException If error happens.
      */
     public void split(String sourceGroupName, String destGroupName,
                       BSONObject splitCondition, BSONObject splitEndCondition) throws BaseException {
@@ -1584,39 +1462,37 @@ public class DBCollection {
                 null == splitCondition) {
             throw new BaseException(SDBError.SDB_INVALIDARG, "null parameter");
         }
+
         BSONObject obj = new BasicBSONObject();
-        obj.put(SequoiadbConstants.FIELD_NAME_NAME, collectionFullName);
-        obj.put(SequoiadbConstants.FIELD_NAME_SOURCE, sourceGroupName);
-        obj.put(SequoiadbConstants.FIELD_NAME_TARGET, destGroupName);
-        obj.put(SequoiadbConstants.FIELD_NAME_SPLITQUERY, splitCondition);
-        if (null != splitEndCondition)
-            obj.put(SequoiadbConstants.FIELD_NAME_SPLITENDQUERY, splitEndCondition);
-        String commandString = SequoiadbConstants.ADMIN_PROMPT
-                + SequoiadbConstants.CMD_NAME_SPLIT;
-        BSONObject dummy = new BasicBSONObject();
-        SDBMessage rtnSDBMessage = adminCommand(commandString, obj, dummy,
-                dummy, dummy, -1, -1, 0);
-        int flags = rtnSDBMessage.getFlags();
-        if (flags != 0) {
+        obj.put(SdbConstants.FIELD_NAME_NAME, collectionFullName);
+        obj.put(SdbConstants.FIELD_NAME_SOURCE, sourceGroupName);
+        obj.put(SdbConstants.FIELD_NAME_TARGET, destGroupName);
+        obj.put(SdbConstants.FIELD_NAME_SPLITQUERY, splitCondition);
+        if (null != splitEndCondition) {
+            obj.put(SdbConstants.FIELD_NAME_SPLITENDQUERY, splitEndCondition);
+        }
+
+        AdminRequest request = new AdminRequest(AdminCommand.SPLIT, obj);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+
+        if (response.getFlag() != 0) {
             String msg = "sourceGroupName = " + sourceGroupName +
                     ", destGroupName = " + destGroupName +
                     ", splitCondition = " + splitCondition +
                     ", splitEndCondition = " + splitEndCondition;
-            throw new BaseException(flags, msg);
+            sequoiadb.throwIfError(response, msg);
         }
+
         sequoiadb.upsertCache(collectionFullName);
     }
 
     /**
-     * @fn void split(String sourceGroupName, String destGroupName, double percent)
-     * @brief Split the specified collection from source group to target group by percent.
-     * @param sourceGroupName
-     *            the source group name
-     * @param destGroupName
-     *            the destination group name
-     * @param percent
-     *            the split percent, Range:(0,100]
-     * @exception com.sequoiadb.exception.BaseException
+     * Split the specified collection from source group to target group by percent.
+     *
+     * @param sourceGroupName the source group name
+     * @param destGroupName   the destination group name
+     * @param percent         the split percent, Range:(0,100]
+     * @throws BaseException If error happens.
      */
     public void split(String sourceGroupName, String destGroupName,
                       double percent) throws BaseException {
@@ -1625,45 +1501,41 @@ public class DBCollection {
                 (percent <= 0.0 || percent > 100.0)) {
             throw new BaseException(SDBError.SDB_INVALIDARG);
         }
+
         BSONObject obj = new BasicBSONObject();
-        obj.put(SequoiadbConstants.FIELD_NAME_NAME, collectionFullName);
-        obj.put(SequoiadbConstants.FIELD_NAME_SOURCE, sourceGroupName);
-        obj.put(SequoiadbConstants.FIELD_NAME_TARGET, destGroupName);
-        obj.put(SequoiadbConstants.FIELD_NAME_SPLITPERCENT, percent);
-        String commandString = SequoiadbConstants.ADMIN_PROMPT
-                + SequoiadbConstants.CMD_NAME_SPLIT;
-        BSONObject dummy = new BasicBSONObject();
-        SDBMessage rtnSDBMessage = adminCommand(commandString, obj, dummy,
-                dummy, dummy, -1, -1, 0);
-        int flags = rtnSDBMessage.getFlags();
-        if (flags != 0) {
+        obj.put(SdbConstants.FIELD_NAME_NAME, collectionFullName);
+        obj.put(SdbConstants.FIELD_NAME_SOURCE, sourceGroupName);
+        obj.put(SdbConstants.FIELD_NAME_TARGET, destGroupName);
+        obj.put(SdbConstants.FIELD_NAME_SPLITPERCENT, percent);
+
+        AdminRequest request = new AdminRequest(AdminCommand.SPLIT, obj);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+
+        if (response.getFlag() != 0) {
             String msg = "sourceGroupName = " + sourceGroupName +
                     ", destGroupName = " + destGroupName +
                     ", percent = " + percent;
-            throw new BaseException(flags, msg);
+            sequoiadb.throwIfError(response, msg);
         }
+
         sequoiadb.upsertCache(collectionFullName);
     }
 
     /**
-     * @fn long splitAsync(String sourceGroupName, String destGroupName,
-     *                     BSONObject splitCondition, BSONObject splitEndCondition)
-     * @brief Split the specified collection from source group to target group by range asynchronously.
-     * @param sourceGroupName
-     *            the source group name
-     * @param destGroupName
-     *            the destination group name
-     * @param splitCondition
-     *            the split condition
-     * @param splitEndCondition
-     *            the split end condition or null
-     *            eg:If we create a collection with the option {ShardingKey:{"age":1},ShardingType:"hash",Partition:2^10},
-     *               we can fill {age:30} as the splitCondition, and fill {age:60} as the splitEndCondition. when split, 
-     *               the targe group will get the records whose age's hash values are in [30,60). If splitEndCondition is null,
-     *               they are in [30,max).
-     * @return return the task id, we can use the return id to manage the sharding which is run backgroup.
-     * @exception com.sequoiadb.exception.BaseException
-     * @see listTask, cancelTask
+     * Split the specified collection from source group to target group by range asynchronously.
+     *
+     * @param sourceGroupName   the source group name
+     * @param destGroupName     the destination group name
+     * @param splitCondition    the split condition
+     * @param splitEndCondition the split end condition or null, only usable when "ShardingType" is "range".
+     *                          eg:If we create a collection with the option {ShardingKey:{"age":1},ShardingType:"range"},
+     *                          we can fill {age:30} as the splitCondition, and fill {age:60} as the splitEndCondition. when split,
+     *                          the target group will get the records whose age's hash values are in [30,60). If splitEndCondition is null,
+     *                          they are in [30,max).
+     * @return return the task id, we can use the return id to manage the sharding which is run background.
+     * @throws BaseException If error happens.
+     * @see Sequoiadb#listTasks(BSONObject, BSONObject, BSONObject, BSONObject)
+     * @see Sequoiadb#cancelTask(long, boolean)
      */
     public long splitAsync(String sourceGroupName,
                            String destGroupName,
@@ -1674,57 +1546,57 @@ public class DBCollection {
                 null == splitCondition) {
             throw new BaseException(SDBError.SDB_INVALIDARG);
         }
+
         BSONObject obj = new BasicBSONObject();
-        obj.put(SequoiadbConstants.FIELD_NAME_NAME, collectionFullName);
-        obj.put(SequoiadbConstants.FIELD_NAME_SOURCE, sourceGroupName);
-        obj.put(SequoiadbConstants.FIELD_NAME_TARGET, destGroupName);
-        obj.put(SequoiadbConstants.FIELD_NAME_SPLITQUERY, splitCondition);
-        if (null != splitEndCondition)
-            obj.put(SequoiadbConstants.FIELD_NAME_SPLITENDQUERY, splitEndCondition);
-        obj.put(SequoiadbConstants.FIELD_NAME_ASYNC, true);
-        String commandString = SequoiadbConstants.ADMIN_PROMPT
-                + SequoiadbConstants.CMD_NAME_SPLIT;
-        BSONObject dummy = new BasicBSONObject();
-        SDBMessage rtnSDBMessage = adminCommand(commandString, obj, dummy,
-                dummy, dummy, -1, -1, 0);
-        int flags = rtnSDBMessage.getFlags();
-        if (flags != 0) {
+        obj.put(SdbConstants.FIELD_NAME_NAME, collectionFullName);
+        obj.put(SdbConstants.FIELD_NAME_ASYNC, true);
+        obj.put(SdbConstants.FIELD_NAME_SOURCE, sourceGroupName);
+        obj.put(SdbConstants.FIELD_NAME_TARGET, destGroupName);
+        obj.put(SdbConstants.FIELD_NAME_SPLITQUERY, splitCondition);
+        if (null != splitEndCondition) {
+            obj.put(SdbConstants.FIELD_NAME_SPLITENDQUERY, splitEndCondition);
+        }
+
+        AdminRequest request = new AdminRequest(AdminCommand.SPLIT, obj);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+
+        if (response.getFlag() != 0) {
             String msg = "sourceGroupName = " + sourceGroupName +
                     ", destGroupName = " + destGroupName +
                     ", splitCondition = " + splitCondition +
                     ", splitEndCondition = " + splitEndCondition;
-            throw new BaseException(flags, msg);
+            sequoiadb.throwIfError(response, msg);
         }
-        DBCursor cursor = new DBCursor(rtnSDBMessage, this);
+
+        DBCursor cursor = new DBCursor(response, sequoiadb);
         if (!cursor.hasNext()) {
             throw new BaseException(SDBError.SDB_CAT_TASK_NOTFOUND);
         }
+
         BSONObject result;
         try {
             result = cursor.getNext();
         } finally {
             cursor.close();
         }
-        boolean flag = result.containsField(SequoiadbConstants.FIELD_NAME_TASKID);
+        boolean flag = result.containsField(SdbConstants.FIELD_NAME_TASKID);
         if (!flag) {
             throw new BaseException(SDBError.SDB_CAT_TASK_NOTFOUND);
         }
+
         sequoiadb.upsertCache(collectionFullName);
-        long taskid = (Long) result.get(SequoiadbConstants.FIELD_NAME_TASKID);
+        long taskid = (Long) result.get(SdbConstants.FIELD_NAME_TASKID);
         return taskid;
     }
 
     /**
-     * @fn long splitAsync(String sourceGroupName, String destGroupName, double percent)
-     * @brief Split the specified collection from source group to target group by percent asynchronously.
-     * @param sourceGroupName
-     *            the source group name
-     * @param destGroupName
-     *            the destination group name
-     * @param percent
-     *            the split percent, Range:(0,100]
-     * @return return the task id, we can use the return id to manage the sharding which is run backgroup.
-     * @exception com.sequoiadb.exception.BaseException
+     * Split the specified collection from source group to target group by percent asynchronously.
+     *
+     * @param sourceGroupName the source group name
+     * @param destGroupName   the destination group name
+     * @param percent         the split percent, Range:(0,100]
+     * @return return the task id, we can use the return id to manage the sharding which is run background.
+     * @throws BaseException If error happens.
      */
     public long splitAsync(String sourceGroupName, String destGroupName,
                            double percent) throws BaseException {
@@ -1733,252 +1605,226 @@ public class DBCollection {
                 (percent <= 0.0 || percent > 100.0)) {
             throw new BaseException(SDBError.SDB_INVALIDARG);
         }
+
         BSONObject obj = new BasicBSONObject();
-        obj.put(SequoiadbConstants.FIELD_NAME_NAME, collectionFullName);
-        obj.put(SequoiadbConstants.FIELD_NAME_SOURCE, sourceGroupName);
-        obj.put(SequoiadbConstants.FIELD_NAME_TARGET, destGroupName);
-        obj.put(SequoiadbConstants.FIELD_NAME_SPLITPERCENT, percent);
-        obj.put(SequoiadbConstants.FIELD_NAME_ASYNC, true);
-        String commandString = SequoiadbConstants.ADMIN_PROMPT
-                + SequoiadbConstants.CMD_NAME_SPLIT;
-        BSONObject dummy = new BasicBSONObject();
-        SDBMessage rtnSDBMessage = adminCommand(commandString, obj, dummy,
-                dummy, dummy, 0, -1, 0);
-        int flags = rtnSDBMessage.getFlags();
-        if (flags != 0) {
+        obj.put(SdbConstants.FIELD_NAME_NAME, collectionFullName);
+        obj.put(SdbConstants.FIELD_NAME_ASYNC, true);
+        obj.put(SdbConstants.FIELD_NAME_SOURCE, sourceGroupName);
+        obj.put(SdbConstants.FIELD_NAME_TARGET, destGroupName);
+        obj.put(SdbConstants.FIELD_NAME_SPLITPERCENT, percent);
+
+        AdminRequest request = new AdminRequest(AdminCommand.SPLIT, obj);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+
+        if (response.getFlag() != 0) {
             String msg = "sourceGroupName = " + sourceGroupName +
                     ", destGroupName = " + destGroupName +
                     ", percent = " + percent;
-            throw new BaseException(flags, msg);
+            sequoiadb.throwIfError(response, msg);
         }
-        DBCursor cursor = new DBCursor(rtnSDBMessage, this);
-        if (!cursor.hasNext())
+
+        DBCursor cursor = new DBCursor(response, sequoiadb);
+        if (!cursor.hasNext()) {
             throw new BaseException(SDBError.SDB_CAT_TASK_NOTFOUND);
+        }
+
         BSONObject result;
         try {
             result = cursor.getNext();
         } finally {
             cursor.close();
         }
-        boolean flag = result.containsField(SequoiadbConstants.FIELD_NAME_TASKID);
-        if (!flag)
+        boolean flag = result.containsField(SdbConstants.FIELD_NAME_TASKID);
+        if (!flag) {
             throw new BaseException(SDBError.SDB_CAT_TASK_NOTFOUND);
+        }
+
         sequoiadb.upsertCache(collectionFullName);
-        long taskid = (Long) result.get(SequoiadbConstants.FIELD_NAME_TASKID);
+
+        long taskid = (Long) result.get(SdbConstants.FIELD_NAME_TASKID);
         return taskid;
     }
 
     /**
-     * @fn DBCursor aggregate(List<BSONObject> obj)
-     * @brief Execute aggregate operation in current collection
-     * @param obj
-     *            The Bson object of rule list, can't be null
-     * @exception com.sequoiadb.exception.BaseException
+     * Execute aggregate operation in current collection.
+     *
+     * @param objs The Bson object of rule list, can't be null
+     * @throws BaseException If error happens.
      */
-    public DBCursor aggregate(List<BSONObject> obj)
+    public DBCursor aggregate(List<BSONObject> objs)
             throws BaseException {
-
-        if (obj == null || obj.size() == 0) {
+        if (objs == null || objs.size() == 0) {
             throw new BaseException(SDBError.SDB_INVALIDARG);
         }
 
-        ensureInsertBuffer();
+        AggregateRequest request = new AggregateRequest(collectionFullName, objs);
+        SdbReply response = sequoiadb.requestAndResponse(request);
 
-        int messageLength = SDBMessageHelper.buildAggrRequest(insertBuffer,
-                sequoiadb.getNextRequstID(), collectionFullName, obj);
-
-        connection.sendMessage(insertBuffer.array(), 0, messageLength);
-
-        ByteBuffer byteBuffer = connection.receiveMessage(sequoiadb.endianConvert);
-        SDBMessage rtnSDBMessage = SDBMessageHelper.msgExtractReply(byteBuffer);
-        if (rtnSDBMessage.getOperationCode() != Operation.OP_AGGREGATE_RES) {
-            throw new BaseException(SDBError.SDB_UNKNOWN_MESSAGE,
-                    rtnSDBMessage.getOperationCode().toString());
-        }
-        DBCursor cursor = null;
-        int flags = rtnSDBMessage.getFlags();
+        int flags = response.getFlag();
         if (flags != 0) {
-            if (flags == SequoiadbConstants.SDB_DMS_EOC) {
-                return cursor;
+            if (flags == SDBError.SDB_DMS_EOC.getErrorCode()) {
+                return null;
             } else {
-                throw new BaseException(flags, obj.toString());
+                sequoiadb.throwIfError(response, objs);
             }
         }
+
         sequoiadb.upsertCache(collectionFullName);
-        cursor = new DBCursor(rtnSDBMessage, this);
+
+        DBCursor cursor = new DBCursor(response, sequoiadb);
         return cursor;
     }
 
     /**
-     * @fn DBCursor getQueryMeta(BSONObject matcher, BSONObject
-     *     orderBy, BSONObject hint, long skipRows, long returnRows, int flag)
-     * @brief Get index blocks' or data blocks' information for concurrent query
-     * @param matcher
-     *            the matching rule, return all the meta information if null
-     * @param orderBy
-     *            the ordered rule, never sort if null
-     * @param hint
-     *            Specified the index used to scan data. e.g. {"":"ageIndex"} means 
-     *            using index "ageIndex" to scan data(index scan); 
-     *            {"":null} means table scan. when hint is null, 
-     *            database automatically match the optimal index to scan data.
-     * @param skipRows
-     *            The rows to be skipped
-     * @param returnRows
-     *            return the specified amount of documents, 
-     *            when returnRows is 0, return nothing, 
-     *            when returnRows is -1, return all the documents
-     * @param flag
-     *            The flag to use which form for record data
-     *            0: bson stream
-     *            1: binary data stream, form: col1|col2|col3
-     * @return DBCursor of data
-     * @exception com.sequoiadb.exception.BaseException
+     * Get index blocks' or data blocks' information for concurrent query.
      *
+     * @param matcher    the matching rule, return all the meta information if null
+     * @param orderBy    the ordered rule, never sort if null
+     * @param hint       Specified the index used to scan data. e.g. {"":"ageIndex"} means
+     *                   using index "ageIndex" to scan data(index scan);
+     *                   {"":null} means table scan. when hint is null,
+     *                   database automatically match the optimal index to scan data.
+     * @param skipRows   The rows to be skipped
+     * @param returnRows return the specified amount of documents,
+     *                   when returnRows is 0, return nothing,
+     *                   when returnRows is -1, return all the documents
+     * @param flag       The flag to use which form for record data
+     *                   0: bson stream
+     *                   1: binary data stream, form: col1|col2|col3
+     * @return DBCursor of data
+     * @throws BaseException If error happens.
      */
     public DBCursor getQueryMeta(BSONObject matcher, BSONObject orderBy,
                                  BSONObject hint, long skipRows,
                                  long returnRows, int flag) throws BaseException {
-        BSONObject dummy = new BasicBSONObject();
-        if (matcher == null)
-            matcher = dummy;
-        if (orderBy == null)
-            orderBy = dummy;
-        if (returnRows < 0) {
-            returnRows = -1;
-        }
-
         BSONObject newHint = new BasicBSONObject();
         newHint.put("Collection", this.collectionFullName);
         if (null == hint || hint.isEmpty()) {
-            newHint.put("Hint", dummy);
+            BSONObject empty = new BasicBSONObject();
+            newHint.put("Hint", empty);
         } else {
             newHint.put("Hint", hint);
         }
 
-        String command = SequoiadbConstants.ADMIN_PROMPT + SequoiadbConstants.GET_QUERYMETA;
-        SDBMessage rtnSDBMessage = adminCommand(command, matcher, dummy, orderBy, newHint,
+        QueryRequest request = new QueryRequest(AdminCommand.GET_QUERYMETA, matcher, null, orderBy, newHint,
                 skipRows, returnRows, flag);
+        SdbReply response = sequoiadb.requestAndResponse(request);
 
-        DBCursor cursor = null;
-        int flags = rtnSDBMessage.getFlags();
+        int flags = response.getFlag();
         if (flags != 0) {
-            if (flags == SequoiadbConstants.SDB_DMS_EOC) {
-                return cursor;
+            if (flags == SDBError.SDB_DMS_EOC.getErrorCode()) {
+                return null;
             } else {
                 String msg = "query = " + matcher +
                         ", hint = " + hint +
                         ", orderBy = " + orderBy +
                         ", skipRows = " + skipRows +
                         ", returnRows = " + returnRows;
-                throw new BaseException(flags, msg);
+                sequoiadb.throwIfError(response, msg);
             }
         }
+
         sequoiadb.upsertCache(collectionFullName);
-        cursor = new DBCursor(rtnSDBMessage, this);
+
+        DBCursor cursor = new DBCursor(response, sequoiadb);
         return cursor;
     }
 
     /**
-     * @fn void attachCollection( String subClFullName,BSONObject options )
-     * @brief Attach the specified collection.
-     * @param subClFullName
-     *            The full name of the subcollection
-     * @param options
-     *            The low boudary and up boudary
-     *            eg: {"LowBound":{a:1},"UpBound":{a:100}}
-     * @exception com.sequoiadb.exception.BaseException
+     * Attach the specified collection.
+     *
+     * @param subClFullName The full name of the sub-collection
+     * @param options       The low boundary and up boundary
+     *                      eg: {"LowBound":{a:1},"UpBound":{a:100}}
+     * @throws BaseException If error happens.
      */
     public void attachCollection(String subClFullName, BSONObject options) throws BaseException {
         if (null == subClFullName || subClFullName.equals("") ||
                 null == options ||
                 null == collectionFullName || collectionFullName.equals("")) {
-            throw new BaseException(SDBError.SDB_INVALIDARG);
+            throw new BaseException(SDBError.SDB_INVALIDARG, "sub collection name or options is empty or null");
         }
-        String command = SequoiadbConstants.ADMIN_PROMPT + SequoiadbConstants.CMD_NAME_ATTACH_CL;
-        BSONObject newobj = new BasicBSONObject();
-        newobj.put(SequoiadbConstants.FIELD_NAME_NAME, collectionFullName);
-        newobj.put(SequoiadbConstants.FIELD_NAME_SUBCLNAME, subClFullName);
-        for (String key : options.keySet()) {
-            newobj.put(key, options.get(key));
-        }
-        SDBMessage rtnSDBMessage = adminCommand(command, newobj, null, null, null,
-                0, -1, 0);
-        int flags = rtnSDBMessage.getFlags();
-        if (0 != flags) {
+
+        BSONObject newOptions = new BasicBSONObject();
+        newOptions.put(SdbConstants.FIELD_NAME_NAME, collectionFullName);
+        newOptions.put(SdbConstants.FIELD_NAME_SUBCLNAME, subClFullName);
+        newOptions.putAll(options);
+
+        AdminRequest request = new AdminRequest(AdminCommand.ATTACH_CL, newOptions);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+
+        if (response.getFlag() != 0) {
             String msg = "subCollectionName = " + subClFullName +
                     ", options = " + options;
-            throw new BaseException(flags, msg);
+            sequoiadb.throwIfError(response, msg);
         }
+
         sequoiadb.upsertCache(collectionFullName);
     }
 
     /**
-     * @fn void detachCollection( String subClFullName )
-     * @brief Dettach the specified collection.
-     * @param subClFullName
-     *            The full name of the subcollection
-     * @exception com.sequoiadb.exception.BaseException
+     * Detach the specified collection.
+     *
+     * @param subClFullName The full name of the sub-collection
+     * @throws BaseException If error happens.
      */
     public void detachCollection(String subClFullName) throws BaseException {
         if (null == subClFullName || subClFullName.equals("") ||
                 null == collectionFullName || collectionFullName.equals("")) {
             throw new BaseException(SDBError.SDB_INVALIDARG, subClFullName);
         }
-        String command = SequoiadbConstants.ADMIN_PROMPT + SequoiadbConstants.CMD_NAME_DETACH_CL;
-        BSONObject newobj = new BasicBSONObject();
-        newobj.put(SequoiadbConstants.FIELD_NAME_NAME, collectionFullName);
-        newobj.put(SequoiadbConstants.FIELD_NAME_SUBCLNAME, subClFullName);
-        SDBMessage rtnSDBMessage = adminCommand(command, newobj, null, null, null,
-                0, -1, 0);
-        int flags = rtnSDBMessage.getFlags();
-        if (0 != flags) {
-            throw new BaseException(flags, subClFullName);
-        }
+
+        BSONObject options = new BasicBSONObject();
+        options.put(SdbConstants.FIELD_NAME_NAME, collectionFullName);
+        options.put(SdbConstants.FIELD_NAME_SUBCLNAME, subClFullName);
+
+        AdminRequest request = new AdminRequest(AdminCommand.DETACH_CL, options);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+        sequoiadb.throwIfError(response, subClFullName);
         sequoiadb.upsertCache(collectionFullName);
     }
 
     /**
-     * @fn void alterCollection ( BSONObject options )
-     * @brief Alter the attributes of current collection.
+     * Alter the attributes of current collection.
+     * Can't alter attributes about split in partition collection; After altering a collection to
+     * be a partition collection, need to split this collection manually.
+     *
      * @param options The options for altering current collection are as below:
-     *<ul>
-     *<li>ReplSize     : Assign how many replica nodes need to be synchronized when a write request(insert, update, etc) is executed
-     *<li>ShardingKey   : Assign the sharding key
-     *<li>ShardingType        : Assign the sharding type
-     *<li>Partition        : When the ShardingType is "hash", need to assign Partition, it's the bucket number for hash, the range is [2^3,2^20].
-     *                       e.g. {RepliSize:0, ShardingKey:{a:1}, ShardingType:"hash", Partition:1024}
-     *</ul>
-     * @note Can't alter attributes about split in partition collection; After altering a collection to
-     *       be a partition collection, need to split this collection manually
-     * @exception com.sequoiadb.exception.BaseException
+     *                <ul>
+     *                <li>ReplSize     : Assign how many replica nodes need to be synchronized when a write request(insert, update, etc) is executed
+     *                <li>ShardingKey   : Assign the sharding key
+     *                <li>ShardingType        : Assign the sharding type
+     *                <li>Partition        : When the ShardingType is "hash", need to assign Partition, it's the bucket number for hash, the range is [2^3,2^20].
+     *                e.g. {RepliSize:0, ShardingKey:{a:1}, ShardingType:"hash", Partition:1024}
+     *                </ul>
+     * @throws BaseException If error happens.
      */
     public void alterCollection(BSONObject options) throws BaseException {
         if (null == options) {
             throw new BaseException(SDBError.SDB_INVALIDARG, "options is null");
         }
-        String command = SequoiadbConstants.ADMIN_PROMPT + SequoiadbConstants.CMD_NAME_ALTER_COLLECTION;
-        BSONObject newobj = new BasicBSONObject();
-        if (!options.containsField(SequoiadbConstants.FIELD_NAME_ALTER)) {
-            newobj.put(SequoiadbConstants.FIELD_NAME_NAME, collectionFullName);
-            newobj.put(SequoiadbConstants.FIELD_NAME_OPTIONS, options);
+
+        BSONObject newObj = new BasicBSONObject();
+        if (!options.containsField(SdbConstants.FIELD_NAME_ALTER)) {
+            newObj.put(SdbConstants.FIELD_NAME_NAME, collectionFullName);
+            newObj.put(SdbConstants.FIELD_NAME_OPTIONS, options);
         } else {
-            Object tmpAlter = options.get(SequoiadbConstants.FIELD_NAME_ALTER);
+            Object tmpAlter = options.get(SdbConstants.FIELD_NAME_ALTER);
             if (tmpAlter instanceof BasicBSONObject) {
-                newobj.put(SequoiadbConstants.FIELD_NAME_ALTER, tmpAlter);
+                newObj.put(SdbConstants.FIELD_NAME_ALTER, tmpAlter);
             } else {
                 throw new BaseException(SDBError.SDB_INVALIDARG, options.toString());
             }
-            newobj.put(SequoiadbConstants.FIELD_NAME_ALTER_TYPE,
-                    SequoiadbConstants.SDB_ALTER_CL);
-            newobj.put(SequoiadbConstants.FIELD_NAME_VERSION,
-                    SequoiadbConstants.SDB_ALTER_VERSION);
-            newobj.put(SequoiadbConstants.FIELD_NAME_NAME, collectionFullName);
+            newObj.put(SdbConstants.FIELD_NAME_ALTER_TYPE,
+                    SdbConstants.SDB_ALTER_CL);
+            newObj.put(SdbConstants.FIELD_NAME_VERSION,
+                    SdbConstants.SDB_ALTER_VERSION);
+            newObj.put(SdbConstants.FIELD_NAME_NAME, collectionFullName);
 
-            if (options.containsField(SequoiadbConstants.FIELD_NAME_OPTIONS)) {
-                Object tmpOptions = options.get(SequoiadbConstants.FIELD_NAME_OPTIONS);
+            if (options.containsField(SdbConstants.FIELD_NAME_OPTIONS)) {
+                Object tmpOptions = options.get(SdbConstants.FIELD_NAME_OPTIONS);
                 if (tmpOptions instanceof BasicBSONObject) {
-                    newobj.put(SequoiadbConstants.FIELD_NAME_OPTIONS, tmpOptions);
+                    newObj.put(SdbConstants.FIELD_NAME_OPTIONS, tmpOptions);
                 } else {
                     throw new BaseException(SDBError.SDB_INVALIDARG, options.toString());
                 }
@@ -1986,249 +1832,200 @@ public class DBCollection {
 
         }
 
-        SDBMessage rtnSDBMessage = adminCommand(command, newobj, null, null, null,
-                0, -1, 0);
-        int flags = rtnSDBMessage.getFlags();
-        if (0 != flags) {
-            throw new BaseException(flags, options.toString());
-        }
+        AdminRequest request = new AdminRequest(AdminCommand.ALTER_COLLECTION, newObj);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+        sequoiadb.throwIfError(response, options);
         sequoiadb.upsertCache(collectionFullName);
-    }
-
-    private SDBMessage adminCommand(String commandString, BSONObject query,
-                                    BSONObject selector, BSONObject orderBy, BSONObject hint,
-                                    long skipRows, long returnRows, int flag) throws BaseException {
-        SDBMessage sdbMessage = new SDBMessage();
-        BSONObject dummy = new BasicBSONObject();
-        if (query == null)
-            query = dummy;
-        if (selector == null)
-            selector = dummy;
-        if (orderBy == null)
-            orderBy = dummy;
-        if (hint == null)
-            hint = dummy;
-
-        sdbMessage.setCollectionFullName(commandString);
-
-        sdbMessage.setVersion(1);
-        sdbMessage.setW((short) 0);
-        sdbMessage.setPadding((short) 0);
-        sdbMessage.setFlags(flag);
-        sdbMessage.setNodeID(SequoiadbConstants.ZERO_NODEID);
-        sdbMessage.setRequestID(sequoiadb.getNextRequstID());
-        sdbMessage.setSkipRowsCount(skipRows);
-        sdbMessage.setReturnRowsCount(returnRows);
-        sdbMessage.setMatcher(query);
-        sdbMessage.setSelector(selector);
-        sdbMessage.setOrderBy(orderBy);
-        sdbMessage.setHint(hint);
-        sdbMessage.setOperationCode(Operation.OP_QUERY);
-
-        byte[] request = SDBMessageHelper.buildQueryRequest(sdbMessage,
-                sequoiadb.endianConvert);
-        connection.sendMessage(request);
-
-        ByteBuffer byteBuffer = connection.receiveMessage(sequoiadb.endianConvert);
-        SDBMessage rtnSDBMessage = SDBMessageHelper.msgExtractReply(byteBuffer);
-        SDBMessageHelper.checkMessage(sdbMessage, rtnSDBMessage);
-
-        return rtnSDBMessage;
-    }
-
-    private List<BSONObject> getMoreCommand(SDBMessage rtnSDBMessage)
-            throws BaseException {
-        long reqId = rtnSDBMessage.getRequestID();
-        List<Long> contextIds = rtnSDBMessage.getContextIDList();
-        List<BSONObject> fullList = new ArrayList<BSONObject>();
-        boolean hasMore = true;
-        while (hasMore) {
-            SDBMessage sdbMessage = new SDBMessage();
-            sdbMessage.setNodeID(SequoiadbConstants.ZERO_NODEID);
-            sdbMessage.setContextIDList(contextIds);
-            sdbMessage.setRequestID(reqId);
-            sdbMessage.setNumReturned(-1);
-            sdbMessage.setOperationCode(Operation.OP_GETMORE);
-
-            byte[] request = SDBMessageHelper.buildGetMoreRequest(sdbMessage,
-                    sequoiadb.endianConvert);
-            connection.sendMessage(request);
-
-            ByteBuffer byteBuffer = connection.receiveMessage(sequoiadb.endianConvert);
-            rtnSDBMessage = SDBMessageHelper.msgExtractReply(byteBuffer);
-            SDBMessageHelper.checkMessage(sdbMessage, rtnSDBMessage);
-
-            int flags = rtnSDBMessage.getFlags();
-            if (flags != 0) {
-                if (flags == SequoiadbConstants.SDB_DMS_EOC) {
-                    hasMore = false;
-                } else {
-                    throw new BaseException(flags);
-                }
-            } else {
-                reqId = rtnSDBMessage.getRequestID();
-                List<BSONObject> objList = rtnSDBMessage.getObjectList();
-                fullList.addAll(objList);
-            }
-        }
-
-        return fullList;
     }
 
     private void _update(int flag, BSONObject matcher, BSONObject modifier,
                          BSONObject hint) throws BaseException {
-        BSONObject dummy = new BasicBSONObject();
-        if (matcher == null)
-            matcher = dummy;
-        if (modifier == null)
-            modifier = dummy;
-        if (hint == null)
-            hint = dummy;
-        SDBMessage sdbMessage = new SDBMessage();
-        sdbMessage.setVersion(1);
-        sdbMessage.setW((short) 0);
-        sdbMessage.setPadding((short) 0);
-        sdbMessage.setFlags(flag);
-        sdbMessage.setNodeID(SequoiadbConstants.ZERO_NODEID);
-        sdbMessage.setCollectionFullName(collectionFullName);
-        sdbMessage.setRequestID(sequoiadb.getNextRequstID());
-        sdbMessage.setMatcher(matcher);
-        sdbMessage.setModifier(modifier);
-        sdbMessage.setHint(hint);
-        sdbMessage.setOperationCode(Operation.OP_UPDATE);
+        UpdateRequest request = new UpdateRequest(collectionFullName, matcher, modifier, hint, flag);
+        SdbReply response = sequoiadb.requestAndResponse(request);
 
-        byte[] request = SDBMessageHelper.buildUpdateRequest(sdbMessage,
-                sequoiadb.endianConvert);
-        connection.sendMessage(request);
-
-        ByteBuffer byteBuffer = connection.receiveMessage(sequoiadb.endianConvert);
-        SDBMessage rtnSDBMessage = SDBMessageHelper.msgExtractReply(byteBuffer);
-        SDBMessageHelper.checkMessage(sdbMessage, rtnSDBMessage);
-        int flags = rtnSDBMessage.getFlags();
-        if (flags != 0) {
+        if (response.getFlag() != 0) {
             String msg = "matcher = " + matcher +
                     ", modifier = " + modifier +
                     ", hint = " + hint;
-            throw new BaseException(flags, msg);
+            sequoiadb.throwIfError(response, msg);
         }
+
         sequoiadb.upsertCache(collectionFullName);
     }
 
     /**
-     * @fn DBCursor listLobs()
-     * @brief Get all of the lobs in current collection
+     * Get all of the lobs in current collection.
+     *
      * @return DBCursor of lobs
-     * @exception com.sequoiadb.exception.BaseException
+     * @throws BaseException If error happens.
      */
     public DBCursor listLobs() throws BaseException {
-        String commandString = SequoiadbConstants.ADMIN_PROMPT
-                + SequoiadbConstants.LIST_LOBS;
-        BSONObject dummyObj = new BasicBSONObject();
         BSONObject obj = new BasicBSONObject();
-        obj.put(SequoiadbConstants.FIELD_COLLECTION, collectionFullName);
+        obj.put(SdbConstants.FIELD_COLLECTION, collectionFullName);
 
-        SDBMessage rtn = adminCommand(commandString, obj, dummyObj, dummyObj,
-                dummyObj, -1, -1, 0);
-        int flags = rtn.getFlags();
-        DBCursor cursor = null;
-        if (flags != 0) {
-            if (flags == SequoiadbConstants.SDB_DMS_EOC) {
-                return cursor;
+        AdminRequest request = new AdminRequest(AdminCommand.LIST_LOBS, obj);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+
+        int flag = response.getFlag();
+        if (flag != 0) {
+            if (flag == SDBError.SDB_DMS_EOC.getErrorCode()) {
+                return null;
             } else {
-                throw new BaseException(flags);
+                sequoiadb.throwIfError(response);
             }
         }
+
         sequoiadb.upsertCache(collectionFullName);
-        cursor = new DBCursor(rtn, sequoiadb);
+
+        DBCursor cursor = new DBCursor(response, sequoiadb);
         return cursor;
     }
 
     /**
-     * @fn DBLob createLob()
-     * @brief create a lob
+     * Create a lob.
+     *
      * @return DBLob object
-     * @exception com.sequoiadb.exception.BaseException.
+     * @throws BaseException If error happens..
      */
     public DBLob createLob() throws BaseException {
         return createLob(null);
     }
 
     /**
-     * @fn DBLob createLob( ObjectId id )
-     * @brief create a lob with a given id
-     * @param       id   the lob's id. if id is null, it will be generated in 
-     *                   this function
+     * Create a lob with a given id.
+     *
+     * @param id the lob's id. if id is null, it will be generated in
+     *           this function
      * @return DBLob object
-     * @exception com.sequoiadb.exception.BaseException.
+     * @throws BaseException If error happens..
      */
     public DBLob createLob(ObjectId id) throws BaseException {
-        DBLobConcrete lob = new DBLobConcrete(this);
-        lob.open(id, DBLobConcrete.SDB_LOB_CREATEONLY);
+        DBLobImpl lob = new DBLobImpl(this);
+        lob.open(id, DBLobImpl.SDB_LOB_CREATEONLY);
         sequoiadb.upsertCache(collectionFullName);
         return lob;
     }
 
     /**
-     * @fn DBLob openLob( ObjectId id )
-     * @brief open an exist lob with id
-     * @param       id   the lob's id. 
+     * Open an existing lob with id.
+     *
+     * @param id   the lob's id.
+     * @param mode open mode:
+     *             DBLob.SDB_LOB_READ for reading,
+     *             DBLob.SDB_LOB_WRITE for writing.
      * @return DBLob object
-     * @exception com.sequoiadb.exception.BaseException.
+     * @throws BaseException If error happens..
+     */
+    public DBLob openLob(ObjectId id, int mode) throws BaseException {
+        if (mode != DBLob.SDB_LOB_READ && mode != DBLob.SDB_LOB_WRITE) {
+            throw new BaseException(SDBError.SDB_INVALIDARG, "mode is unsupported: " + mode);
+        }
+
+        DBLobImpl lob = new DBLobImpl(this);
+        lob.open(id, mode);
+        sequoiadb.upsertCache(collectionFullName);
+        return lob;
+    }
+
+    /**
+     * Open an existing lob with id.
+     *
+     * @param id the lob's id.
+     * @return DBLob object
+     * @throws BaseException If error happens.
      */
     public DBLob openLob(ObjectId id) throws BaseException {
-        DBLobConcrete lob = new DBLobConcrete(this);
-        lob.open(id, DBLobConcrete.SDB_LOB_READ);
-        sequoiadb.upsertCache(collectionFullName);
-        return lob;
+        return openLob(id, DBLob.SDB_LOB_READ);
     }
 
     /**
-     * @fn removeLob(ObjectId id)
-     * @brief remove an exist lob
-     * @param       id   the lob's id. 
-     * @exception com.sequoiadb.exception.BaseException.
+     * Remove an existing lob.
+     *
+     * @param lobId the lob's id.
+     * @throws BaseException If error happens..
      */
-    public void removeLob(ObjectId lobID) throws BaseException {
+    public void removeLob(ObjectId lobId) throws BaseException {
         BSONObject removeObj = new BasicBSONObject();
-        removeObj.put(SequoiadbConstants.FIELD_COLLECTION,
-                collectionFullName);
-        removeObj.put(SequoiadbConstants.FIELD_NAME_LOB_OID, lobID);
+        removeObj.put(SdbConstants.FIELD_COLLECTION, collectionFullName);
+        removeObj.put(DBLobImpl.FIELD_NAME_LOB_OID, lobId);
 
-        byte[] request = SDBMessageHelper.generateRemoveLobRequest(removeObj,
-                sequoiadb.getNextRequstID(), sequoiadb.endianConvert);
-        connection.sendMessage(request, 0, request.length);
-        ByteBuffer res = connection.receiveMessage(sequoiadb.endianConvert);
-
-        SDBMessage resMessage = SDBMessageHelper.msgExtractLobRemoveReply(res);
-        if (resMessage.getOperationCode() != Operation.MSG_BS_LOB_REMOVE_RES) {
-            throw new BaseException(SDBError.SDB_UNKNOWN_MESSAGE,
-                    resMessage.getOperationCode().toString());
-        }
-        int flag = resMessage.getFlags();
-        if (0 != flag) {
-            throw new BaseException(flag, removeObj.toString());
-        }
+        LobRemoveRequest request = new LobRemoveRequest(removeObj);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+        sequoiadb.throwIfError(response, removeObj);
         sequoiadb.upsertCache(collectionFullName);
     }
 
     /**
-     * @fn void truncate() 
-     * @brief truncate the collection 
-     * @return void
-     * @exception com.sequoiadb.exception.BaseException
+     * Truncate an existing lob.
+     *
+     * @param lobId  the lob's id.
+     * @param length the truncate length
+     * @throws BaseException If error happens.
+     */
+    public void truncateLob(ObjectId lobId, long length) throws BaseException {
+        if (length < 0) {
+            throw new BaseException(SDBError.SDB_INVALIDARG, "Invalid length");
+        }
+
+        BSONObject truncateObj = new BasicBSONObject();
+        truncateObj.put(SdbConstants.FIELD_COLLECTION, collectionFullName);
+        truncateObj.put(DBLobImpl.FIELD_NAME_LOB_OID, lobId);
+        truncateObj.put(DBLobImpl.FIELD_NAME_LOB_LENGTH, length);
+
+        LobTruncateRequest request = new LobTruncateRequest(truncateObj);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+        sequoiadb.throwIfError(response, truncateObj);
+        sequoiadb.upsertCache(collectionFullName);
+    }
+
+    /**
+     * Truncate the collection.
+     *
+     * @throws BaseException If error happens.
      */
     public void truncate() throws BaseException {
-        String commandString = SequoiadbConstants.ADMIN_PROMPT
-                + SequoiadbConstants.CMD_NAME_TRUNCATE;
-        BSONObject dummyObj = new BasicBSONObject();
-        BSONObject query = new BasicBSONObject();
-        query.put(SequoiadbConstants.FIELD_COLLECTION, collectionFullName);
-        SDBMessage rtnSDBMessage = adminCommand(commandString, query,
-                dummyObj, dummyObj, dummyObj, -1, -1, 0);
-        int flags = rtnSDBMessage.getFlags();
-        if (flags != 0) {
-            throw new BaseException(flags, query.toString());
+        BSONObject options = new BasicBSONObject();
+        options.put(SdbConstants.FIELD_COLLECTION, collectionFullName);
+
+        AdminRequest request = new AdminRequest(AdminCommand.TRUNCATE, options);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+        sequoiadb.throwIfError(response, options);
+        sequoiadb.upsertCache(collectionFullName);
+    }
+
+    /**
+     * Pop records from the collection.
+     *
+     * @param options the pop option for the operation, including a record LogicalID,
+     *                and an optional Direction: 1 for forward pop and -1 for backward
+     *                pop
+     * @throws BaseException If error happens.
+     */
+    public void pop(BSONObject options) throws BaseException {
+        if (null == options) {
+            throw new BaseException(SDBError.SDB_INVALIDARG, "options is null");
         }
+
+        BSONObject newObj = new BasicBSONObject();
+        newObj.put(SdbConstants.FIELD_COLLECTION, collectionFullName);
+        Object lidObj = options.get(SdbConstants.FIELD_NAME_LOGICALID);
+        if (lidObj instanceof Integer || lidObj instanceof Long) {
+            newObj.put(SdbConstants.FIELD_NAME_LOGICALID, lidObj);
+        } else {
+            throw new BaseException(SDBError.SDB_INVALIDARG, options.toString());
+        }
+        Object directObj = options.get(SdbConstants.FIELD_NAME_DIRECTION);
+        if (null == directObj) {
+            newObj.put(SdbConstants.FIELD_NAME_DIRECTION, 1);
+        } else if (directObj instanceof Integer) {
+            newObj.put(SdbConstants.FIELD_NAME_DIRECTION, directObj);
+        } else {
+            throw new BaseException(SDBError.SDB_INVALIDARG, options.toString());
+        }
+
+        AdminRequest request = new AdminRequest(AdminCommand.POP, newObj);
+        SdbReply response = sequoiadb.requestAndResponse(request);
+        sequoiadb.throwIfError(response, newObj);
         sequoiadb.upsertCache(collectionFullName);
     }
 }

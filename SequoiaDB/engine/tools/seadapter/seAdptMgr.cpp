@@ -742,7 +742,6 @@ namespace seadapter
                   _idxSessionMgr.stopAllIndexer() ;
                   _localIdxVer = SEADPT_INIT_TEXT_INDEX_VERSION ;
                }
-               goto done ;
             }
          }
 

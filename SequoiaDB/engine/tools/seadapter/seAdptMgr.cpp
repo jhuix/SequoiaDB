@@ -1467,9 +1467,9 @@ namespace seadapter
    {
       std::string::size_type pos = idxMeta.getCappedCLName().find('.') ;
       std::string cappedCLName = idxMeta.getCappedCLName().substr( pos + 1 ) ;
-      std::transform( cappedCLName.begin(), cappedCLName.end(),
-                      cappedCLName.begin(), ::tolower ) ;
-      idxMeta.setESIdxName( cappedCLName.c_str() ) ;
+      std::string esIdx = cappedCLName + "_" + _peerGroupName ;
+      std::transform( esIdx.begin(), esIdx.end(), esIdx.begin(), ::tolower ) ;
+      idxMeta.setESIdxName( esIdx.c_str() ) ;
    }
 
    seAdptCB* sdbGetSeAdapterCB()

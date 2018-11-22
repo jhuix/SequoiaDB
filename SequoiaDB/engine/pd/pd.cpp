@@ -49,9 +49,9 @@
 #include "utilStr.hpp"
 #include "ossIO.hpp"
 
-#ifndef SDB_CLIENT
+#if defined ( SDB_ENGINE ) || defined ( SDB_FMP ) || defined ( SDB_TOOL )
 #include "ossPath.hpp"
-#endif //SDB_CLIENT
+#endif //SDB_ENGINE || SDB_FMP || SDB_TOOL
 
 #include "pdTrace.hpp"
 
@@ -243,7 +243,7 @@ Level:%s"OSS_NEWLINE"PID:%-37dTID:%d"OSS_NEWLINE"Function:%-32sLine:%d"\
 OSS_NEWLINE"File:%s"OSS_NEWLINE"Message:"OSS_NEWLINE"%s"OSS_NEWLINE OSS_NEWLINE;
 /* extern variables */
 
-#ifndef SDB_CLIENT
+#if defined ( SDB_ENGINE ) || defined ( SDB_FMP ) || defined ( SDB_TOOL )
 
 static void _pdRemoveOutOfDataFiles( pdCfgInfo &info )
 {
@@ -304,7 +304,7 @@ static INT32 _pdLogArchive( pdCfgInfo &info )
    return rc ;
 }
 
-#endif // SDB_CLIENT
+#endif //SDB_ENGINE || SDB_FMP || SDB_TOOL
 
 // PD_TRACE_DECLARE_FUNCTION ( SDB_PDLOGFILEWRITE, "pdLogFileWrite" )
 static INT32 pdLogFileWrite ( _pdLogType type, const CHAR *pData )
@@ -319,9 +319,9 @@ static INT32 pdLogFileWrite ( _pdLogType type, const CHAR *pData )
    logFile._mutex.get() ;
 
 
-#ifndef SDB_CLIENT
+#if defined ( SDB_ENGINE ) || defined ( SDB_FMP ) || defined ( SDB_TOOL )
 open:
-#endif // SDB_CLIENT
+#endif //SDB_ENGINE || SDB_FMP || SDB_TOOL
 
    if ( !logFile._logFile.isExist() )
    {
@@ -353,14 +353,14 @@ open:
       logFile._logFile.seekToEnd () ;
    }
 
-#ifndef SDB_CLIENT
+#if defined ( SDB_ENGINE ) || defined ( SDB_FMP ) || defined ( SDB_TOOL )
    if ( logFile._fileSize + dataSize > info._pdFileMaxSize )
    {
       logFile._logFile.Close() ;
       _pdLogArchive( info ) ;
       goto open ;
    }
-#endif // SDB_CLIENT
+#endif //SDB_ENGINE || SDB_FMP || SDB_TOOL
 
    PD_TRACE1 ( SDB_PDLOGFILEWRITE, PD_PACK_RAW ( pData, dataSize ) ) ;
    rc = logFile._logFile.Write ( pData, dataSize ) ;

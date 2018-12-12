@@ -198,7 +198,7 @@ namespace engine
                         _pDataSu->regExtDataHandler( _pStorageInfo->_extDataHandler ) ;
                         extHandler = _pDataSu->getExtDataHandler() ;
                      }
-                     else
+                     if ( extHandler )
                      {
                         rc = extHandler->onOpenTextIdx( _pDataSu->getSuName(),
                                                         _pDataSu->_dmsMME->_mbList[i]._collectionName,

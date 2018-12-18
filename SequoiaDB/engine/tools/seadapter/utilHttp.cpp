@@ -94,7 +94,7 @@
 #define REST_STRING_CHUNKED_END "0\r\n\r\n"
 #define REST_STRING_CHUNKED_END_SIZE (sizeof( REST_STRING_CHUNKED_END ) - 1)
 
-#define REST_OPRATION_TIMEOUT    3000
+#define REST_OPRATION_TIMEOUT    10000
 
 namespace seadapter
 {
@@ -764,6 +764,19 @@ namespace seadapter
          }
 
          totalRecv = headerSize + bodyPartLen ;
+         if ( (UINT32)( headerSize + bodyTotalLen ) > _recvBufSize )
+         {
+            _recvBuf = (CHAR *)SDB_OSS_REALLOC( _recvBuf,
+                                                headerSize + bodyTotalLen ) ;
+            if ( !_recvBuf )
+            {
+               rc = SDB_OOM ;
+               PD_LOG( PDERROR, "Reallocate memory failed, required size: %u",
+                       headerSize + bodyTotalLen ) ;
+               goto error ;
+            }
+            _recvBufSize = headerSize + bodyTotalLen ;
+         }
          while ( bodyRemainLen > 0 )
          {
             rc = _socket->recv( _recvBuf + totalRecv, bodyRemainLen,

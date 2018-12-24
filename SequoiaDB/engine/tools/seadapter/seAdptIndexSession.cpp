@@ -942,6 +942,8 @@ namespace seadapter
                      rc = item.setSourceData( sourceObj.toString(false, true).c_str(),
                                               sourceObj.toString(false, true).length(),
                                               TRUE ) ;
+                     PD_RC_CHECK( rc, PDERROR, "Set source data failed[ %d ]",
+                                  rc ) ;
                      rc = _bulkProcess( item ) ;
                      PD_RC_CHECK( rc, PDERROR, "Bulk processing item "
                                   "failed[ %d ]", rc ) ;
@@ -1004,6 +1006,7 @@ namespace seadapter
    done:
       return rc ;
    error:
+      _setQueryBusyFlag( FALSE ) ;
       goto done ;
    }
 
@@ -1350,7 +1353,7 @@ namespace seadapter
                  _bulkBuilder.getData() ) ;
          rc = _esClt->bulk( _indexName.c_str(), _typeName.c_str(),
                             _bulkBuilder.getData() ) ;
-         PD_RC_CHECK( rc, PDERROR, "Bulk operation failed[ %d ]" ) ;
+         PD_RC_CHECK( rc, PDERROR, "Bulk operation failed[ %d ]", rc ) ;
       }
 
    done:

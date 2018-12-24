@@ -305,7 +305,7 @@ namespace seadapter
       }
 
       ossSnprintf( url, UTIL_SE_MAX_URL_SIZE, "%s/%s/%s", index, type, id ) ;
-      rc = _http.post( url, newData, &status, &reply, &replyLen ) ;
+      rc = _http.put( url, newData, &status, &reply, &replyLen ) ;
       rc = _processReply( rc, reply, replyLen, bsonObj ) ;
       PD_RC_CHECK( rc, PDERROR, "Process request reply failed[ %d ]", rc ) ;
 
@@ -659,7 +659,7 @@ namespace seadapter
    }
 
    INT32 _utilESClt::bulk( const CHAR *index, const CHAR *type,
-                           const CHAR *data )
+                           const CHAR *data, const CHAR *filterPath )
    {
       INT32 rc = SDB_OK ;
       string endUrl ;
@@ -684,6 +684,10 @@ namespace seadapter
          }
       }
       endUrl += "/_bulk" ;
+      if ( filterPath )
+      {
+         endUrl = endUrl + "?" + filterPath ;
+      }
 
       rc = _http.post( endUrl.c_str(), data, &status, &reply, &replyLen ) ;
       rc = _processReply( rc, reply, replyLen, replyObj ) ;

@@ -69,7 +69,7 @@ public class BSONDecimalTest {
     public void convertMAXValueToBigDecimalTest() {
         BSONDecimal bsonDecimal;
         BigDecimal bigDecimal;
-        thrown.expect(BaseException.class);
+        thrown.expect(UnsupportedOperationException.class);
         thrown.expectMessage(containsString("can't convert MAX to BigDecimal"));
         bsonDecimal = new BSONDecimal("MAX", 20, 10);
         bigDecimal = bsonDecimal.toBigDecimal();
@@ -79,7 +79,7 @@ public class BSONDecimalTest {
     public void convertMINValueToBigDecimalTest() {
         BSONDecimal bsonDecimal;
         BigDecimal bigDecimal;
-        thrown.expect(BaseException.class);
+        thrown.expect(UnsupportedOperationException.class);
         thrown.expectMessage(containsString("can't convert MIN to BigDecimal"));
 
         bsonDecimal = new BSONDecimal("MIN", 20, 10);
@@ -90,7 +90,7 @@ public class BSONDecimalTest {
     public void convertNANValueToBigDecimalTest() {
         BSONDecimal bsonDecimal;
         BigDecimal bigDecimal;
-        thrown.expect(BaseException.class);
+        thrown.expect(UnsupportedOperationException.class);
         thrown.expectMessage(containsString("can't convert NaN to BigDecimal"));
         bsonDecimal = new BSONDecimal("NAN", 20, 10);
         bigDecimal = bsonDecimal.toBigDecimal();

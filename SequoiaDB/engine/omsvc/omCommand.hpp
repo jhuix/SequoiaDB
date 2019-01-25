@@ -1463,6 +1463,7 @@ namespace engine
    private:
       string _localAgentHost ;
       string _localAgentService ;
+      string _name ;
       string _fromBuzName ;
       string _toBuzName ;
    } ;
@@ -1495,6 +1496,7 @@ namespace engine
    private:
       string _localAgentHost ;
       string _localAgentService ;
+      string _name ;
       string _fromBuzName ;
       string _toBuzName ;
    } ;

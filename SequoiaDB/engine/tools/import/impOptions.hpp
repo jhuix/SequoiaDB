@@ -34,9 +34,8 @@
 #include "core.hpp"
 #include "oss.hpp"
 #include "impHosts.hpp"
-#include <boost/program_options.hpp>
+#include "utilOptions.hpp"
 
-namespace po = boost::program_options;
 using namespace std;
 
 namespace import
@@ -63,17 +62,17 @@ namespace import
       STR_TRIM_BOTH
    };
 
-   class Options: public SDBObject
+   class Options: public engine::utilOptions
    {
    public:
       Options();
       ~Options();
       INT32 parse(INT32 argc, CHAR* argv[]);
       void printHelpInfo();
-      void printHelpfulInfo();
+      void printHelpfullInfo();
       BOOLEAN hasHelp();
       BOOLEAN hasVersion();
-      BOOLEAN hasHelpful();
+      BOOLEAN hasHelpfull();
 
       /* general */
       inline const string& hostname() const { return _hostname; }
@@ -116,6 +115,7 @@ namespace import
       inline BOOLEAN autoAddField() const { return _autoAddField; }
       inline BOOLEAN autoCompletion() const { return _autoCompletion; }
       inline BOOLEAN cast() const { return _cast; }
+      inline BOOLEAN strictFieldNum() const { return _strictFieldNum; }
 
       /* helpful */
       inline INT32 bufferSize() const { return _bufferSize; }
@@ -124,15 +124,10 @@ namespace import
       inline BOOLEAN ignoreNull() const { return _ignoreNull; }
 
    private:
-      BOOLEAN has(CHAR* option);
-      template<typename T>
-      T get(CHAR* option);
       INT32 setOptions();
 
    private:
-      po::options_description    _allDesc;
-      po::variables_map          _vm;
-      BOOLEAN                    _parsed;
+      BOOLEAN        _parsed;
 
       /* general */
       string         _hostname;
@@ -178,8 +173,9 @@ namespace import
       BOOLEAN        _autoAddField;
       BOOLEAN        _autoCompletion;
       BOOLEAN        _cast;
+      BOOLEAN        _strictFieldNum;
 
-      /* helpful */
+      /* helpfull */
       BOOLEAN        _dryRun;
       INT32          _bufferSize;
       INT64          _recordsMem; // the records used momory threshold 

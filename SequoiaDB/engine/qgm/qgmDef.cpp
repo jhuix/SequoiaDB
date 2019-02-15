@@ -40,6 +40,8 @@
 #include "qgmPtrTable.hpp"
 #include "pdTrace.hpp"
 #include "qgmTrace.hpp"
+#include "mthDef.hpp"
+#include "utilMath.hpp"
 
 using namespace bson ;
 
@@ -191,7 +193,6 @@ namespace engine
       return sub ;
    }
 
-   /// ex: self: abc.dek, return: abc
    _qgmField _qgmField::rootField() const
    {
       UINT32 pos = 0 ;
@@ -204,7 +205,6 @@ namespace engine
       return root ;
    }
 
-   /// ex: self: abc.dek, return: dek
    _qgmField _qgmField::lastField() const
    {
       UINT32 pos = 0 ;
@@ -218,8 +218,6 @@ namespace engine
       return last ;
    }
 
-   /// ex: self: abc.def.kk, cur: abc, return: def
-   ///                       cur: kk,  return: (null)
    _qgmField _qgmField::nextField( const _qgmField &cur ) const
    {
       _qgmField next ;
@@ -246,8 +244,6 @@ namespace engine
       return next ;
    }
 
-   /// ex: self: abc.def.kk, cur: kk, return: def
-   ///                       cur: abc,return: (null)
    _qgmField _qgmField::preField( const _qgmField &cur ) const
    {
       _qgmField next ;
@@ -519,10 +515,10 @@ namespace engine
              this->obj.getOwned() : qgmMerge( obj, next->mergedObj() ) ;
    }
 
-////////////////// _qgmValueTuple
    _qgmValueTuple::_qgmValueTuple( CHAR *data, UINT32 len, BOOLEAN format )
    :_row( data ),
-    _len( len )
+    _len( len ),
+    _isOwn( FALSE )
    {
       SDB_ASSERT( NULL != _row, "can not be null" ) ;
       SDB_ASSERT( sizeof( _tuple ) <= _len, "impossible" ) ;
@@ -537,10 +533,48 @@ namespace engine
 
    _qgmValueTuple::~_qgmValueTuple()
    {
-
+      if ( _isOwn )
+      {
+         SDB_OSS_FREE( _row ) ;
+         _row   = NULL ;
+         _isOwn = FALSE ;
+      }
    }
 
-   INT32 _qgmValueTuple::setValue( UINT32 dataLen, const void *data, INT16 type )
+   INT32 _qgmValueTuple::_ensureMem( UINT32 dataLen )
+   {
+      INT32 rc = SDB_OK ;
+      if ( _len < ( dataLen + sizeof( _tuple ) ) )
+      {
+         _tuple saved ;
+         ossMemcpy( &saved, _row, sizeof( saved ) ) ;
+         if ( _isOwn )
+         {
+            SDB_OSS_FREE( _row ) ;
+            _row   = NULL ;
+            _isOwn = FALSE ;
+         }
+
+         _row = (CHAR *) SDB_OSS_MALLOC( dataLen + sizeof( _tuple ) ) ;
+         if ( NULL == _row )
+         {
+            rc = SDB_OOM ;
+            PD_LOG( PDERROR, "malloc for _row failed:rc=%d", rc ) ;
+            goto error ;
+         }
+
+         _isOwn = TRUE ;
+         ossMemcpy( _row, &saved, sizeof( saved ) ) ;
+      }
+
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _qgmValueTuple::setValue( UINT32 dataLen, const void *data, 
+                                   INT16 type )
    {
       INT32 rc = SDB_OK ;
       _tuple *t = NULL ;
@@ -551,21 +585,720 @@ namespace engine
          rc = SDB_SYS ;
          goto error ;
       }
-      else if ( _len < ( dataLen + sizeof( _tuple ) ) )
+
+      rc = _ensureMem( dataLen ) ;
+      if ( SDB_OK != rc )
       {
-         PD_LOG( PDERROR, "size of row buffer is not enough for data" ) ;
+         PD_LOG( PDERROR, "_ensureMem failed:rc=%d", rc ) ;
+         goto error ;
+      }
+
+      t       = ( _tuple * )_row ;
+      t->len  = sizeof( _tuple ) + dataLen ;
+      t->type = type ;
+      if ( 0 < dataLen )
+      {
+         ossMemcpy( _row + sizeof( _tuple ), data, dataLen ) ;
+      }
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _qgmValueTuple::setValue( const bsonDecimal &decimal )
+   {
+      INT32 rc      = SDB_OK ;
+      _tuple *t     = NULL ;
+      INT32 dataLen = 0 ;
+      CHAR *pData   = NULL ;
+      INT32 i       = 0 ;
+      const INT16 *digits = NULL ;
+
+      if ( NULL == _row )
+      {
+         PD_LOG( PDERROR, "row data is null" ) ;
          rc = SDB_SYS ;
          goto error ;
       }
 
-      t = ( _tuple * )_row ;
-      t->len = sizeof( _tuple ) + dataLen ;
-      t->type = type ;
-      if ( 0 < dataLen )
+      dataLen = decimal.getSize() ;
+
+      rc = _ensureMem( dataLen ) ;
+      if ( SDB_OK != rc )
       {
-         ossMemcpy( _row + sizeof( _tuple ),
-                    data, dataLen ) ;
+         PD_LOG( PDERROR, "_ensureMem failed:rc=%d", rc ) ;
+         goto error ;
       }
+
+      t       = ( _tuple * )_row ;
+      t->len  = sizeof( _tuple ) + dataLen ;
+      t->type = NumberDecimal ;
+
+      pData   = _row + sizeof( _tuple ) ;
+
+      *( INT32 *)pData = dataLen ;
+      pData += sizeof( INT32 ) ;
+
+      *( INT32 *)pData = decimal.getTypemod() ;
+      pData += sizeof( INT32 ) ;
+
+      *( INT16 *)pData = decimal.getStorageScale() ;
+      pData += sizeof( INT16 ) ;
+
+      *( INT16 *)pData = decimal.getWeight() ;
+      pData += sizeof( INT16 ) ;
+
+      digits = decimal.getDigits() ;
+      for ( i = 0 ; i < decimal.getNdigit() ; i++ )
+      {
+         *( INT16 *)pData = digits[i] ;
+         pData += sizeof( INT16 ) ;
+      }
+
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _qgmValueTuple::_getDecimal( bsonDecimal &decimal ) const 
+   {
+      INT32 rc = SDB_OK ;
+      INT16 valueType = 0 ;
+
+      valueType = getValueType() ;
+      if ( ( INT16 )bson::EOO == valueType )
+      {
+         decimal.setZero() ;
+      }
+      else if ( ( INT16 )bson::NumberDecimal == valueType )
+      {
+         rc = decimal.fromBsonValue( (const CHAR *)getValue() ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "failed to fromBsonValue:%d", rc ) ;
+            goto error ;
+         }
+      }
+      else if ( ( INT16 )bson::NumberDouble == valueType )
+      {
+         rc = decimal.fromDouble( *(( FLOAT64* )( getValue() ) ) ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "failed to fromDouble:%d", rc ) ;
+            goto error ;
+         }
+      }
+      else
+      {
+         rc = decimal.fromLong( *(( INT64* )( getValue() ) ) ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "failed to fromDouble:%d", rc ) ;
+            goto error ;
+         }
+      }
+
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _qgmValueTuple::add( const _qgmValueTuple &right, 
+                              _qgmValueTuple &result ) const
+   {
+      INT32 rc = SDB_OK ;
+      if ( ( INT16 )bson::EOO == getValueType() ||
+           ( INT16 )bson::EOO == right.getValueType() )
+      {
+         rc = result.setValue( 0, NULL, ( INT16 )bson::EOO ) ;
+      }
+      else if ( ( INT16 )bson::NumberDecimal == getValueType() ||
+                ( INT16 )bson::NumberDecimal == right.getValueType() )
+      {
+         bsonDecimal lDecimal ;
+         bsonDecimal rDecimal ;
+         bsonDecimal resultDecimal ;
+
+         rc = _getDecimal( lDecimal ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "failed to _getDecimal:%d", rc ) ;
+            goto error ;
+         }
+
+         rc = right._getDecimal( rDecimal ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "failed to _getDecimal:%d", rc ) ;
+            goto error ;
+         }
+
+         rc = lDecimal.add( rDecimal, resultDecimal ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "failed to add decimal:%d", rc ) ;
+            goto error ;
+         }
+
+         rc = result.setValue( resultDecimal ) ;
+      }
+      else if ( ( INT16 )bson::NumberDouble == getValueType() ||
+                ( INT16 )bson::NumberDouble == right.getValueType() )
+      {
+         FLOAT64 lNumber = ( INT16 )bson::NumberDouble == getValueType() ?
+                           *(( FLOAT64* )( getValue() ) ) :
+                           *(( INT64* )( getValue() ) ) ;
+         FLOAT64 rNumber = ( INT16 )bson::NumberDouble == right.getValueType() ?
+                           *(( FLOAT64* )( right.getValue() ) ) :
+                           *(( INT64* )( right.getValue() ) ) ;
+
+         FLOAT64 final = lNumber + rNumber ;
+         rc = result.setValue( sizeof( FLOAT64 ), &final, 
+                               ( INT16 )bson::NumberDouble ) ;
+      }
+      else if ( ( INT16 )bson::NumberLong == getValueType() ||
+                ( INT16 )bson::NumberLong == right.getValueType() )
+      {
+         INT64 l = *(( INT64 * )( getValue() ) ) ;
+         INT64 r = *(( INT64 * )( right.getValue() ) ) ;
+         INT64 rst = l + r ;
+         if ( !utilAddIsOverflow( l, r, rst ) )
+         {
+            rc = result.setValue( sizeof( INT64 ), &rst, 
+                                  ( INT16 )bson::NumberLong ) ;
+         }
+         else 
+         {
+            bsonDecimal decL, decR, decRst;
+            rc = decL.fromLong(l) ;
+            if ( SDB_OK != rc )
+            {
+               PD_LOG( PDERROR, "failed to fromLong:%d", rc ) ;
+               goto error ;
+            }
+            rc = decR.fromLong(r) ;
+            if ( SDB_OK != rc )
+            {
+               PD_LOG( PDERROR, "failed to fromLong:%d", rc ) ;
+               goto error ;
+            }
+            rc = decL.add( decR, decRst ) ;
+            if ( SDB_OK != rc )
+            {
+               PD_LOG( PDERROR, "failed to add decimal:%d", rc ) ;
+               goto error ;
+            }
+            rc = result.setValue( decRst ) ;
+         }
+      }
+      else
+      {
+         INT32 l = *(( INT32 * )( getValue() ) ) ;
+         INT32 r = *(( INT32 * )( right.getValue() ) ) ;
+         INT32 rst = l + r ;
+         INT64 rst64 = (INT64)l + (INT64)r ;
+         if ( rst64 == (INT64)rst )
+         {
+            rc = result.setValue( sizeof( INT32 ), &rst, 
+                                  ( INT16 )bson::NumberInt ) ;
+         }
+         else
+         {
+            rc = result.setValue( sizeof( INT64 ), &rst64, 
+                                  ( INT16 )bson::NumberLong ) ;
+         }       
+      }
+      
+      if ( SDB_OK != rc )
+      {
+         PD_LOG( PDERROR, "failed to set value:%d", rc ) ;
+         goto error ;
+      }
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _qgmValueTuple::sub( const _qgmValueTuple &right, 
+                              _qgmValueTuple &result ) const
+   {
+      INT32 rc = SDB_OK ;
+      if ( ( INT16 )bson::EOO == getValueType() ||
+           ( INT16 )bson::EOO == right.getValueType() )
+      {
+         rc = result.setValue( 0, NULL, ( INT16 )bson::EOO ) ;
+      }
+      else if ( ( INT16 )bson::NumberDecimal == getValueType() ||
+                ( INT16 )bson::NumberDecimal == right.getValueType() )
+      {
+         bsonDecimal lDecimal ;
+         bsonDecimal rDecimal ;
+         bsonDecimal resultDecimal ;
+
+         rc = _getDecimal( lDecimal ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "failed to _getDecimal:%d", rc ) ;
+            goto error ;
+         }
+
+         rc = right._getDecimal( rDecimal ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "failed to _getDecimal:%d", rc ) ;
+            goto error ;
+         }
+
+         rc = lDecimal.sub( rDecimal, resultDecimal ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "failed to sub decimal:%d", rc ) ;
+            goto error ;
+         }
+
+         rc = result.setValue( resultDecimal ) ;
+      }
+      else if ( ( INT16 )bson::NumberDouble == getValueType() ||
+                ( INT16 )bson::NumberDouble == right.getValueType() )
+      {
+         FLOAT64 lNumber = ( INT16 )bson::NumberDouble == getValueType() ?
+                           *(( FLOAT64* )( getValue() ) ) :
+                           *(( INT64* )( getValue() ) ) ;
+         FLOAT64 rNumber = ( INT16 )bson::NumberDouble == right.getValueType() ?
+                           *(( FLOAT64* )( right.getValue() ) ) :
+                           *(( INT64* )( right.getValue() ) ) ;
+         FLOAT64 final = lNumber - rNumber ;
+         rc = result.setValue( sizeof( FLOAT64 ), &final, 
+                               ( INT16 )bson::NumberDouble ) ;
+      }
+      else if ( ( INT16 )bson::NumberLong == getValueType() ||
+                ( INT16 )bson::NumberLong == right.getValueType() )
+      {
+         INT64 l = *(( INT64 * )( getValue() ) ) ;
+         INT64 r = *(( INT64 * )( right.getValue() ) ) ;
+         INT64 rst = l - r ;
+         if ( !utilSubIsOverflow( l, r, rst ) )
+         {
+            rc = result.setValue( sizeof( INT64 ), &rst, 
+                                  ( INT16 )bson::NumberLong ) ;
+         }
+         else 
+         {
+            bsonDecimal decL, decR, decRst;
+            rc = decL.fromLong(l) ;
+            if ( SDB_OK != rc )
+            {
+               PD_LOG( PDERROR, "failed to fromLong:%d", rc ) ;
+               goto error ;
+            }
+            rc = decR.fromLong(r) ;
+            if ( SDB_OK != rc )
+            {
+               PD_LOG( PDERROR, "failed to fromLong:%d", rc ) ;
+               goto error ;
+            }
+            rc = decL.sub( decR, decRst ) ;
+            if ( SDB_OK != rc )
+            {
+               PD_LOG( PDERROR, "failed to add decimal:%d", rc ) ;
+               goto error ;
+            }
+            rc = result.setValue( decRst ) ;
+         }
+      }
+      else
+      {
+         INT32 l = *(( INT32 * )( getValue() ) ) ;
+         INT32 r = *(( INT32 * )( right.getValue() ) ) ;
+         INT32 rst = l - r ;
+         INT64 rst64 = (INT64)l - (INT64)r ;
+         if ( rst64 == (INT64)rst )
+         {
+            rc = result.setValue( sizeof( INT32 ), &rst, 
+                                  ( INT16 )bson::NumberInt ) ;
+         }
+         else
+         {
+            rc = result.setValue( sizeof( INT64 ), &rst64, 
+                                  ( INT16 )bson::NumberLong ) ;
+         }       
+      }
+
+      if ( SDB_OK != rc )
+      {
+         PD_LOG( PDERROR, "failed to set value:%d", rc ) ;
+         goto error ;
+      }
+
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _qgmValueTuple::multiply( const _qgmValueTuple &right, 
+                                   _qgmValueTuple &result ) const
+   {
+      INT32 rc = SDB_OK ;
+      if ( ( INT16 )bson::EOO == getValueType() ||
+           ( INT16 )bson::EOO == right.getValueType() )
+      {
+         rc = result.setValue( 0, NULL, ( INT16 )bson::EOO ) ;
+      }
+      else if ( ( INT16 )bson::NumberDecimal == getValueType() ||
+                ( INT16 )bson::NumberDecimal == right.getValueType() )
+      {
+         bsonDecimal lDecimal ;
+         bsonDecimal rDecimal ;
+         bsonDecimal resultDecimal ;
+
+         rc = _getDecimal( lDecimal ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "failed to _getDecimal:%d", rc ) ;
+            goto error ;
+         }
+
+         rc = right._getDecimal( rDecimal ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "failed to _getDecimal:%d", rc ) ;
+            goto error ;
+         }
+
+         rc = lDecimal.mul( rDecimal, resultDecimal ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "failed to mul decimal:%d", rc ) ;
+            goto error ;
+         }
+
+         rc = result.setValue( resultDecimal ) ;
+      }
+      else if ( ( INT16 )bson::NumberDouble == getValueType() ||
+                ( INT16 )bson::NumberDouble == right.getValueType() )
+      {
+         FLOAT64 lNumber = ( INT16 )bson::NumberDouble == getValueType() ?
+                           *(( FLOAT64* )( getValue() ) ) :
+                           *(( INT64* )( getValue() ) ) ;
+         FLOAT64 rNumber = ( INT16 )bson::NumberDouble == right.getValueType() ?
+                           *(( FLOAT64* )( right.getValue() ) ) :
+                           *(( INT64* )( right.getValue() ) ) ;
+         FLOAT64 final = lNumber * rNumber ;
+         rc = result.setValue( sizeof( FLOAT64 ), &final, 
+                               ( INT16 )bson::NumberDouble ) ;
+      }
+      else if ( ( INT16 )bson::NumberLong == getValueType() ||
+                ( INT16 )bson::NumberLong == right.getValueType() )
+      {
+         INT64 l = *(( INT64 * )( getValue() ) ) ;
+         INT64 r = *(( INT64 * )( right.getValue() ) ) ;
+         INT64 rst = l * r ;
+         if ( !utilMulIsOverflow( l, r, rst ) )
+         {
+            rc = result.setValue( sizeof( INT64 ), &rst, 
+                                  ( INT16 )bson::NumberLong ) ;
+         }
+         else 
+         {
+            bsonDecimal decL, decR, decRst;
+            rc = decL.fromLong(l) ;
+            if ( SDB_OK != rc )
+            {
+               PD_LOG( PDERROR, "failed to fromLong:%d", rc ) ;
+               goto error ;
+            }
+            rc = decR.fromLong(r) ;
+            if ( SDB_OK != rc )
+            {
+               PD_LOG( PDERROR, "failed to fromLong:%d", rc ) ;
+               goto error ;
+            }
+            rc = decL.mul( decR, decRst ) ;
+            if ( SDB_OK != rc )
+            {
+               PD_LOG( PDERROR, "failed to add decimal:%d", rc ) ;
+               goto error ;
+            }
+            rc = result.setValue( decRst ) ;
+         }
+      }
+      else
+      {
+         INT32 l = *(( INT32 * )( getValue() ) ) ;
+         INT32 r = *(( INT32 * )( right.getValue() ) ) ;
+         INT32 rst = l * r ;
+         INT64 rst64 = (INT64)l * (INT64)r ;
+         if ( rst64 == (INT64)rst )
+         {
+            rc = result.setValue( sizeof( INT32 ), &rst, 
+                                  ( INT16 )bson::NumberInt ) ;
+         }
+         else
+         {
+            rc = result.setValue( sizeof( INT64 ), &rst64, 
+                                  ( INT16 )bson::NumberLong ) ;
+         }       
+      }
+
+      if ( SDB_OK != rc )
+      {
+         PD_LOG( PDERROR, "failed to set value:%d", rc ) ;
+         goto error ;
+      }
+
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _qgmValueTuple::divide( const _qgmValueTuple &right, 
+                                 _qgmValueTuple &result ) const 
+   {
+      INT32 rc = SDB_OK ;
+      if ( ( INT16 )bson::EOO == getValueType() ||
+           ( INT16 )bson::EOO == right.getValueType() )
+      {
+         rc = result.setValue( 0, NULL, ( INT16 )bson::EOO ) ;
+      }
+      else if ( ( INT16 )bson::NumberDecimal == getValueType() ||
+                ( INT16 )bson::NumberDecimal == right.getValueType() )
+      {
+         bsonDecimal lDecimal ;
+         bsonDecimal rDecimal ;
+         bsonDecimal resultDecimal ;
+
+         rc = _getDecimal( lDecimal ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "failed to _getDecimal:%d", rc ) ;
+            goto error ;
+         }
+
+         rc = right._getDecimal( rDecimal ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "failed to _getDecimal:%d", rc ) ;
+            goto error ;
+         }
+
+         rc = lDecimal.div( rDecimal, resultDecimal ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "failed to div decimal:%d", rc ) ;
+            goto error ;
+         }
+
+         rc = result.setValue( resultDecimal ) ;
+      }
+      else if ( ( INT16 )bson::NumberDouble == getValueType() ||
+                ( INT16 )bson::NumberDouble == right.getValueType() )
+      {
+         FLOAT64 rNumber = ( INT16 )bson::NumberDouble == right.getValueType() ?
+                           *(( FLOAT64* )( right.getValue() ) ) :
+                           *(( INT64* )( right.getValue() ) ) ;
+         if ( fabs( rNumber ) < OSS_EPSILON )
+         {
+            rc = result.setValue( 0, NULL, ( INT16 )bson::EOO ) ;
+         }
+         else
+         {
+            FLOAT64 lNumber = ( INT16 )bson::NumberDouble == getValueType() ?
+                               *(( FLOAT64* )( getValue() ) ) :
+                               *(( INT64* )( getValue() ) ) ;
+            FLOAT64 final = lNumber / rNumber ;
+            rc = result.setValue( sizeof( FLOAT64 ), &final, 
+                                  ( INT16 )bson::NumberDouble ) ;
+         }
+      }
+      else if ( ( INT16 )bson::NumberLong == getValueType() ||
+                ( INT16 )bson::NumberLong == right.getValueType() )
+      {
+         INT64 lNumber = *((INT64 *)(getValue() ) ) ;
+         INT64 rNumber = *(( INT64 * )( right.getValue() ) ) ;
+         INT64 result64 ;
+         if ( 0 == rNumber )
+         {
+            rc = result.setValue( 0, NULL, ( INT16 )bson::EOO ) ;
+            goto done ;
+         }
+         if ( !utilDivIsOverflow( lNumber, rNumber ) )
+         {
+            result64 = lNumber / rNumber ;
+            rc = result.setValue( sizeof( INT64 ), &result64, 
+                                  ( INT16 )bson::NumberLong ) ;
+         }
+         else
+         {
+            bsonDecimal decResult ;
+            rc = decResult.fromString( "9223372036854775808" ) ;
+            if ( SDB_OK != rc )
+            {
+               PD_LOG( PDERROR, "failed to div decimal:%lld/%lld,rc=%d",
+                       lNumber, rNumber, rc ) ;
+               goto error ;
+            }
+            rc = result.setValue( decResult ) ;
+         }
+      }
+      else
+      {
+         INT32 lNumber = *((INT32 *)(getValue() ) ) ;
+         INT32 rNumber = *(( INT32 * )( right.getValue() ) ) ;
+         INT32 result32 ;
+         if ( 0 == rNumber )
+         {
+            rc = result.setValue( 0, NULL, ( INT16 )bson::EOO ) ;
+            goto done ;
+         }
+
+         if ( -1 == rNumber )
+         {
+            if ( lNumber != (INT32)OSS_SINT32_MIN )
+            {
+               result32 = -lNumber ;
+               rc = result.setValue( sizeof( INT32 ), &result32, 
+                                     ( INT16 )bson::NumberInt ) ;
+            }
+            else
+            {
+               INT64 result64, lNumber64 ;
+               lNumber64 = (INT64)lNumber ;
+               result64 = -lNumber64 ;
+               
+               rc = result.setValue( sizeof( INT64 ), &result64, 
+                                     ( INT16 )bson::NumberLong ) ;
+            }
+         }
+         else
+         {
+            result32 = lNumber / rNumber ;
+            rc = result.setValue( sizeof( INT32 ), &result32, 
+                                  ( INT16 )bson::NumberInt ) ;
+         }
+      }
+
+      if ( SDB_OK != rc )
+      {
+         PD_LOG( PDERROR, "failed to set value:%d", rc ) ;
+         goto error ;
+      }
+   done:
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 _qgmValueTuple::mod( const _qgmValueTuple &right, 
+                              _qgmValueTuple &result ) const
+   {
+      INT32 rc = SDB_OK ;
+      if ( ( INT16 )bson::EOO == getValueType() ||
+           ( INT16 )bson::EOO == right.getValueType() )
+      {
+         rc = result.setValue( 0, NULL, ( INT16 )bson::EOO ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "failed to set value:%d", rc ) ;
+            goto error ;
+         }
+      }
+      else if ( ( INT16 )bson::NumberDecimal == getValueType() ||
+                ( INT16 )bson::NumberDecimal == right.getValueType() )
+      {
+         bsonDecimal lDecimal ;
+         bsonDecimal rDecimal ;
+         bsonDecimal resultDecimal ;
+
+         rc = _getDecimal( lDecimal ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "failed to _getDecimal:%d", rc ) ;
+            goto error ;
+         }
+
+         rc = right._getDecimal( rDecimal ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "failed to _getDecimal:%d", rc ) ;
+            goto error ;
+         }
+
+         rc = lDecimal.mod( rDecimal, resultDecimal ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "failed to mod decimal:%d", rc ) ;
+            goto error ;
+         }
+
+         rc = result.setValue( resultDecimal ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDERROR, "failed to set value:%d", rc ) ;
+            goto error ;
+         }
+      }
+      else if ( ( INT16 )bson::NumberDouble == getValueType() ||
+                ( INT16 )bson::NumberDouble == right.getValueType() )
+      {
+         FLOAT64 rNumber = ( INT16 )bson::NumberDouble == right.getValueType() ?
+                           *(( FLOAT64* )( right.getValue() ) ) :
+                           *(( INT64* )( right.getValue() ) ) ;
+         if ( fabs( rNumber ) < OSS_EPSILON )
+         {
+            rc = result.setValue( 0, NULL, ( INT16 )bson::EOO ) ;
+            if ( SDB_OK != rc )
+            {
+               PD_LOG( PDERROR, "failed to set value:%d", rc ) ;
+               goto error ;
+            }
+         }
+         else
+         {
+            FLOAT64 lNumber = ( INT16 )bson::NumberDouble == getValueType() ?
+                               *(( FLOAT64* )( getValue() ) ) :
+                               *(( INT64* )( getValue() ) ) ;
+            FLOAT64 final = MTH_MOD( lNumber, rNumber ) ;
+            rc = result.setValue( sizeof( FLOAT64 ), &final, 
+                                  ( INT16 )bson::NumberDouble ) ;
+            if ( SDB_OK != rc )
+            {
+               PD_LOG( PDERROR, "failed to set value:%d", rc ) ;
+               goto error ;
+            }
+         }
+      }
+      else
+      {
+         INT64 lNumber = *((INT64 *)(getValue() ) ) ;
+         INT64 rNumber = *(( INT64 * )( right.getValue() ) ) ;
+         if ( 0 == rNumber )
+         {
+            rc = result.setValue( 0, NULL, ( INT16 )bson::EOO ) ;
+            if ( SDB_OK != rc )
+            {
+               PD_LOG( PDERROR, "failed to set value:%d", rc ) ;
+               goto error ;
+            }
+         }
+         else
+         {
+            INT64 final = lNumber % rNumber ;
+            rc = result.setValue( sizeof( INT64 ), &final, 
+                                  ( INT16 )bson::NumberLong ) ;
+            if ( SDB_OK != rc )
+            {
+               PD_LOG( PDERROR, "failed to set value:%d", rc ) ;
+               goto error ;
+            }
+         }
+      }
+
    done:
       return rc ;
    error:

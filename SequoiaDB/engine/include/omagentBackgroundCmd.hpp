@@ -40,6 +40,7 @@ using namespace std ;
 
 namespace engine
 {
+
    /*
       _omaAddHost
    */
@@ -448,6 +449,84 @@ namespace engine
          virtual INT32 init ( const CHAR *pInstallInfo ) ;
    } ;
 
+   class _omaCheckSsqlOlap : public _omaCommand
+   {
+      public:
+         _omaCheckSsqlOlap( const BSONObj& config, const BSONObj& sysInfo ) ;
+         ~_omaCheckSsqlOlap() ;
+         virtual const CHAR * name() { return OMA_CMD_CHECK_SEQUOIASQL_OLAP ; }
+         virtual INT32 init( const CHAR *pInstallInfo ) ;
+
+      private:
+         BSONObj _config ;
+         BSONObj _sysInfo ;
+   } ;
+
+   class _omaInstallSsqlOlap : public _omaCommand
+   {
+      public:
+         _omaInstallSsqlOlap( const BSONObj& config, const BSONObj& sysInfo ) ;
+         ~_omaInstallSsqlOlap() ;
+         virtual const CHAR * name() { return OMA_CMD_INSTALL_SEQUOIASQL_OLAP ; }
+         virtual INT32 init( const CHAR *pInstallInfo ) ;
+
+      private:
+         BSONObj _config ;
+         BSONObj _sysInfo ;
+   } ;
+
+   class _omaTrustSsqlOlap : public _omaCommand
+   {
+      public:
+         _omaTrustSsqlOlap( const BSONObj& config, const BSONObj& sysInfo ) ;
+         ~_omaTrustSsqlOlap() ;
+         virtual const CHAR * name() { return OMA_CMD_TRUST_SEQUOIASQL_OLAP ; }
+         virtual INT32 init( const CHAR *pInstallInfo ) ;
+
+      private:
+         BSONObj _config ;
+         BSONObj _sysInfo ;
+   } ;
+
+   class _omaCheckHdfsSsqlOlap : public _omaCommand
+   {
+      public:
+         _omaCheckHdfsSsqlOlap( const BSONObj& config, const BSONObj& sysInfo ) ;
+         ~_omaCheckHdfsSsqlOlap() ;
+         virtual const CHAR * name() { return OMA_CMD_CHECK_HDFS_SEQUOIASQL_OLAP ; }
+         virtual INT32 init( const CHAR *pInstallInfo ) ;
+
+      private:
+         BSONObj _config ;
+         BSONObj _sysInfo ;
+   } ;
+
+   class _omaInitClusterSsqlOlap : public _omaCommand
+   {
+      public:
+         _omaInitClusterSsqlOlap( const BSONObj& config, const BSONObj& sysInfo ) ;
+         ~_omaInitClusterSsqlOlap() ;
+         virtual const CHAR * name() { return OMA_CMD_INIT_CLUSTER_SEQUOIASQL_OLAP ; }
+         virtual INT32 init( const CHAR *pInstallInfo ) ;
+
+      private:
+         BSONObj _config ;
+         BSONObj _sysInfo ;
+   } ;
+
+   class _omaRemoveSsqlOlap : public _omaCommand
+   {
+      public:
+         _omaRemoveSsqlOlap( const BSONObj& config, const BSONObj& sysInfo ) ;
+         ~_omaRemoveSsqlOlap() ;
+         virtual const CHAR * name() { return OMA_CMD_REMOVE_SEQUOIASQL_OLAP ; }
+         virtual INT32 init( const CHAR *pInstallInfo ) ;
+
+      private:
+         BSONObj _config ;
+         BSONObj _sysInfo ;
+   } ;
+
    /*
       _omaRunPsqlCmd
    */
@@ -491,6 +570,162 @@ namespace engine
 
       private:
          SsqlExecInfo      _ssqlInfo ;
+   } ;
+
+   /*
+      add business
+   */
+   class _omaAddBusiness : public _omaCommand
+   {
+   DECLARE_OACMD_AUTO_REGISTER() ;
+
+   public:
+      _omaAddBusiness() ;
+      virtual ~_omaAddBusiness() ;
+
+   public:
+      virtual const CHAR* name() { return OMA_CMD_ADD_BUSINESS ; }
+      virtual INT32 init( const CHAR *pInstallInfo ) ;
+      virtual INT32 convertResult( const BSONObj& itemInfo,
+                                   BSONObj& taskInfo ) ;
+
+   private:
+      void _aggrFlowArray( const BSONObj& array1, const BSONObj& array2,
+                           BSONArray& out ) ;
+
+   private:
+      INT64 _taskID ;
+   } ;
+
+   /*
+      remove business
+   */
+   class _omaRemoveBusiness : public _omaCommand
+   {
+   DECLARE_OACMD_AUTO_REGISTER() ;
+
+   public:
+      _omaRemoveBusiness() ;
+      virtual ~_omaRemoveBusiness() ;
+
+   public:
+      virtual const CHAR* name() { return OMA_CMD_REMOVE_BUSINESS ; }
+      virtual INT32 init( const CHAR *pInstallInfo ) ;
+      virtual INT32 convertResult( const BSONObj& itemInfo,
+                                   BSONObj& taskInfo ) ;
+
+   private:
+      void _aggrFlowArray( const BSONObj& array1, const BSONObj& array2,
+                           BSONArray& out ) ;
+
+   private:
+      INT64 _taskID ;
+   } ;
+
+   /*
+      extend sequoiadb
+   */
+   class _omaExtendDB : public _omaCommand
+   {
+
+   DECLARE_OACMD_AUTO_REGISTER() ;
+
+   public:
+      _omaExtendDB() ;
+      virtual ~_omaExtendDB() ;
+
+   public:
+      virtual const CHAR* name() { return OMA_CMD_EXTEND_SEQUOIADB ; }
+      virtual INT32 init( const CHAR *pInstallInfo ) ;
+      virtual INT32 convertResult( const BSONObj& itemInfo,
+                                   BSONObj& taskInfo ) ;
+
+   private:
+      void _aggrFlowArray( const BSONObj& array1, const BSONObj& array2,
+                           BSONArray& out ) ;
+
+   private:
+      INT64 _taskID ;
+   } ;
+
+   /*
+      shrink business
+   */
+   class _omaShrinkBusiness : public _omaCommand
+   {
+
+   DECLARE_OACMD_AUTO_REGISTER() ;
+
+   public:
+      _omaShrinkBusiness() ;
+      virtual ~_omaShrinkBusiness() ;
+
+   public:
+      virtual const CHAR* name() { return OMA_CMD_SHRINK_BUSINESS ; }
+      virtual INT32 init( const CHAR *pInstallInfo ) ;
+      virtual INT32 convertResult( const BSONObj& itemInfo,
+                                   BSONObj& taskInfo ) ;
+
+   private:
+      void _aggrFlowArray( const BSONObj& array1, const BSONObj& array2,
+                           BSONArray& out ) ;
+
+   private:
+      INT64 _taskID ;
+   } ;
+
+   /*
+      deploy package
+   */
+   class _omaDeployPackage : public _omaCommand
+   {
+
+   DECLARE_OACMD_AUTO_REGISTER() ;
+
+   public:
+      _omaDeployPackage() ;
+      virtual ~_omaDeployPackage() ;
+
+   public:
+      virtual const CHAR* name() { return OMA_CMD_DEOLOY_PACKAGE ; }
+      virtual INT32 init( const CHAR *pInstallInfo ) ;
+      virtual INT32 convertResult( const BSONObj& itemInfo,
+                                   BSONObj& taskInfo ) ;
+
+   private:
+      void _aggrFlowArray( const BSONObj& array1, const BSONObj& array2,
+                           BSONArray& out ) ;
+
+   private:
+      INT64 _taskID ;
+   } ;
+
+   /*
+      _omaStartPlugins
+   */
+   class _omaStartPlugins : public _omaCommand
+   {
+   DECLARE_OACMD_AUTO_REGISTER() ;
+
+   public:
+      _omaStartPlugins() ;
+      ~_omaStartPlugins() ;
+      virtual const CHAR* name () { return OMA_CMD_START_PLUGIN ; }
+      virtual INT32 init ( const CHAR *pInstallInfo ) ;
+   } ;
+
+   /*
+      _omaStopPlugins
+   */
+   class _omaStopPlugins : public _omaCommand
+   {
+   DECLARE_OACMD_AUTO_REGISTER() ;
+
+   public:
+      _omaStopPlugins() ;
+      ~_omaStopPlugins() ;
+      virtual const CHAR* name () { return OMA_CMD_STOP_PLUGIN ; }
+      virtual INT32 init ( const CHAR *pInstallInfo ) ;
    } ;
 
 } // namespace engine

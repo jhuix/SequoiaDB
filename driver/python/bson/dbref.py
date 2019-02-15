@@ -16,6 +16,7 @@
 
 from copy import deepcopy
 
+from bson.py3compat import str_type
 from bson.son import SON
 
 
@@ -49,12 +50,12 @@ class DBRef(object):
 
         .. mongodoc:: dbrefs
         """
-        if not isinstance(collection, basestring):
+        if not isinstance(collection, str_type):
             raise TypeError("collection must be an "
-                            "instance of %s" % (basestring.__name__,))
-        if database is not None and not isinstance(database, basestring):
+                            "instance of %s" % (str_type.__name__,))
+        if database is not None and not isinstance(database, str_type):
             raise TypeError("database must be an "
-                            "instance of %s" % (basestring.__name__,))
+                            "instance of %s" % (str_type.__name__,))
 
         self.__collection = collection
         self.__id = id

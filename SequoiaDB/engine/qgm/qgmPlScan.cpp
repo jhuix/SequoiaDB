@@ -38,8 +38,11 @@
 #include "qgmPlScan.hpp"
 #include "qgmConditionNodeHelper.hpp"
 #include "pmd.hpp"
-#include "pmdCB.hpp"
-#include "netMultiRouteAgent.hpp"
+#include "dmsCB.hpp"
+#include "rtnCB.hpp"
+#include "rtn.hpp"
+#include "coordCB.hpp"
+#include "coordQueryOperator.hpp"
 #include "ossMem.hpp"
 #include "msgMessage.hpp"
 #include "qgmUtil.hpp"
@@ -159,7 +162,6 @@ namespace engine
       {
          rc = _executeOnCoord( eduCB ) ;
       }
-      /// not coord or rc is SDB_COORD_UNKNOWN_OP_REQ
       if ( SDB_COORD_UNKNOWN_OP_REQ == rc ||
            SDB_ROLE_COORD != _dbRole )
       {
@@ -174,10 +176,6 @@ namespace engine
       else if ( SDB_OK != rc )
       {
          goto error ;
-      }
-      else
-      {
-         /// do nothing.
       }
 
    done:
@@ -222,7 +220,6 @@ namespace engine
 
          PD_LOG ( PDDEBUG, "Command: %s", pCommand->name () ) ;
 
-         //run command
          rc = rtnRunCommand( pCommand, serviceType,
                              eduCB, _dmsCB, _rtnCB,
                              NULL, 1, &_contextID ) ;
@@ -233,7 +230,6 @@ namespace engine
       }
       else
       {
-         // close prefetch
          rc = rtnQuery ( pCLName, selector, _condition,
                          _orderby, _hint, 0, eduCB, _skip, _return,
                          _dmsCB, _rtnCB, _contextID, NULL, FALSE ) ;
@@ -261,31 +257,45 @@ namespace engine
       INT32 rc = SDB_OK ;
       INT32 bufSize = 0 ;
       CHAR *qMsg = NULL ;
-      BSONObj *err = NULL ;
       BSONObj selector = _selector.selector() ;
 
-      rc = msgBuildQueryMsg ( &qMsg, &bufSize,
-                              _collection.toString().c_str(),0,
-                              0, _skip, _return,
-                              &_condition, &selector,
-                              &_orderby, &_hint ) ;
+      CoordCB *pCoord = pmdGetKRCB()->getCoordCB() ;
+      coordQueryOperator opr ;
+      rtnContextBuf buff ;
 
-      if ( SDB_OK != rc )
+      rc = opr.init( pCoord->getResource(), eduCB ) ;
+      if ( rc )
       {
+         PD_LOG( PDERROR, "Init operator[%s] failed, rc: %d",
+                 opr.getName(), rc ) ;
          goto error ;
       }
 
-      rc = _coordQuery.execute ( (MsgHeader*)qMsg, eduCB,
-                                 _contextID, NULL ) ;
-      SDB_ASSERT( NULL == err, "impossible" ) ;
-      PD_RC_CHECK ( rc, PDERROR,
-                    "Failed to execute coordQuery, rc = %d", rc ) ;
+      rc = msgBuildQueryMsg ( &qMsg, &bufSize,
+                              _collection.toString().c_str(),
+                              FLG_QUERY_WITH_RETURNDATA, 0,
+                              _skip, _return,
+                              &_condition, &selector,
+                              &_orderby, &_hint,
+                              eduCB ) ;
+      if ( rc )
+      {
+         PD_LOG( PDERROR, "Build message failed, rc: %d", rc ) ;
+         goto error ;
+      }
+
+      rc = opr.execute( (MsgHeader*)qMsg, eduCB, _contextID, &buff ) ;
+      if ( rc )
+      {
+         PD_LOG( PDERROR, "Execute operator[%s] failed, rc: %d",
+                 opr.getName(), rc ) ;
+         goto error ;
+      }
 
    done:
       if ( NULL != qMsg )
       {
-         SDB_OSS_FREE( qMsg ) ;
-         qMsg = NULL ;
+         msgReleaseBuffer( qMsg, eduCB ) ;
       }
       PD_TRACE_EXITRC( SDB__QGMPLSCAN__EXECONCOORD, rc ) ;
       return rc ;
@@ -343,7 +353,6 @@ namespace engine
       }
       else
       {
-         /// do nothing.
       }
 
    done:

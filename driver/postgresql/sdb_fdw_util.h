@@ -9,72 +9,77 @@
 #include "sdb_fdw.h"
 
 
-typedef enum 
+typedef enum
 {
    SDB_VAR_VAR = 0,
    SDB_PARAM_VAR ,
    SDB_VAR_CONST ,
-   SDB_UNSUPPORT_ARG_TYPE 
+   SDB_UNSUPPORT_ARG_TYPE
 } EnumSdbArgType;
-
-typedef struct  
-{
-   int keyNum ;
-   char indexKey[SDB_MAX_KEY_COLUMN_COUNT][SDB_MAX_KEY_COLUMN_LENGTH];
-} sdbIndexInfo;
 
 typedef struct
 {
-	bool		nonempty;		/* True if lists are not all empty */
-	/* Lists of RestrictInfos, one per index column */
-	List	   *indexclauses[INDEX_MAX_KEYS];
+   bool     nonempty;      /* True if lists are not all empty */
+   /* Lists of RestrictInfos, one per index column */
+   List     *indexclauses[INDEX_MAX_KEYS];
 } sdbIndexClauseSet;
 
-
 void sdbGetIndexEqclause( PlannerInfo *root, RelOptInfo *baserel, Oid tableID,
-                          sdbIndexInfo *indexInfo, 
+                          sdbIndexInfo *indexInfo,
                           sdbIndexClauseSet *clauseset ) ;
 
+void sdbMatchJoinClausesToIndex( PlannerInfo *root, RelOptInfo *rel,
+                                 Oid tableID, sdbIndexInfo *index,
+                                 sdbIndexClauseSet *clauseset ) ;
 
-int sdbGetIndexInfo( SdbExecState *sdbState, sdbIndexInfo *indexInfo ) ;
+void sdbMatchClauseToIndex( RelOptInfo *rel, Oid tableID, sdbIndexInfo *index,
+                            RestrictInfo *rinfo,
+                            sdbIndexClauseSet *clauseset ) ;
 
-int sdbGetIndexInfos( SdbExecState *sdbState, sdbIndexInfo *indexInfo, 
+bool sdbMatchClauseToIndexcol( RelOptInfo *rel, Oid tableID,
+                               sdbIndexInfo *index, int indexcol,
+                               RestrictInfo *rinfo ) ;
+
+
+int sdbGetIndexInfos( SdbExecState *sdbState, sdbIndexInfo *indexInfo,
                       int maxNum, int *indexNum ) ;
 
 
-sdbConnectionHandle sdbGetConnectionHandle( const char **serverList, 
-                                            int serverNum, 
-                                            const char *usr, 
-                                            const char *passwd, 
+sdbConnectionHandle sdbGetConnectionHandle( const char **serverList,
+                                            int serverNum,
+                                            const char *usr,
+                                            const char *passwd,
                                             const char *preference_instance,
                                             const char *transaction ) ;
 
-sdbCollectionHandle sdbGetSdbCollection( sdbConnectionHandle connectionHandle, 
+sdbCollectionHandle sdbGetSdbCollection( sdbConnectionHandle connectionHandle,
       const char *sdbcs, const char *sdbcl ) ;
 
 
 SdbConnectionPool *sdbGetConnectionPool() ;
 
-int sdbSetConnectionPreference( sdbConnectionHandle hConnection, 
+int sdbSetConnectionPreference( sdbConnectionHandle hConnection,
                                 const CHAR *preference_instance ) ;
+
+BOOLEAN sdbIsInterrupt() ;
 
 void sdbReleaseConnectionFromPool(int index) ;
 
 IndexPath *sdb_build_index_paths(PlannerInfo *root, RelOptInfo *rel,
-				  sdbIndexInfo *sdbIndex, sdbIndexClauseSet *clauses,
-				  SdbExecState *fdw_state);
+              sdbIndexInfo *sdbIndex, sdbIndexClauseSet *clauses,
+              SdbExecState *fdw_state);
 
-IndexPath *sdb_create_index_path(PlannerInfo *root, RelOptInfo *rel, 
-				                     IndexOptInfo *index, List *indexclauses,
-				                     List *indexclausecols, List *indexorderbys,
-				                     List *indexorderbycols, List *pathkeys,
-				                     ScanDirection indexscandir, bool indexonly,
-				                     Relids required_outer, double loop_count,
-				                     SdbExecState *fdw_state);
+IndexPath *sdb_create_index_path(PlannerInfo *root, RelOptInfo *rel,
+                                 IndexOptInfo *index, List *indexclauses,
+                                 List *indexclausecols, List *indexorderbys,
+                                 List *indexorderbycols, List *pathkeys,
+                                 ScanDirection indexscandir, bool indexonly,
+                                 Relids required_outer, double loop_count,
+                                 SdbExecState *fdw_state);
 
 EnumSdbArgType getArgumentType(List *arguments);
 
-int sdbGenerateRescanCondition(SdbExecState *fdw_state, PlanState *planState, 
+int sdbGenerateRescanCondition(SdbExecState *fdw_state, PlanState *planState,
                                sdbbson *rescanCondition);
 
 void sdbPrintBson( sdbbson *bson, int log_level, const char *label ) ;

@@ -22,8 +22,108 @@ namespace SequoiaDB
         private string userName = "";
         private string password = "";
         internal bool isBigEndian = false ;
+        private Dictionary<String, DateTime> nameCache = new Dictionary<String, DateTime>();
+        private static bool enableCache = true;
+        private static long cacheInterval = 300 * 1000;
         //private static readonly Logger logger = new Logger("Sequoiadb");
+        private BsonDocument attributeCache = new BsonDocument();
 
+        internal void UpsertCache(String name)
+        {
+            if (!enableCache || name == null)
+                return;
+            DateTime now = DateTime.Now;
+            // never use "nameCache.Add(name, now);"
+            // for it will throw exception when key exist
+            nameCache[name] = now;
+            // here we find String::Split will take "foo."
+            // as 2 parts, so arr.Lenght is 2
+            // it's differet from java
+            String[] arr = name.Split(new Char[] { '.' });
+            if (arr.Length > 1)
+                nameCache[arr[0]] = now;
+      
+        }
+
+        internal void RemoveCache(String name)
+        {
+            if (!enableCache || name == null)
+                return;
+            String[] arr = name.Split(new Char[] { '.' });
+            // here we find String::Split will take "foo."
+            // as 2 parts, so arr.Lenght is 2
+            // it's differet from java
+            if (arr.Length == 1)
+            {
+                // when we come here, "name" is a cs name, so 
+                // we are going to remove the cache of the cs 
+                // and the cache of the cls
+                nameCache.Remove(name);
+                List<String> list = new List<String>();
+                foreach (KeyValuePair<String, DateTime> kvp in nameCache)
+                {
+                    String[] nameArr = kvp.Key.Split(new Char[] { '.' });
+                    if (nameArr.Length > 1 && nameArr[0] == name)
+                    {
+                        list.Add(kvp.Key);
+                    }
+                }
+                foreach (String str in list)
+                {
+                    nameCache.Remove(str);
+                }
+            }
+            else 
+            {
+                // we are going to remove the cache of the cl
+                nameCache.Remove(name);
+            }
+        }
+
+        internal bool FetchCache(String name)
+        {
+            if (!enableCache)
+                return false;
+
+            if (nameCache.ContainsKey(name))
+            {
+                DateTime value;
+                // when name does not exist, value is "0001-01-01 00:00:00"
+                if (!nameCache.TryGetValue(name, out value))
+                {
+                    nameCache.Remove(name);
+                    return false;
+                }
+                if ((DateTime.Now - value).TotalMilliseconds > cacheInterval)
+                {
+                    nameCache.Remove(name);
+                    return false;
+                }
+                else
+                {
+                    return true;
+                }
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        /** \fn InitClient(ClientOptions options)
+         *  \brief Initialize the configuration options for client
+         *  \param options The configuration options for client
+         */
+        public static void InitClient(ClientOptions options)
+        {
+            enableCache = (options != null) ? options.EnableCache : true;
+            cacheInterval = (options != null && options.CacheInterval >= 0) ? options.CacheInterval : 300 * 1000;
+        }
+
+        /** \property Connection
+         *  \brief Return the connection object
+         *  \return The Connection
+         */
         public IConnection Connection
         {
             get { return connection; }
@@ -196,6 +296,7 @@ namespace SequoiaDB
                     throw e;
                 }
             }
+            _clearSessionAttrCache();
         }
 
         /** \fn Disconnect()
@@ -212,6 +313,7 @@ namespace SequoiaDB
                 connection.Close();
                 connection = null;
             }
+            _clearSessionAttrCache();
         }
 
         /** \fn bool IsClosed()
@@ -447,12 +549,7 @@ namespace SequoiaDB
 
             BsonDocument options = new BsonDocument();
             options.Add(SequoiadbConstants.FIELD_PAGESIZE, pageSize);
-            SDBMessage rtn = CreateCS(csName, options);
-            int flags = rtn.Flags;
-            if (flags != 0)
-                throw new BaseException(flags);
-
-            return new CollectionSpace(this, csName.Trim());
+            return CreateCollectionSpace(csName, options);
         }
 
         /** \fn CollectionSpace CreateCollectionSpace(string csName, BsonDocument options)
@@ -477,8 +574,8 @@ namespace SequoiaDB
             int flags = rtn.Flags;
             if (flags != 0)
                 throw new BaseException(flags);
-
-            return new CollectionSpace(this, csName.Trim());
+            UpsertCache(csName);
+            return new CollectionSpace(this, csName);
         }
 
         /** \fn void DropCollectionSpace(string csName)
@@ -493,6 +590,7 @@ namespace SequoiaDB
             int flags = rtn.Flags;
             if (flags != 0)
                 throw new BaseException(flags);
+            RemoveCache(csName);
         }
 
         /** \fn CollectionSpace GetCollecitonSpace(string csName)
@@ -505,8 +603,14 @@ namespace SequoiaDB
          */
         public CollectionSpace GetCollecitonSpace(string csName) 
         {
+            // create cs from cache
+            if (FetchCache(csName))
+                return new CollectionSpace(this, csName);
+            // create cs from database
+            // we don't need to update or remove cache here,
+            // for "isCollectionSpaceExist" has do that
             if (IsCollectionSpaceExist(csName))
-                return new CollectionSpace(this, csName.Trim());
+                return new CollectionSpace(this, csName);
             else
                 throw new BaseException("SDB_DMS_CS_NOTEXIST") ;
         }
@@ -528,9 +632,15 @@ namespace SequoiaDB
             SDBMessage rtn = AdminCommand(command, condition, dummyObj, dummyObj, dummyObj);
             int flags = rtn.Flags;
             if (flags == 0)
+            {
+                UpsertCache(csName);
                 return true;
+            }
             else if (flags == (int)Errors.errors.SDB_DMS_CS_NOTEXIST)
+            {
+                RemoveCache(csName);
                 return false;
+            }
             else
                 throw new BaseException(flags);
         }
@@ -618,15 +728,20 @@ namespace SequoiaDB
          *  \brief Get the snapshots of specified type
          *  \param snapType The specified type as below:
          *  
-         *      SDB_SNAP_CONTEXTS
-         *      SDB_SNAP_CONTEXTS_CURRENT
-         *      SDB_SNAP_SESSIONS
-         *      SDB_SNAP_SESSIONS_CURRENT
-         *      SDB_SNAP_COLLECTIONS
-         *      SDB_SNAP_COLLECTIONSPACES
-         *      SDB_SNAP_DATABASE
-         *      SDB_SNAP_SYSTEM
-         *      SDB_SNAP_CATALOG
+         *      SDBConst.SDB_SNAP_CONTEXTS
+         *      SDBConst.SDB_SNAP_CONTEXTS_CURRENT
+         *      SDBConst.SDB_SNAP_SESSIONS
+         *      SDBConst.SDB_SNAP_SESSIONS_CURRENT
+         *      SDBConst.SDB_SNAP_COLLECTIONS
+         *      SDBConst.SDB_SNAP_COLLECTIONSPACES
+         *      SDBConst.SDB_SNAP_DATABASE
+         *      SDBConst.SDB_SNAP_SYSTEM
+         *      SDBConst.SDB_SNAP_CATALOG
+         *      SDBConst.SDB_SNAP_TRANSACTIONS
+         *      SDBConst.SDB_SNAP_TRANSACTIONS_CURRENT
+         *      SDBConst.SDB_SNAP_ACCESSPLANS
+         *      SDBConst.SDB_SNAP_HEALTH
+         *      
          *  \param matcher The matching condition or null
          *  \param selector The selective rule or null
          *  \param orderBy The ordered rule or null
@@ -676,6 +791,22 @@ namespace SequoiaDB
                     command = SequoiadbConstants.ADMIN_PROMPT + SequoiadbConstants.SNAP_CMD + " " +
                            SequoiadbConstants.CATA;
                     break;
+                case SDBConst.SDB_SNAP_TRANSACTIONS:
+                    command = SequoiadbConstants.ADMIN_PROMPT + SequoiadbConstants.SNAP_CMD + " " +
+                           SequoiadbConstants.TRANSACTIONS;
+                    break;
+                case SDBConst.SDB_SNAP_TRANSACTIONS_CURRENT:
+                    command = SequoiadbConstants.ADMIN_PROMPT + SequoiadbConstants.SNAP_CMD + " " +
+                           SequoiadbConstants.TRANSACTIONS_CURRENT;
+                    break;
+                case SDBConst.SDB_SNAP_ACCESSPLANS:
+                    command = SequoiadbConstants.ADMIN_PROMPT + SequoiadbConstants.SNAP_CMD + " " +
+                              SequoiadbConstants.ACCESSPLANS;
+                    break;
+                case SDBConst.SDB_SNAP_HEALTH:
+                    command = SequoiadbConstants.ADMIN_PROMPT + SequoiadbConstants.SNAP_CMD + " " +
+                           SequoiadbConstants.HEALTH;
+                    break;  
                 default:
                     throw new BaseException("SDB_INVALIDARG");
             }
@@ -705,19 +836,20 @@ namespace SequoiaDB
          *  \brief Get the informations of specified type
          *  \param listType The specified type as below:
          *  
-         *      SDB_LIST_CONTEXTS
-         *      SDB_LIST_CONTEXTS_CURRENT
-         *      SDB_LIST_SESSIONS
-         *      SDB_LIST_SESSIONS_CURRENT
-         *      SDB_LIST_COLLECTIONS
-         *      SDB_LIST_COLLECTIONSPACES
-         *      SDB_LIST_STORAGEUNITS
-         *      SDB_LIST_GROUPS
-         *      SDB_LIST_STOREPROCEDURES
-         *      SDB_LIST_DOMAINS
-         *      SDB_LIST_TASKS
-         *      SDB_LIST_CS_IN_DOMAIN
-         *      SDB_LIST_CL_IN_DOMAIN
+         *      SDBConst.SDB_LIST_CONTEXTS
+         *      SDBConst.SDB_LIST_CONTEXTS_CURRENT
+         *      SDBConst.SDB_LIST_SESSIONS
+         *      SDBConst.SDB_LIST_SESSIONS_CURRENT
+         *      SDBConst.SDB_LIST_COLLECTIONS
+         *      SDBConst.SDB_LIST_COLLECTIONSPACES
+         *      SDBConst.SDB_LIST_STORAGEUNITS
+         *      SDBConst.SDB_LIST_GROUPS
+         *      SDBConst.SDB_LIST_STOREPROCEDURES
+         *      SDBConst.SDB_LIST_DOMAINS
+         *      SDBConst.SDB_LIST_TASKS
+         *      SDBConst.SDB_LIST_TRANSACTIONS
+         *      SDBConst.SDB_LIST_TRANSACTIONS_CURRENT
+         *      
          *  \return A DBCursor of all the fitted objects or null
          *  \exception SequoiaDB.BaseException
          *  \exception System.Exception
@@ -733,19 +865,19 @@ namespace SequoiaDB
          *  \brief Get the informations of specified type
          *  \param listType The specified type as below:
          *  
-         *      SDB_LIST_CONTEXTS
-         *      SDB_LIST_CONTEXTS_CURRENT
-         *      SDB_LIST_SESSIONS
-         *      SDB_LIST_SESSIONS_CURRENT
-         *      SDB_LIST_COLLECTIONS
-         *      SDB_LIST_COLLECTIONSPACES
-         *      SDB_LIST_STORAGEUNITS
-         *      SDB_LIST_GROUPS
-         *      SDB_LIST_STOREPROCEDURES
-         *      SDB_LIST_DOMAINS
-         *      SDB_LIST_TASKS
-         *      SDB_LIST_CS_IN_DOMAIN
-         *      SDB_LIST_CL_IN_DOMAIN
+         *      SDBConst.SDB_LIST_CONTEXTS
+         *      SDBConst.SDB_LIST_CONTEXTS_CURRENT
+         *      SDBConst.SDB_LIST_SESSIONS
+         *      SDBConst.SDB_LIST_SESSIONS_CURRENT
+         *      SDBConst.SDB_LIST_COLLECTIONS
+         *      SDBConst.SDB_LIST_COLLECTIONSPACES
+         *      SDBConst.SDB_LIST_STORAGEUNITS
+         *      SDBConst.SDB_LIST_GROUPS
+         *      SDBConst.SDB_LIST_STOREPROCEDURES
+         *      SDBConst.SDB_LIST_DOMAINS
+         *      SDBConst.SDB_LIST_TASKS
+         *      SDBConst.SDB_LIST_TRANSACTIONS
+         *      SDBConst.SDB_LIST_TRANSACTIONS_CURRENT
          *      
          *  \param matcher The matching condition or null
          *  \param selector The selective rule or null
@@ -804,13 +936,21 @@ namespace SequoiaDB
                     command = SequoiadbConstants.ADMIN_PROMPT + SequoiadbConstants.LIST_CMD + " " +
                            SequoiadbConstants.TASKS;
                     break;
-                case SDBConst.SDB_LIST_CS_IN_DOMAIN:
+                case SDBConst.SDB_LIST_TRANSACTIONS:
                     command = SequoiadbConstants.ADMIN_PROMPT + SequoiadbConstants.LIST_CMD + " " +
-                           SequoiadbConstants.CS_IN_DOMAIN;
+                           SequoiadbConstants.TRANSACTIONS;
+                    break;
+                case SDBConst.SDB_LIST_TRANSACTIONS_CURRENT:
+                    command = SequoiadbConstants.ADMIN_PROMPT + SequoiadbConstants.LIST_CMD + " " +
+                           SequoiadbConstants.TRANSACTIONS_CURRENT;
                     break;
                 case SDBConst.SDB_LIST_CL_IN_DOMAIN:
                     command = SequoiadbConstants.ADMIN_PROMPT + SequoiadbConstants.LIST_CMD + " " +
                            SequoiadbConstants.CL_IN_DOMAIN;
+                    break;
+                case SDBConst.SDB_LIST_CS_IN_DOMAIN:
+                    command = SequoiadbConstants.ADMIN_PROMPT + SequoiadbConstants.LIST_CMD + " " +
+                           SequoiadbConstants.CS_IN_DOMAIN;
                     break;
                 default:
                     throw new BaseException("SDB_INVALIDARG");
@@ -837,20 +977,37 @@ namespace SequoiaDB
             return new DBCursor(rtn, this);
         }
 
-        /** \fn void ResetSnapshot( BsonDocument matcher )
+        /** \fn void ResetSnapshot(BsonDocument options)
          *  \brief Reset the snapshot
-         *  \param matcher The matching condition 
+         *  \param [in] options The control options:
+         * 
+         *      Type            : (String) Specify the snapshot type to be reset(default is "all"):
+         *                        "sessions"
+         *                        "sessions current"
+         *                        "database"
+         *                        "health"
+         *                        "all"
+         *      SessionID       : (Int32) Specify the session ID to be reset.
+         *      Other options   : Some of other options are as below:(please visit the official website
+         *                        to search "Location Elements" for more detail.)
+         *                        GroupID:INT32,
+         *                        GroupName:String,
+         *                        NodeID:INT32,
+         *                        HostName:String,
+         *                        svcname:String,
+         *                        ...
+         *  \return void
          *  \exception SequoiaDB.BaseException
          *  \exception System.Exception
          */
-        public void ResetSnapshot( BsonDocument matcher )
+        public void ResetSnapshot( BsonDocument options )
         {
             BsonDocument dummyObj = new BsonDocument();
-            if (matcher == null)
-                matcher = dummyObj;
+            if (options == null)
+                options = dummyObj;
             string command = SequoiadbConstants.ADMIN_PROMPT + SequoiadbConstants.SNAP_CMD + " "
                              + SequoiadbConstants.RESET;
-            SDBMessage rtn = AdminCommand(command, matcher, dummyObj, dummyObj, dummyObj);
+            SDBMessage rtn = AdminCommand(command, options, dummyObj, dummyObj, dummyObj);
             int flags = rtn.Flags;
             if (flags != 0)
                 throw new BaseException(flags);
@@ -909,14 +1066,18 @@ namespace SequoiaDB
         /** \fn DBCursor ListBackup(BsonDocument options, BsonDocument matcher,
 		 *	                        BsonDocument selector, BsonDocument orderBy)
          *  \brief List the backups.
-         *  \param options Contains configuration infomations for remove backups, list all the backups in the default backup path if null.
-         *         The "options" contains 3 options as below. All the elements in options are optional. 
+         *  \param options Contains configuration information for listing backups, list all the backups in the default backup path if null.
+         *         The "options" contains several options as below. All the elements in options are optional. 
          *         eg: {"GroupName":["rgName1", "rgName2"], "Path":"/opt/sequoiadb/backup", "Name":"backupName"}
-         *         <ul>
-         *          <li>GroupName   : Assign the backups of specifed replica groups to be list
-         *          <li>Path        : Assign the backups in specifed path to be list, if not assign, use the backup path asigned in the configuration file
-         *          <li>Name        : Assign the backups with specifed name to be list
-         *         </ul>
+         *                 <ul>
+         *                 <li>GroupID     : Specified the group id of the backups, default to list all the backups of all the groups.
+         *                 <li>GroupName   : Specified the group name of the backups, default to list all the backups of all the groups.
+         *                 <li>Path        : Specified the path of the backups, default to use the backup path asigned in the configuration file.
+         *                 <li>Name        : Specified the name of backup, default to list all the backups.
+         *                 <li>IsSubDir    : Specified the "Path" is a subdirectory of the backup path asigned in the configuration file or not, default to be false.
+         *                 <li>Prefix      : Specified the prefix name of the backups, support for using wildcards("%g","%G","%h","%H","%s","%s"),such as: Prefix:"%g_bk_", default to not using wildcards.
+         *                 <li>Detail      : Display the detail of the backups or not, default to be false.
+         *                 </ul>
          *  \param matcher The matching rule, return all the documents if null
          *  \param selector The selective rule, return the whole document if null
          *  \param orderBy The ordered rule, never sort if null
@@ -927,19 +1088,6 @@ namespace SequoiaDB
         public DBCursor ListBackup(BsonDocument options, BsonDocument matcher,
 	   	                           BsonDocument selector, BsonDocument orderBy)
         {
-            // check argument
-            if (options != null)
-            {
-                foreach (string key in options.Names)
-                {
-                    if (key.Equals(SequoiadbConstants.FIELD_GROUPNAME) ||
-                        key.Equals(SequoiadbConstants.FIELD_NAME) ||
-                        key.Equals(SequoiadbConstants.FIELD_PATH))
-                        continue;
-                    else
-                        throw new BaseException("INVALIDARG");
-                }
-            }
             // build command
             string commandString = SequoiadbConstants.ADMIN_PROMPT + SequoiadbConstants.LIST_BACKUP_CMD;
             // run command
@@ -961,13 +1109,17 @@ namespace SequoiaDB
 
         /** \fn void RemoveBackup ( BsonDocument options )
          *  \brief Remove the backups.
-         *  \param options Contains configuration infomations for remove backups, remove all the backups in the default backup path if null.
-         *                 The "options" contains 3 options as below. All the elements in options are optional.
+         *  \param options Contains configuration information for removing backups, remove all the backups in the default backup path if null.
+         *                 The "options" contains several options as below. All the elements in options are optional.
          *                 eg: {"GroupName":["rgName1", "rgName2"], "Path":"/opt/sequoiadb/backup", "Name":"backupName"}
          *                 <ul>
-         *                  <li>GroupName   : Assign the backups of specifed replica grouops to be remove
-         *                  <li>Path        : Assign the backups in specifed path to be remove, if not assign, use the backup path asigned in the configuration file
-         *                  <li>Name        : Assign the backups with specifed name to be remove
+         *                 <li>GroupID     : Specified the group id of the backups, default to list all the backups of all the groups.
+         *                 <li>GroupName   : Specified the group name of the backups, default to list all the backups of all the groups.
+         *                 <li>Path        : Specified the path of the backups, default to use the backup path asigned in the configuration file.
+         *                 <li>Name        : Specified the name of backup, default to list all the backups.
+         *                 <li>IsSubDir    : Specified the "Path" is a subdirectory of the backup path asigned in the configuration file or not, default to be false.
+         *                 <li>Prefix      : Specified the prefix name of the backups, support for using wildcards("%g","%G","%h","%H","%s","%s"),such as: Prefix:"%g_bk_", default to not using wildcards.
+         *                 <li>Detail      : Display the detail of the backups or not, default to be false.
          *                 </ul>
          *  \return void
          *  \exception SequoiaDB.BaseException
@@ -975,19 +1127,6 @@ namespace SequoiaDB
          */
         public void RemoveBackup(BsonDocument options)
         {
-            // check argument
-            if (options != null)
-            {
-                foreach (string key in options.Names)
-                {
-                    if (key.Equals(SequoiadbConstants.FIELD_GROUPNAME) ||
-                        key.Equals(SequoiadbConstants.FIELD_NAME) ||
-                        key.Equals(SequoiadbConstants.FIELD_PATH))
-                        continue;
-                    else
-                        throw new BaseException("INVALIDARG");
-                }
-            }
             // build command
             string commandString = SequoiadbConstants.ADMIN_PROMPT + SequoiadbConstants.REMOVE_BACKUP_CMD;
             // run command
@@ -1007,7 +1146,11 @@ namespace SequoiaDB
          *  \param matcher The matching rule, return all the documents if null
          *  \param selector The selective rule, return the whole document if null
          *  \param orderBy The ordered rule, never sort if null
-         *  \param hint The hint, automatically match the optimal hint if null
+         *  \param hint 
+         *            Specified the index used to scan data. e.g. {"":"ageIndex"} means 
+         *            using index "ageIndex" to scan data(index scan); 
+         *            {"":null} means table scan. when hint is null, 
+         *            database automatically match the optimal index to scan data.
          *  \exception SequoiaDB.BaseException
          *  \exception System.Exception
          */
@@ -1089,50 +1232,85 @@ namespace SequoiaDB
             }
         }
 
+        internal void _clearSessionAttrCache()
+        {
+            this.attributeCache.Clear();
+        }
+
+        internal void _setSessionAttrCache(BsonDocument attribute)
+        {
+            this.attributeCache = (BsonDocument)attribute.DeepClone();
+        }
+
+        internal BsonDocument _getSessionAttrCache()
+        {
+            return (BsonDocument)this.attributeCache.DeepClone();
+        }
+
         /** \fn void SetSessionAttr(BsonDocument options)
          *  \brief Set the attributes of the session.
          *  \param options The configuration options for session.The options are as below:
-         *  
-         *      PreferedInstance : indicate which instance to respond read request in current session.
-         *                         eg:{"PreferedInstance":"m"/"M"/"s"/"S"/"a"/"A"/1-7},
-         *                         prefer to choose "read and write instance"/"read only instance"/"anyone instance"/instance1-insatance7,
-         *                         default to be {"PreferedInstance":"A"}, means would like to choose anyone instance to respond read request such as query. 
+         *
+         *      PreferedInstance : Preferred instance for read request in the current session. Could be single value in "M", "m", "S", "s", "A", "a", 1-255, or BSON Array to include multiple values.
+         *                         e.g. { "PreferedInstance" : [ 1, 7 ] }.
+         *                         "M", "m": read and write instance( master instance ). If multiple numeric instances are given with "M", matched master instance will be chosen in higher priority. If multiple numeric instances are given with "M" or "m", master instance will be chosen if no numeric instance is matched.
+         *                         "S", "s": read only instance( slave instance ). If multiple numeric instances are given with "S", matched slave instances will be chosen in higher priority. If multiple numeric instances are given with "S" or "s", slave instance will be chosen if no numeric instance is matched.
+         *                         "A", "a": any instance.
+         *                         1-255: the instance with specified instance ID.
+         *                         If multiple alphabet instances are given, only first one will be used.
+         *                         If matched instance is not found, will choose instance by random.
+         *      PreferedInstanceMode : The mode to choose query instance when multiple preferred instances are found in the current session.
+         *                             e.g. { "PreferedInstanceMode : "random" }.
+         *                             "random": choose the instance from matched instances by random.
+         *                             "ordered": choose the instance from matched instances by the order of "PreferedInstance".
+         *      Timeout : The timeout (in ms) for operations in the current session. -1 means no timeout for operations.
+         *                e.g. { "Timeout" : 10000 }.
+         *  \return void
          *  \exception SequoiaDB.BaseException
          *  \exception System.Exception
          */
         public void SetSessionAttr(BsonDocument options)
         {
             // check argument
-            if (options == null || !options.Contains(SequoiadbConstants.FIELD_PREFERED_INSTANCE))
+            if (options == null)
                 throw new BaseException("SDB_INVALIDARG");
             // build a bson to send
             BsonDocument attrObj = new BsonDocument();
-            BsonValue value = options.GetValue(SequoiadbConstants.FIELD_PREFERED_INSTANCE);
-            if (value.IsInt32)
+
+            IEnumerator<BsonElement> it = options.GetEnumerator();
+            while (it.MoveNext())
             {
-                int v = options[SequoiadbConstants.FIELD_PREFERED_INSTANCE].AsInt32;
-                if (v < 1 || v > 7)
-                    throw new BaseException("SDB_INVALIDARG");
-                attrObj.Add(SequoiadbConstants.FIELD_PREFERED_INSTANCE, v);
-            }
-            else if (value.IsString)
-            {
-                string v = options[SequoiadbConstants.FIELD_PREFERED_INSTANCE].AsString;
-                int val = (int)PreferInstanceType.INS_TYPE_MIN;
-                if (v.Equals("M") || v.Equals("m"))
-                    val = (int)PreferInstanceType.INS_MASTER;
-                else if (v.Equals("S") || v.Equals("s"))
-                    val = (int)PreferInstanceType.INS_SLAVE;
-                else if (v.Equals("A") || v.Equals("a"))
-                    val = (int)PreferInstanceType.INS_SLAVE;
+                BsonElement e = it.Current;
+                if (e.Name == SequoiadbConstants.FIELD_PREFERED_INSTANCE)
+                {
+                    BsonValue value = e.Value;
+                    if (e.Value.IsInt32)
+                    {
+                        attrObj.Add(SequoiadbConstants.FIELD_PREFERED_INSTANCE, e.Value.AsInt32);
+                    }
+                    else if (value.IsString)
+                    {
+                        string v = options[SequoiadbConstants.FIELD_PREFERED_INSTANCE].AsString;
+                        int val = (int)PreferInstanceType.INS_TYPE_MIN;
+                        if (v.Equals("M") || v.Equals("m"))
+                            val = (int)PreferInstanceType.INS_MASTER;
+                        else if (v.Equals("S") || v.Equals("s"))
+                            val = (int)PreferInstanceType.INS_SLAVE;
+                        else if (v.Equals("A") || v.Equals("a"))
+                            val = (int)PreferInstanceType.INS_SLAVE;
+                        else
+                            throw new BaseException("SDB_INVALIDARG");
+                        attrObj.Add(SequoiadbConstants.FIELD_PREFERED_INSTANCE, val);
+                    }
+                    attrObj.Add(SequoiadbConstants.FIELD_PREFERED_INSTANCE_V1, e.Value);
+                }
                 else
-                    throw new BaseException("SDB_INVALIDARG");
-                attrObj.Add(SequoiadbConstants.FIELD_PREFERED_INSTANCE, val);
+                {
+                    attrObj.Add(e);
+                }
             }
-            else
-            {
-                throw new BaseException("SDB_INVALIDARG");
-            }
+
+            _clearSessionAttrCache() ;
             // build command
             string commandString = SequoiadbConstants.ADMIN_PROMPT + SequoiadbConstants.SETSESS_ATTR;
             // run command
@@ -1142,6 +1320,41 @@ namespace SequoiaDB
             int flags = rtn.Flags;
             if (flags != 0)
                 throw new BaseException(flags);
+        }
+
+        /** \fn BsonDocument GetSessionAttr()
+         *  \brief Get the attributes of the session.
+         *  \return BsonDocument or null while no session attributes returned
+         *  \exception SequoiaDB.BaseException
+         *  \exception System.Exception
+         */
+        public BsonDocument GetSessionAttr()
+        {
+            BsonDocument result = _getSessionAttrCache();
+            if (result.ElementCount != 0)
+            {
+                return result;
+            }
+            // build command
+            string commandString = SequoiadbConstants.ADMIN_PROMPT + SequoiadbConstants.GETSESS_ATTR;
+            // run command
+            BsonDocument dummyObj = new BsonDocument();
+            SDBMessage rtn = AdminCommand(commandString, dummyObj, dummyObj, dummyObj, dummyObj);
+            // check return flag
+            int flags = rtn.Flags;
+            if (flags != 0)
+                throw new BaseException(flags);
+            DBCursor cursor = new DBCursor(rtn, this);
+            result = cursor.Next();
+            if (result == null)
+            {
+                _clearSessionAttrCache();
+            }
+            else
+            {
+                _setSessionAttrCache(result);
+            }
+            return result;
         }
 
         /** \fn void CloseAllCursors()
@@ -1283,11 +1496,16 @@ namespace SequoiaDB
         }
 
         /** \fn DBCursor ListDomains(BsonDocument matcher, BsonDocument selector,
-         *                           BsonDocument orderBy)
+         *                           BsonDocument orderBy, BsonDocument hint)
          *  \brief List domains.
          *  \param matcher The matching rule, return all the documents if null
          *  \param selector The selective rule, return the whole document if null
          *  \param orderBy The ordered rule, never sort if null
+         *  \param hint 
+         *            Specified the index used to scan data. e.g. {"":"ageIndex"} means 
+         *            using index "ageIndex" to scan data(index scan); 
+         *            {"":null} means table scan. when hint is null, 
+         *            database automatically match the optimal index to scan data.
          *  \return the cursor of the result.
          *  \exception SequoiaDB.BaseException
          *  \exception System.Exception
@@ -1331,7 +1549,9 @@ namespace SequoiaDB
                     try
                     {
                         if (!detail[SequoiadbConstants.FIELD_GROUPID].IsInt32)
+                        {
                             throw new BaseException("SDB_SYS");
+                        }
                         int groupID = detail[SequoiadbConstants.FIELD_GROUPID].AsInt32;
                         return new ReplicaGroup(this, groupName, groupID);
                     }
@@ -1341,10 +1561,14 @@ namespace SequoiaDB
                     }
                 }
                 else
-                    return null;
+                {
+                    throw new BaseException("SDB_CLS_GRP_NOT_EXIST");
+                }
             }
             else
-                throw new BaseException("SDB_SYS");
+            {
+                throw new BaseException("SDB_CLS_GRP_NOT_EXIST");
+            }
         }
 
         /** \fn ReplicaGroup GetReplicaGroup(int groupID)
@@ -1364,10 +1588,13 @@ namespace SequoiaDB
             {
                 BsonDocument detail = cursor.Next();
                 if (detail != null)
+                {
                     try
                     {
                         if (!detail[SequoiadbConstants.FIELD_GROUPNAME].IsString)
+                        {
                             throw new BaseException("SDB_SYS");
+                        }
                         string groupName = detail[SequoiadbConstants.FIELD_GROUPNAME].AsString;
                         return new ReplicaGroup(this, groupName, groupID);
                     }
@@ -1375,11 +1602,16 @@ namespace SequoiaDB
                     {
                         throw new BaseException("SDB_SYS");
                     }
+                }
                 else
-                    return null;
+                {
+                    throw new BaseException("SDB_CLS_GRP_NOT_EXIST");
+                }
             }
             else
-                throw new BaseException("SDB_SYS");
+            {
+                throw new BaseException("SDB_CLS_GRP_NOT_EXIST");
+            }
         }
 
         /** \fn ReplicaGroup CreateReplicaGroup(string groupName)
@@ -1460,7 +1692,7 @@ namespace SequoiaDB
                          e.Name == SequoiadbConstants.SVCNAME ||
                          e.Name == SequoiadbConstants.DBPATH)
                         continue;
-                    condition.Add(e.Name, e.Value.AsString);
+                    condition.Add(e.Name, e.Value);
                 }
             }
 
@@ -1528,6 +1760,104 @@ namespace SequoiaDB
             return dc;
         }
 
+        /** \fn void Sync(BsonDocument options)
+         *  \brief Sync the current database.
+         *  \param [in] options The control options:
+         *
+         *      Deep: (INT32) Flush with deep mode or not. 1 in default.
+         *              0 for non-deep mode,1 for deep mode,-1 means use the configuration with server
+         *      Block: (Bool) Flush with block mode or not. false in default.
+         *      CollectionSpace: (String) Specify the collectionspace to sync.
+         *                      If not set, will sync all the collectionspaces and logs,
+         *                      otherwise, will only sync the collectionspace specified.
+         *      Some of other options are as below:(only take effect in coordinate nodes, 
+         *                      please visit the official website to search "sync" 
+         *                      or "Location Elements" for more detail.)
+         *      GroupID:INT32,
+         *      GroupName:String,
+         *      NodeID:INT32,
+         *      HostName:String,
+         *      svcname:String,
+         *      ...
+         *  \return void
+         *  \exception SequoiaDB.BaseException
+         *  \exception System.Exception
+         */
+        public void Sync(BsonDocument options)
+        {
+            // build cmd
+            string command = SequoiadbConstants.ADMIN_PROMPT + SequoiadbConstants.CMD_VALUE_NAME_SYNC_DB;
+            // run command
+            SDBMessage rtn = AdminCommand(command, options, null, null, null);
+            int flags = rtn.Flags;
+            if (flags != 0)
+            {
+                throw new BaseException(flags);
+            }
+        }
+
+        /** \fn void Sync()
+         *  \brief Sync the current database.
+         *  \return void
+         *  \exception SequoiaDB.BaseException
+         *  \exception System.Exception
+         */
+        public void Sync()
+        {
+            Sync(new BsonDocument());
+        }
+
+        /** \fn void Analyze(BsonDocument options)
+         *  \brief Analyze collection or index to collect statistics information
+         *  \param [in] options The control options:
+         *
+         *      CollectionSpace : (String) Specify the collection space to be analyzed.
+         *      Collection      : (String) Specify the collection to be analyzed.
+         *      Index           : (String) Specify the index to be analyzed.
+         *      Mode            : (Int32) Specify the analyze mode (default is 1):
+         *                        Mode 1 will analyze with data samples.
+         *                        Mode 2 will analyze with full data.
+         *                        Mode 3 will generate default statistics.
+         *                        Mode 4 will reload statistics into memory cache.
+         *                        Mode 5 will clear statistics from memory cache.
+         *      Other options   : Some of other options are as below:(only take effect
+         *                        in coordinate nodes, please visit the official website
+         *                        to search "analyze" or "Location Elements" for more
+         *                        detail.)
+         *                        GroupID:INT32,
+         *                        GroupName:String,
+         *                        NodeID:INT32,
+         *                        HostName:String,
+         *                        svcname:String,
+         *                        ...
+         *  \return void
+         *  \exception SequoiaDB.BaseException
+         *  \exception System.Exception
+         */
+        public void Analyze(BsonDocument options)
+        {
+            // build cmd
+            string command = SequoiadbConstants.ADMIN_PROMPT + SequoiadbConstants.CMD_VALUE_NAME_ANALYZE;
+            // run command
+            SDBMessage rtn = AdminCommand(command, options, null, null, null);
+            int flags = rtn.Flags;
+            if (flags != 0)
+            {
+                throw new BaseException(flags);
+            }
+        }
+
+        /** \fn void Sync()
+         *  \brief Analyze all collections and indexes to collect statistics information
+         *  \return void
+         *  \exception SequoiaDB.BaseException
+         *  \exception System.Exception
+         */
+        public void Analyze()
+        {
+            Analyze(new BsonDocument());
+        }
+
         private SDBMessage CreateCS(string csName, BsonDocument options)
         {
             string commandString = SequoiadbConstants.ADMIN_PROMPT + SequoiadbConstants.CREATE_CMD + " " + SequoiadbConstants.COLSPACE;
@@ -1536,7 +1866,7 @@ namespace SequoiaDB
             SDBMessage sdbMessage = new SDBMessage();
 
             cObj.Add(SequoiadbConstants.FIELD_NAME, csName);
-            cObj.Add(options);
+            cObj.Add((options != null) ? options : dummyObj);
             sdbMessage.OperationCode = Operation.OP_QUERY;
             sdbMessage.Matcher = cObj;
             sdbMessage.CollectionFullName = commandString;
@@ -1649,7 +1979,7 @@ namespace SequoiaDB
 
             byte[] request = SDBMessageHelper.BuildQueryRequest(sdbMessage, isBigEndian);
             if(connection == null)
-                throw new BaseException("SDB_NETWORK");
+                throw new BaseException("SDB_NOT_CONNECTED");
             connection.SendMessage(request);
             SDBMessage rtnSDBMessage = SDBMessageHelper.MsgExtractReply(connection.ReceiveMessage(isBigEndian), isBigEndian);
             rtnSDBMessage = SDBMessageHelper.CheckRetMsgHeader(sdbMessage, rtnSDBMessage);

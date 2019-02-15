@@ -38,11 +38,14 @@
 #include "qgmPlUpdate.hpp"
 #include "qgmConditionNodeHelper.hpp"
 #include "pmd.hpp"
-#include "pmdCB.hpp"
+#include "dmsCB.hpp"
+#include "dpsLogWrapper.hpp"
+#include "coordCB.hpp"
 #include "rtn.hpp"
-#include "rtnCoordUpdate.hpp"
+#include "coordUpdateOperator.hpp"
 #include "msgMessage.hpp"
 #include "utilStr.hpp"
+#include "qgmUtil.hpp"
 #include "pdTrace.hpp"
 #include "qgmTrace.hpp"
 
@@ -51,84 +54,36 @@ using namespace bson ;
 namespace engine
 {
    _qgmPlUpdate::_qgmPlUpdate( const _qgmDbAttr &collection,
-                               const qgmDbAttrVec &columns,
-                               const qgmOPFieldVec &values,
-                               _qgmConditionNode *condition )
+                               const BSONObj &modifer,
+                               _qgmConditionNode *condition,
+                               INT32 flag )
    :_qgmPlan( QGM_PLAN_TYPE_UPDATE, _qgmField() ),
-    _collection( collection )
+    _collection( collection ),
+    _updater( modifer ),
+    _flag( flag )
    {
-      INT32 rc = SDB_OK ;
-      if ( columns.size() != values.size() )
-      {
-         SDB_ASSERT( FALSE, "impossible" ) ;
-         goto done ;
-      }
-
       try
       {
-         BSONObjBuilder builder, vbuilder ;
-
-         qgmDbAttrVec::const_iterator it1 = columns.begin() ;
-         qgmOPFieldVec::const_iterator it2 = values.begin() ;
-         for ( ; it1 != columns.end(); it1++, it2++ )
-         {
-             if ( SQL_GRAMMAR::DIGITAL == it2->type )
-             {
-                if ( !vbuilder.appendAsNumber(  it1->toString(),
-                                     it2->value.attr().toString()) )
-                {
-                   PD_LOG( PDERROR, "failed to append as number:%s",
-                           it2->value.attr().toString().c_str() ) ;
-                   goto done ;
-                }
-             }
-             else if ( SQL_GRAMMAR::DATE == it2->type )
-             {
-                Date_t t ;
-                time_t tm ;
-                rc = utilStr2TimeT( it2->value.attr().toString().c_str(),
-                                    tm ) ;
-                if ( SDB_OK != rc )
-                {
-                   PD_LOG( PDDEBUG, "failed to parse to Date_t:%s",
-                           it2->value.toString().c_str() ) ;
-                   goto done ;
-                }
-
-                t = tm ;
-                vbuilder.appendDate( it1->toString(), t ) ;
-             }
-             else
-             {
-                vbuilder.append( it1->toString(),
-                                it2->value.attr().toString() ) ;
-             }
-         }
-
-         builder.append( "$set", vbuilder.obj() ) ;
-         _updater = builder.obj() ;
-
          if ( NULL != condition )
          {
             _qgmConditionNodeHelper tree( condition ) ;
-            _condition = tree.toBson() ;
+            _condition = tree.toBson( TRUE ) ;
          }
+         _initialized = TRUE ;
       }
       catch ( std::exception &e )
       {
         PD_LOG( PDERROR, "unexcepted err happened:%s", e.what() ) ;
-        goto done ;
       }
-
-      _initialized = TRUE ;
-   done:
-      return ;
-      /// do noting
    }
 
    _qgmPlUpdate::~_qgmPlUpdate()
    {
+   }
 
+   BOOLEAN _qgmPlUpdate::needRollback() const
+   {
+      return TRUE ;
    }
 
    // PD_TRACE_DECLARE_FUNCTION( SDB__QGMPLUPDATE__EXEC, "_qgmPlUpdate::_execute" )
@@ -140,31 +95,42 @@ namespace engine
       SDB_ROLE role = krcb->getDBRole() ;
       BSONObj hint ;
 
+      CHAR *pMsg = NULL ;
+      INT32 msgSize = 0 ;
+
       if ( SDB_ROLE_COORD == role )
       {
-         rtnCoordUpdate update ;
-         CHAR *msg = NULL ;
-         INT32 size = 0 ;
+         CoordCB *pCoord = krcb->getCoordCB() ;
+         coordUpdateOperator opr ;
          INT64 contextID = -1 ;
-         rc = msgBuildUpdateMsg( &msg, &size,
+         rtnContextBuf buff ;
+
+         rc = opr.init( pCoord->getResource(), eduCB ) ;
+         if ( rc )
+         {
+            PD_LOG( PDERROR, "Init operator[%s] failed, rc: %d",
+                    opr.getName(), rc ) ;
+            goto error ;
+         }
+         rc = msgBuildUpdateMsg( &pMsg, &msgSize,
                                  _collection.toString().c_str(),
-                                 0, 0,
+                                 _flag, 0,
                                  &_condition,
                                  &_updater,
-                                 &hint ) ;
+                                 &hint,
+                                 eduCB ) ;
 
-         if ( SDB_OK != rc )
+         if ( rc )
          {
-            SDB_OSS_FREE( msg ) ;
-            msg = NULL ;
+            PD_LOG( PDERROR, "Build message failed, rc: %d", rc ) ;
             goto error ;
          }
 
-         rc = update.execute( (MsgHeader*)msg, eduCB, contextID, NULL ) ;
-         SDB_OSS_FREE( msg ) ;
-         msg = NULL ;
-         if ( SDB_OK != rc )
+         rc = opr.execute( (MsgHeader*)pMsg, eduCB, contextID, &buff ) ;
+         if ( rc )
          {
+            PD_LOG( PDERROR, "Execute operator[%s] failed, rc: %d",
+                    opr.getName(), rc ) ;
             goto error ;
          }
       }
@@ -181,13 +147,17 @@ namespace engine
                          _condition,
                          _updater,
                          hint,
-                         0, eduCB, dmsCB, dpsCB ) ;
+                         _flag, eduCB, dmsCB, dpsCB ) ;
          if( SDB_OK != rc )
          {
             goto error ;
          }
       }
    done:
+      if ( pMsg )
+      {
+         msgReleaseBuffer( pMsg, eduCB ) ;
+      }
       PD_TRACE_EXITRC( SDB__QGMPLUPDATE__EXEC, rc ) ;
       return rc ;
    error:

@@ -47,10 +47,13 @@ namespace engine
    #define PMD_STARTUP_STOP_CHAR_LEN      ossStrlen(PMD_STARTUP_STOP_CHAR)
    #define PMD_STARTUP_RESTART_CHAR_LEN   ossStrlen(PMD_STARTUP_RESTART_CHAR)
 
+   #define PMD_STARTUP_NORMAL_STR       "normal"
+   #define PMD_STARTUP_CRASH_STR        "crash"
+   #define PMD_STARTUP_FAULT_STR        "fault"
+
    #define PMD_STARTUP_STR_LEN            ( 32 )
 
    const CHAR *g_startupChars[] = {
-   /// business status        DO             OK
    /*SDB_START_NORMAL*/  "STOPOFF:DO",  "STOPOFF:OK",
    /*SDB_START_CRASH*/   "STARTUP:DO",  "STARTUP:OK",
    /*SDB_START_ERROR*/   "RESTART:DO",  "RESTART:OK"
@@ -114,13 +117,29 @@ namespace engine
       switch( type )
       {
          case SDB_START_NORMAL :
-            return "normal" ;
+            return PMD_STARTUP_NORMAL_STR ;
          case SDB_START_ERROR :
-            return "fault" ;
+            return PMD_STARTUP_FAULT_STR ;
          default :
             break ;
       }
-      return "crash" ;
+      return PMD_STARTUP_CRASH_STR ;
+   }
+
+   SDB_START_TYPE pmdStr2StartType( const CHAR* str )
+   {
+      if ( 0 == ossStrcmp( str, PMD_STARTUP_NORMAL_STR ) )
+      {
+         return SDB_START_NORMAL ;
+      }
+      else if ( 0 == ossStrcmp( str, PMD_STARTUP_FAULT_STR ) )
+      {
+         return SDB_START_ERROR ;
+      }
+      else
+      {
+         return SDB_START_CRASH ;
+      }
    }
 
    _pmdStartup::_pmdStartup () :
@@ -168,13 +187,15 @@ namespace engine
       UINT32 lockTime = 0 ;
 
       _fileName = pPath ;
-      _fileName += OSS_FILE_SEP ;
+      if ( !_fileName.empty() &&
+           OSS_FILE_SEP_CHAR != _fileName.at( _fileName.length() - 1 ) )
+      {
+         _fileName += OSS_FILE_SEP ;
+      }
       _fileName += PMD_STARTUP_FILE_NAME ;
 
-      // attempt to access the file
       PD_TRACE1 ( SDB__PMDSTARTUP_INIT, PD_PACK_STRING ( _fileName.c_str() ) ) ;
       rc = ossAccess ( _fileName.c_str() ) ;
-      // if the file does not exist, that means we were normally shutdown
       if ( SDB_FNE == rc )
       {
          _startType = SDB_START_NORMAL ;
@@ -187,19 +208,16 @@ namespace engine
             goto done ;
          }
       }
-      // if we get permission error, we can't continue
       else if ( SDB_PERM == rc )
       {
          PD_LOG ( PDSEVERE, "Permission denied when creating startup file" ) ;
          goto error ;
       }
-      // for unknown error, let's stop starting up the engine
       else if ( rc )
       {
          PD_LOG ( PDSEVERE, "Failed to access startup file, rc = %d", rc ) ;
          goto error ;
       }
-      // file exist means business is not ok
       else
       {
          _ok = FALSE ;
@@ -226,7 +244,6 @@ namespace engine
       _fileOpened = TRUE ;
 
    retry:
-      // lock the file
       rc = ossLockFile ( &_file, OSS_LOCK_EX ) ;
       if ( SDB_PERM == rc )
       {
@@ -269,7 +286,6 @@ namespace engine
          }
       }
 
-      //write char
       rc = _writeStartStr( SDB_START_CRASH, FALSE ) ;
       if ( SDB_OK != rc )
       {
@@ -319,7 +335,7 @@ namespace engine
    done:
       return rc ;
    error:
-      goto done ;      
+      goto done ;
    }
 
    // PD_TRACE_DECLARE_FUNCTION ( SDB__PMDSTARTUP_FINAL, "_pmdStartup::final" )
@@ -343,6 +359,7 @@ namespace engine
       if ( _fileOpened )
       {
          ossClose( _file ) ;
+         _fileOpened = FALSE ;
       }
       if ( _ok && !_restart )
       {

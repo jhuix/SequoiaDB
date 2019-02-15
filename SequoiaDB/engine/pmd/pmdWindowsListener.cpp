@@ -56,7 +56,6 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB_PMDPIPELSTNNPNTPNT );
-      EDUID myEDUID = cb->getID () ;
       pmdEDUMgr * eduMgr = cb->getEDUMgr() ;
       CHAR tempBuffer [ PMD_WL_NPIPE_BUFSZ + 1 ] = {0} ;
       const CHAR *pSvcName = ( const CHAR* )pData ;
@@ -66,32 +65,26 @@ namespace engine
       BOOLEAN hasClosedStdFds = FALSE ;
 
       INT32 hasRead = 0 ;
-      rc = eduMgr->activateEDU ( myEDUID ) ;
+      rc = eduMgr->activateEDU ( cb ) ;
       if ( rc )
       {
          PD_LOG ( PDERROR, "Failed to activate EDU, rc: %d", rc ) ;
          goto error ;
       }
 
-      // create a named pipe
       rc = nodePipe.createPipe( pSvcName ) ;
       if ( rc )
       {
-         // if we are not able to create named pipe, then we are not able
-         // to stop it using sdbstop.exe. So we should nicely shutdown
-         // database in order to prevent killing process later
          PD_LOG ( PDSEVERE, "Failed to create named pipe: %s, rc = %d",
                   nodePipe.getReadPipeName(), rc ) ;
          goto error ;
       }
 
-      // just sit here do nothing at the moment
       while ( !cb->isDisconnected() )
       {
          rc = nodePipe.connectPipe() ;
          if ( rc )
          {
-            // we just loop if nothing returns in SDB_TIMEOUT
             if ( SDB_TIMEOUT == rc )
             {
                continue ;
@@ -101,9 +94,6 @@ namespace engine
                ossSleep( OSS_ONE_SEC ) ;
                continue ;
             }
-            // if we are not able to connect named pipe, then we are not able
-            // to stop it using sdbstop.exe. So we should nicely shutdown
-            // database in order to prevent killing process later
             PD_LOG ( PDSEVERE, "Failed to connect named pipe: %s, rc = %d",
                      nodePipe.getReadPipeName(), rc ) ;
             goto error ;
@@ -112,14 +102,11 @@ namespace engine
          hasRead = 0 ;
          while ( 0 == hasRead && !cb->isDisconnected() )
          {
-            // then let's read from pipe. For this version let's just read
             rc = nodePipe.readPipe( tempBuffer, PMD_WL_NPIPE_BUFSZ, hasRead ) ;
             if ( rc )
             {
-               // if we simply timeout, maybe the sender is too slow. Let's continue
                if ( SDB_TIMEOUT == rc )
                   continue ;
-               // if we failed to read, let's dump error and break out the loop
                PD_LOG ( PDERROR, "Failed to read packet, rc = %d", rc ) ;
                hasRead = 0 ;
                rc = SDB_OK ;
@@ -234,6 +221,10 @@ namespace engine
       PMD_SHUTDOWN_DB( rc ) ;
       goto done ;
    }
+
+   PMD_DEFINE_ENTRYPOINT( EDU_TYPE_PIPESLISTENER, TRUE,
+                          pmdPipeListenerEntryPoint,
+                          "PipeListener" ) ;
 }
 
 

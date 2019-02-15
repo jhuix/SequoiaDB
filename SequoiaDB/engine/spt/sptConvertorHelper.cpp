@@ -81,7 +81,6 @@ INT32 JSVal2String( JSContext *cx, const jsval &val, std::string &str )
    return sptConvertor::toString( cx, val, str ) ;
 }
 
-// caller should free the return pointer using SAFE_JS_FREE
 CHAR *convertJsvalToString ( JSContext *cx , jsval val )
 {
    JSString *  str   = NULL ;
@@ -91,7 +90,6 @@ CHAR *convertJsvalToString ( JSContext *cx , jsval val )
    if ( ! str )
       goto error ;
 
-   // cstr is freed by caller
    cstr = JS_EncodeString ( cx , str ) ;
    if ( ! cstr )
       goto error ;
@@ -310,11 +308,10 @@ INT32 getCLNameFromObj( JSContext *cx, JSObject *obj,
       rc = SDB_OOM ;
       goto error ;
    }
-
-   ossMemcpy( *clName, cs, csLen ) ;
-   (*clName)[ csLen ] = '.' ;
-   ossMemcpy( *clName + csLen + 1, collection, clLen + 1 ) ;
+   ossSnprintf( *clName, clLen + csLen + 2, "%s.%s",
+                cs, collection ) ;
    }
+
 done:
    if ( NULL != collection )
    {
@@ -382,7 +379,7 @@ INT32 getRNNameFromObj( JSContext *cx, JSObject *obj,
    JSString *jsRGName = NULL ;
    CHAR *nodeName = NULL ;
    CHAR *rgName = NULL ;
-   
+
    if ( !JS_GetProperty( cx, obj, "_nodename", &valName ) )
    {
       rc = SDB_SYS ;
@@ -445,11 +442,10 @@ INT32 getRNNameFromObj( JSContext *cx, JSObject *obj,
       rc = SDB_OOM ;
       goto error ;
    }
-
-   ossMemcpy( *rnName, rgName, rgLen ) ;
-   (*rnName)[rgLen] = ':' ;
-   ossMemcpy( *rnName + rgLen + 1, nodeName, nodeLen + 1 ) ;
+   ossSnprintf( *rnName, nodeLen + rgLen + 2, "%s:%s",
+                rgName, nodeName ) ;
    }
+
 done:
    if ( NULL != nodeName )
    {

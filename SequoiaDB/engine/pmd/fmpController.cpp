@@ -69,7 +69,7 @@ CHAR FMP_COORD_SERVICE[OSS_MAX_SERVICENAME + 1] = {0};
 CHAR *FMP_COORD_HOST = "localhost" ;
 CHAR g_UserName[ OSS_MAX_PATHSIZE + 1 ] = { 0 } ;
 CHAR g_Password[ OSS_MAX_PATHSIZE + 1 ] = { 0 } ;
-static const BYTE magicNumber[] = FMP_MSG_MAGIC ;
+static const CHAR magicNumber[] = FMP_MSG_MAGIC ;
 
 BSONObj OK_RES = BSON( FMP_RES_CODE << SDB_OK ) ;
 
@@ -144,8 +144,6 @@ INT32 _fmpController::_runLoop()
       ele = obj.getField( FMP_CONTROL_FIELD ) ;
       if ( ele.eoo() )
       {
-         /// we considered it be download.
-         /// so func is no need to be copy in spdCB.
          step = FMP_CONTROL_STEP_DOWNLOAD ;
       }
       else if ( NumberInt != ele.type() )
@@ -163,7 +161,6 @@ INT32 _fmpController::_runLoop()
       if ( FMP_CONTROL_STEP_QUIT == step )
       {
          _clear() ;
-         /// should not do anything after send ok msg.
          rc = _writeMsg( OK_RES ) ;
          if ( SDB_OK != rc )
          {
@@ -185,7 +182,6 @@ INT32 _fmpController::_runLoop()
       }
       else
       {
-         /// do noting.
       }
 
       if ( !FMP_VALID_STEP(step) )
@@ -241,8 +237,8 @@ INT32 _fmpController::_handleOneLoop( const BSONObj &obj,
       if ( !localService.eoo() && String == localService.type() &&
            0 == ossStrlen(FMP_COORD_SERVICE) )
       {
-         ossMemcpy( FMP_COORD_SERVICE, localService.valuestrsafe(),
-                    ossStrlen( localService.valuestrsafe() ) + 1 ) ;
+         ossStrncpy( FMP_COORD_SERVICE, localService.valuestrsafe(),
+                     OSS_MAX_SERVICENAME ) ;
       }
       BSONElement localUser = obj.getField( FMP_LOCAL_USERNAME ) ;
       if ( String == localUser.type() )
@@ -330,7 +326,6 @@ INT32 _fmpController::_handleOneLoop( const BSONObj &obj,
       {
          PD_LOG( PDWARNING, "Failed to init global db: %s",
                  res.toString( FALSE, TRUE ).c_str() ) ;
-         // continue run
       }
 
       rc = _vm->eval( obj, res ) ;
@@ -483,7 +478,6 @@ INT32 _fmpController::_writeMsg( const BSONObj &msg )
    SINT64 written = 0 ;
    BOOLEAN writeHead = TRUE ;
 
-   /// to distinguish our own msg or printf.
    SINT64 objsize = sizeof( magicNumber ) ;
    const CHAR *buf = (const CHAR*)magicNumber ;
 

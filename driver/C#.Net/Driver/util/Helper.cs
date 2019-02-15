@@ -8,6 +8,17 @@ namespace SequoiaDB
     {
         private static readonly Logger logger = new Logger("Helper");
 
+        internal static void AlignByteBuffer(ByteBuffer buffer, int inc)
+        {
+            if (inc > buffer.Remaining()) {
+                throw new BaseException((int)Errors.errors.SDB_SYS, "inc is more than the remaining in ByteBuffer");
+            }
+            for (int i = 0; i < inc; i++)
+            {
+                buffer.PushByte(0);
+            }
+        }
+
         internal static byte[] RoundToMultipleX(byte[] byteArray, int multipler)
         {
             if (multipler == 0)
@@ -36,9 +47,11 @@ namespace SequoiaDB
             MemoryStream stream = new MemoryStream();
             BinaryWriter output = new BinaryWriter(stream);
 
-          for (int i = 0; i < inByteArrayList.Count; i++) {
+            for (int i = 0; i < inByteArrayList.Count; i++) {
                 output.Write(inByteArrayList[i]);
-          }
+            }
+            output.Close();
+            stream.Close();
             return stream.ToArray();
        }
 

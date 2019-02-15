@@ -54,10 +54,10 @@ namespace engine
    void _shdMsgHandler::_postMainMsg( const NET_HANDLE & handle,
                                       MsgHeader * pNewMsg )
    {
-      if ( _pShardCB && ( MSG_CAT_NODEGRP_RES == (UINT32)pNewMsg->opCode ||
-           MSG_CAT_QUERY_CATALOG_RSP == (UINT32)pNewMsg->opCode ||
-           MSG_CAT_QUERY_SPACEINFO_RSP == (UINT32)pNewMsg->opCode ||
-           ( MSG_CAT_CATGRP_RES == (UINT32)pNewMsg->opCode &&
+      if ( _pShardCB && ( MSG_CAT_NODEGRP_RES == pNewMsg->opCode ||
+           MSG_CAT_QUERY_CATALOG_RSP == pNewMsg->opCode ||
+           MSG_CAT_QUERY_SPACEINFO_RSP == pNewMsg->opCode ||
+           ( MSG_CAT_CATGRP_RES == pNewMsg->opCode &&
              _pShardCB->getTID() != (UINT32)pNewMsg->requestID ) ) )
       {
          _pShardCB->postEvent( pmdEDUEvent( PMD_EDU_EVENT_MSG,
@@ -66,7 +66,6 @@ namespace engine
       }
       else
       {
-         //store type to TID and dispatch restore
          pNewMsg->TID = (UINT32)CLS_SHARD ;
          _pMgrEDUCB->postEvent( pmdEDUEvent( PMD_EDU_EVENT_MSG,
                                              PMD_EDU_MEM_ALLOC,
@@ -79,7 +78,6 @@ namespace engine
    {
       _pmdAsyncMsgHandler::handleClose( handle, id ) ;
 
-      /// post msg to shard edu
       if ( _pShardCB )
       {
          MsgOpReply *pMsg = NULL ;
@@ -123,7 +121,6 @@ namespace engine
    void _replMsgHandler::_postMainMsg( const NET_HANDLE &handle,
                                        MsgHeader *pNewMsg )
    {
-      //store type to TID and dispatch restore
       pNewMsg->TID = (UINT32)CLS_REPL ;
       _pMgrEDUCB->postEvent( pmdEDUEvent( PMD_EDU_EVENT_MSG,
                                           PMD_EDU_MEM_ALLOC,

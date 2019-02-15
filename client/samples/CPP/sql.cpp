@@ -21,8 +21,8 @@
  *    Win:
  *       cl /Fosql.obj /c sql.cpp /I..\..\include /wd4047
  *       cl /Focommon.obj /c common.cpp /I..\..\include /wd4047
- *       link /OUT:sql.exe /LIBPATH:..\..\lib sdbcpp.lib sql.obj common.obj
- *       copy ..\..\lib\sdbcpp.dll .
+ *       link /OUT:sql.exe /LIBPATH:..\..\lib\cpp\debug\dll sdbcppd.lib sql.obj common.obj
+ *       copy ..\..\lib\cpp\debug\dll\sdbcppd.dll .
  *    Static Linking:
  *    Linux: g++ sql.cpp common.cpp -o sql.static -I../../include -O0
  *           -ggdb -Wno-deprecated ../../lib/libstaticsdbcpp.a -lm -ldl -lpthread
@@ -38,6 +38,7 @@
 
 using namespace std ;
 using namespace sdbclient ;
+using namespace sample ;
 
 #define COLLECTION_SPACE_NAME "foo"
 #define COLLECTION_NAME       "bar"

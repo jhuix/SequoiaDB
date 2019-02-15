@@ -40,25 +40,27 @@
 
 namespace engine
 {
-   class _mthMatcher ;
+   class _mthMatchTree ;
 
    class _mthElemMatchIterator : public SDBObject
    {
    public:
       _mthElemMatchIterator( const bson::BSONObj &obj,
-                             _mthMatcher *matcher,
-                             INT32 n = -1 ) ;
+                             _mthMatchTree *matcher,
+                             INT32 n = -1,
+                             BOOLEAN isArray = TRUE ) ;
       ~_mthElemMatchIterator() ;
 
    public:
       INT32 next( bson::BSONElement &e ) ;
 
    private:
-      _mthMatcher *_matcher ;
+      _mthMatchTree *_matcher ;
       bson::BSONObj _obj ;
-      bson::BSONObjIterator _i ; 
+      bson::BSONObjIterator _i ;
       INT32 _n ;
       INT32 _matched ;
+      BOOLEAN _isArray ;
    } ;
    typedef class _mthElemMatchIterator mthElemMatchIterator ;
 }

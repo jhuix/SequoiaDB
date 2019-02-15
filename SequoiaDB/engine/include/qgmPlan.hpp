@@ -59,7 +59,6 @@ namespace engine
       QGM_PLAN_TYPE_SPLIT,
       QGM_PLAN_TYPE_HASHJOIN,
 
-      //
       QGM_PLAN_TYPE_MAX,
    } ;
 
@@ -77,7 +76,9 @@ namespace engine
    public:
       virtual void close() ;
 
-      virtual string toString() const { return "" ;}
+      virtual string toString() const { return "" ; }
+
+      virtual BOOLEAN needRollback() const ;
 
       OSS_INLINE QGM_PLAN_TYPE type() const { return _type ; }
 

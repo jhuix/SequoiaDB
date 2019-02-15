@@ -57,12 +57,16 @@ struct fieldResolve : public SDBObject
 class utilDecodeBson : public SDBObject
 {
 private:
-   CHAR _delChar ;
-   CHAR _delField ;
+   std::string _delChar ;
+   std::string _delField ;
    BOOLEAN _includeBinary ;
    BOOLEAN _includeRegex ;
+   BOOLEAN _kickNull ;
+   BOOLEAN _isStrict ;
+   
 public:
    std::vector<fieldResolve *> _vFields ;
+
 private:
    CHAR *_trimLeft( CHAR *pCursor, INT32 &size ) ;
    CHAR *_trimRight( CHAR *pCursor, INT32 &size ) ;
@@ -72,12 +76,17 @@ private:
    INT32 _parseSubField( CHAR *pField, fieldResolve *pParent ) ;
    INT32 _appendBsonElement( void *pObj, fieldResolve *pFieldRe,
                              const CHAR *pData ) ;
+   INT32 _checkFormat( const CHAR *pFloatFmt ) ;
+
 public:
    utilDecodeBson() ;
    ~utilDecodeBson() ;
-   INT32 init( CHAR delChar, CHAR delField,
+   INT32 init( std::string delChar, std::string delField,
                BOOLEAN includeBinary,
-               BOOLEAN includeRegex ) ;
+               BOOLEAN includeRegex,
+               BOOLEAN kickNull,
+               BOOLEAN isStrict,
+               const CHAR *pFloatFmt ) ;
    INT32 parseFields( CHAR *pFields, INT32 size ) ;
    INT32 parseCSVSize( CHAR *pbson, INT32 *pCSVSize ) ;
    INT32 parseJSONSize( CHAR *pbson, INT32 *pJSONSize ) ;

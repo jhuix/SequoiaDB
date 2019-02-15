@@ -38,27 +38,28 @@
 
 namespace engine
 {
+   /*
+      _dmsLobDirectInBuffer define
+   */
    class _dmsLobDirectInBuffer : public _dmsLobDirectBuffer
    {
    public:
-      _dmsLobDirectInBuffer( void *usrBuf,
+      _dmsLobDirectInBuffer( CHAR *usrBuf,
                              UINT32 size,
                              UINT32 offset,
-                             _pmdEDUCB *cb ) ;
+                             BOOLEAN needAligned,
+                             IExecutor *cb ) ;
       virtual ~_dmsLobDirectInBuffer() ;
 
    public:
-      virtual INT32 getAlignedTuple( tuple &t ) ;
-
-      void copy2UsrBuf( const tuple &t ) ;
+      virtual  INT32 doit( const tuple **pTuple ) ;
+      virtual  void  done() ;
 
    private:
-      void *_usrBuf ;
-      UINT32 _usrSize ;
-      UINT32 _usrOffset ;
+
    } ;
    typedef class _dmsLobDirectInBuffer dmsLobDirectInBuffer ;
 }
 
-#endif
+#endif //DMS_LOBDIRECTINBUFFER_HPP_
 

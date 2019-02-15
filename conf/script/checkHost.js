@@ -28,6 +28,8 @@
 */
 
 var FILE_NAME_CHECK_HOST = "checkHost.js" ;
+var disablePathArr = [ "/bin", "/boot", "/root", "/sbin", "/dev", "/etc", "/lib", "/tmp", "/media", "/sys" ] ;
+var disableFileSystem = [ "none", "tmpfs" ] ;
 var errMsg           = "" ;
 var rc               = SDB_OK ;
 var RET_JSON         = new Object() ;
@@ -54,6 +56,48 @@ function OMAOption()
 function OMAFilter()
 {
    this.type   = "sdbcm" ;
+}
+
+/* *****************************************************************************
+@discretion: chech the disk is mounted on the system directoris or not
+@author: Tanzhaobo
+@parameter
+   disk: object of disk
+@return
+   true for the disk can be use while false for not
+***************************************************************************** */
+function _checkDiskPath( disk )
+{
+   var path = disk[Mount] ;
+   if (undefined == path )
+   {
+      return false ;
+   }
+   for ( var i = 0; i < disablePathArr.length; i++ )
+   {
+      if ( 0 == path.indexOf( disablePathArr[i] ) )
+      {
+         return false ;
+      }
+   }
+   return true ;
+}
+
+function _checkDiskFileSystem( disk )
+{
+   var fileSystem = disk[Filesystem] ;
+   if ( undefined == fileSystem )
+   {
+      return false ;
+   }
+   for ( var i = 0; i < disableFileSystem.length; i++ )
+   {
+      if ( fileSystem === disableFileSystem[i] )
+      {
+         return false ;
+      }
+   }
+   return true ;
 }
 
 /* *****************************************************************************
@@ -109,7 +153,7 @@ function _extractOMAInfo( installInfoObj, omaInfoObj )
       {
          if ( "undefined" == typeof(omaInfoObj) || null == omaInfoObj )
             exception_handle( SDB_INVALIDARG, "OM Agent's info is " + omaInfoObj ) ;
-         retObj[Service] = omaInfoObj[SvcName2] ;
+         retObj[Service] = omaInfoObj[SvcName3] ;
       }
       catch( e )
       {
@@ -187,87 +231,27 @@ function _getOMAInfo()
    var omaObj         = null ;
    var runNum         = 0 ;
    var localNum       = 0 ;
-   
-   try
-   {      
-      // 1. get the amount of existed OM Agent and the OM Agent's info obj
+
+   // 1. get the amount of existed OM Agent and the OM Agent's info obj
+   var option = new OMAOption() ;
+   var filter = new OMAFilter() ;
+
+   // check whether running OM Agent exists or not
+   PD_LOG( arguments, PDEVENT, FILE_NAME_CHECK_HOST,
+           sprintf( "Check whether running OM Agent exists passes: " +
+                    "option[?], filter[?]", JSON.stringify(option),
+                    JSON.stringify(filter) ) ) ;
+   omaArr = Sdbtool.listNodes( option, filter ) ;
+   runNum = omaArr.size() ;
+   PD_LOG( arguments, PDEVENT, FILE_NAME_CHECK_HOST,
+           sprintf( "The amount of running OM Agent in host[?] is [?]", System.getHostName(), runNum ) ) ;
+   if ( 0 != runNum )
+   {
       try
       {
-         var option = new OMAOption() ;
-         var filter = new OMAFilter() ;
-         // check whether running OM Agent exists or not
-         PD_LOG( arguments, PDEVENT, FILE_NAME_CHECK_HOST,
-                 sprintf( "Check whether running OM Agent exists passes: " +
-                          "option[?], filter[?]", JSON.stringify(option),
-                          JSON.stringify(filter) ) ) ;
-         omaArr = Sdbtool.listNodes( option, filter ) ;
-         runNum = omaArr.size() ;
-         PD_LOG( arguments, PDEVENT, FILE_NAME_CHECK_HOST,
-                 sprintf( "The amount of running OM Agent in host[?] is [?]", System.getHostName(), runNum ) ) ;
-         if ( 0 != runNum )
-         {
-            omaObj = eval( '(' + omaArr.pos() + ')' ) ;
-            // get installed SequoiaDB info
-            installInfoObj = getInstallInfoObj() ;
-         }
-         else
-         {
-            // get installed SequoiaDB info
-            try
-            {
-               installInfoObj = getInstallInfoObj() ;
-               installPath =  adaptPath( installInfoObj[INSTALL_DIR] ) + OMA_PATH_BIN ;
-            }
-            catch( e )
-            {
-               if ( SDB_FNE == e )
-               {
-                  PD_LOG( arguments, PDWARNING, FILE_NAME_CHECK_HOST,
-                          sprintf( "Take OM Agent does not exist in host[?]",
-                                   System.getHostName() ) ) ;
-                  RET_JSON[OMA] = new OMAInfo() ;
-                  return ;
-               }
-               else
-               {
-                  SYSEXPHANDLE( e ) ;
-                  rc = GETLASTERROR() ;
-                  errMsg = sprintf( "Failed to get SequoiaDB install info in host[?]",
-                                    System.getHostName() ) ;
-                  PD_LOG( arguments, PDERROR, FILE_NAME_CHECK_HOST,
-                          sprintf( errMsg + ", rc: ?, detail: ?", rc, GETLASTERRMSG() ) ) ;
-                  exception_handle( rc, errMsg ) ;
-               }
-            }
-            // when no running OM Agent exists, get the amount of local OM Agent
-            option["mode"] = "local" ;
-            PD_LOG( arguments, PDEVENT, FILE_NAME_CHECK_HOST,
-                    sprintf( "Check whether local OM Agent exists passes: " +
-                             "option[?], filter[?], installPath[?]", JSON.stringify(option),
-                             JSON.stringify(filter), installPath ) ) ;
-            try
-            {
-               omaArr = Sdbtool.listNodes( option, filter, installPath ) ;
-            }
-            catch( e )
-            {
-               SYSEXPHANDLE( e ) ;
-               rc = GETLASTERROR() ;
-               errMsg = sprintf( "Failed to check whether local OM Agent exists in host[?] or not, " +
-                                 "take it not exists", System.getHostName() ) ;
-               PD_LOG( arguments, PDWARNING, FILE_NAME_CHECK_HOST,
-                       sprintf( errMsg + ", rc: ?, detail: ?", rc, GETLASTERRMSG() ) ) ;
-               RET_JSON[OMA] = new OMAInfo() ;
-               return ;
-            }
-            localNum = omaArr.size() ;
-            PD_LOG( arguments, PDEVENT, FILE_NAME_CHECK_HOST,
-                    sprintf( "The amount of local OM Agent in host[?] is [?]", System.getHostName(), localNum ) ) ;
-            if ( 0 != localNum )
-            {
-               omaObj = eval( '(' + omaArr.pos() + ')' ) ;
-            }
-         }
+         omaObj = eval( '(' + omaArr.pos() + ')' ) ;
+         // get installed SequoiaDB info
+         installInfoObj = getInstallInfoObj() ;
       }
       catch( e )
       {
@@ -278,27 +262,74 @@ function _getOMAInfo()
                  sprintf( errMsg + ", rc: ?, detail: ?", GETLASTERROR(), GETLASTERRMSG() ) ) ;
          exception_handle( rc, errMsg ) ;
       }
-      
-      // 3.get OM Agent info
-      if ( 0 != runNum || 0 != localNum )
-      {
-         RET_JSON[OMA] = _extractOMAInfo( installInfoObj, omaObj ) ;
-      }
-      else
-      {
-         RET_JSON[OMA] = new OMAInfo() ;
-      }
-      
-      return ;
    }
-   catch( e )
+   else
    {
-      SYSEXPHANDLE( e ) ;
-      rc = GETLASTERROR() ;
-      errMsg = sprintf( "Failed to get OM Agent's info in host[?]", System.getHostName() ) ;
-      PD_LOG( arguments, PDERROR, FILE_NAME_CHECK_HOST,
-              sprintf( errMsg + ", rc: ?, detail: ?", GETLASTERROR(), GETLASTERRMSG() ) ) ;
-      exception_handle( rc, errMsg ) ;
+      // get installed SequoiaDB info
+      try
+      {
+         installInfoObj = getInstallInfoObj() ;
+         installPath =  adaptPath( installInfoObj[INSTALL_DIR] ) + OMA_PATH_BIN ;
+      }
+      catch( e )
+      {
+         if ( SDB_FNE == e )
+         {
+            PD_LOG( arguments, PDWARNING, FILE_NAME_CHECK_HOST,
+                    sprintf( "Take OM Agent does not exist in host[?]",
+                             System.getHostName() ) ) ;
+            RET_JSON[OMA] = new OMAInfo() ;
+            return ;
+         }
+         else
+         {
+            SYSEXPHANDLE( e ) ;
+            rc = GETLASTERROR() ;
+            errMsg = sprintf( "Failed to get SequoiaDB install info in host[?]",
+                              System.getHostName() ) ;
+            PD_LOG( arguments, PDERROR, FILE_NAME_CHECK_HOST,
+                    sprintf( errMsg + ", rc: ?, detail: ?", rc, GETLASTERRMSG() ) ) ;
+            exception_handle( rc, errMsg ) ;
+         }
+      }
+      // when no running OM Agent exists, get the amount of local OM Agent
+      option["mode"] = "local" ;
+      PD_LOG( arguments, PDEVENT, FILE_NAME_CHECK_HOST,
+              sprintf( "Check whether local OM Agent exists passes: " +
+                       "option[?], filter[?], installPath[?]", JSON.stringify(option),
+                       JSON.stringify(filter), installPath ) ) ;
+      try
+      {
+         omaArr = Sdbtool.listNodes( option, filter, installPath ) ;
+      }
+      catch( e )
+      {
+         SYSEXPHANDLE( e ) ;
+         rc = GETLASTERROR() ;
+         errMsg = sprintf( "Failed to check whether local OM Agent exists in host[?] or not, " +
+                           "take it not exists", System.getHostName() ) ;
+         PD_LOG( arguments, PDWARNING, FILE_NAME_CHECK_HOST,
+                 sprintf( errMsg + ", rc: ?, detail: ?", rc, GETLASTERRMSG() ) ) ;
+         RET_JSON[OMA] = new OMAInfo() ;
+         return ;
+      }
+      localNum = omaArr.size() ;
+      PD_LOG( arguments, PDEVENT, FILE_NAME_CHECK_HOST,
+              sprintf( "The amount of local OM Agent in host[?] is [?]", System.getHostName(), localNum ) ) ;
+      if ( 0 != localNum )
+      {
+         omaObj = eval( '(' + omaArr.pos() + ')' ) ;
+      }
+   }
+
+   // 3.get OM Agent info
+   if ( 0 != runNum || 0 != localNum )
+   {
+      RET_JSON[OMA] = _extractOMAInfo( installInfoObj, omaObj ) ;
+   }
+   else
+   {
+      RET_JSON[OMA] = new OMAInfo() ;
    }
 }
 
@@ -367,13 +398,21 @@ function _getDiskInfo()
       for ( var i = 0; i < arr.length; i++ )
       {
          var obj           = arr[i] ;
-         var diskInfo      = new DiskInfo() ;
-         diskInfo[Name]    = obj[Filesystem] ;
-         diskInfo[Mount]   = obj[Mount] ;
-         diskInfo[Size]    = obj[Size] ;
-         diskInfo[Free]    = obj[Size] - obj[Used] ;
-         diskInfo[IsLocal] = obj[IsLocal] ;
-         diskInfos.push( diskInfo ) ;
+         if ( _checkDiskPath( obj ) && _checkDiskFileSystem( obj ) )
+         {
+            var diskInfo      = new DiskInfo() ;
+            diskInfo[Name]    = obj[Filesystem] ;
+            diskInfo[Mount]   = obj[Mount] ;
+            diskInfo[Size]    = obj[Size] ;
+            diskInfo[Free]    = obj[Size] - obj[Used] ;
+            diskInfo[IsLocal] = obj[IsLocal] ;
+            diskInfos.push( diskInfo ) ;
+         }
+         else
+         {
+            PD_LOG( arguments, PDEVENT, FILE_NAME_CHECK_HOST, 
+                    "Give up using disk mounted on [" + obj[Mount] + "]"  ) ;
+         }
       }
    }
    catch( e )

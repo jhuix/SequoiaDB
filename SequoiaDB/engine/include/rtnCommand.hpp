@@ -41,7 +41,7 @@
 #include "msg.hpp"
 #include "migLoad.hpp"
 #include "rtnAlterRunner.hpp"
-#include "aggrBuilder.hpp"
+#include "rtnQueryOptions.hpp"
 
 using namespace bson ;
 
@@ -90,6 +90,8 @@ namespace engine
                               _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
                               INT16 w = 1, INT64 *pContextID = NULL ) = 0 ;
 
+         virtual void setMainCLName ( const CHAR * mainCL ) {}
+
       protected:
          INT32             _fromService ;
 
@@ -126,7 +128,7 @@ namespace engine
          _rtnCommand *create ( const CHAR *command ) ;
          void         release ( _rtnCommand *pCommand ) ;
 
-      //protected:
+      protected:
          INT32 _register ( const CHAR * name, CDM_NEW_FUNC pFunc ) ;
 
          INT32        _insert ( _cmdBuilderInfo * pCmdInfo,
@@ -145,7 +147,6 @@ namespace engine
    _rtnCmdBuilder * getRtnCmdBuilder () ;
 
 
-   //Command list
    class _rtnCoordOnly : public _rtnCommand
    {
       protected:
@@ -284,6 +285,26 @@ namespace engine
          virtual ~_rtnListProcedures () {}
          virtual const CHAR * name () { return NAME_LIST_PROCEDURES ; }
          virtual RTN_COMMAND_TYPE type () { return CMD_LIST_PROCEDURES ; }
+   } ;
+
+   class _rtnCreateProcedure : public _rtnCoordOnly
+   {
+      DECLARE_CMD_AUTO_REGISTER()
+      public:
+         _rtnCreateProcedure () {}
+         virtual ~_rtnCreateProcedure () {}
+         virtual const CHAR * name () { return NAME_CREATE_PROCEDURE ; }
+         virtual RTN_COMMAND_TYPE type () { return CMD_CREATE_PROCEDURE ; }
+   } ;
+
+   class _rtnRemoveProcedure : public _rtnCoordOnly
+   {
+      DECLARE_CMD_AUTO_REGISTER()
+      public:
+         _rtnRemoveProcedure () {}
+         virtual ~_rtnRemoveProcedure () {}
+         virtual const CHAR * name () { return NAME_REMOVE_PROCEDURE ; }
+         virtual RTN_COMMAND_TYPE type () { return CMD_REMOVE_PROCEDURE ; }
    } ;
 
    class _rtnListCSInDomain : public _rtnCoordOnly
@@ -488,11 +509,14 @@ namespace engine
                               _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
                               INT16 w = 1, INT64 *pContextID = NULL  ) ;
 
+      private:
+         void _clean( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB, _dpsLogWrapper *dpsCB ) ;
       protected:
-         const CHAR                 *_collectionName ;
-         BSONObj                    _shardingKey ;
-         UINT32                     _attributes ;
-         UTIL_COMPRESSOR_TYPE       _compressorType ;
+         const CHAR              *_collectionName ;
+         BSONObj                 _shardingKey ;
+         UINT32                  _attributes ;
+         UTIL_COMPRESSOR_TYPE    _compressorType ;
+         BSONObj                 _extOptions ; // Store options accorrding to attributes.
    };
 
    class _rtnCreateCollectionspace : public _rtnCommand
@@ -520,7 +544,7 @@ namespace engine
          const CHAR                 *_spaceName ;
          INT32                      _pageSize ;
          INT32                      _lobPageSize ;
-
+         DMS_STORAGE_TYPE           _storageType ;
    };
 
    class _rtnCreateIndex : public _rtnCommand
@@ -544,12 +568,13 @@ namespace engine
          virtual INT32 doit ( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
                               _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
                               INT16 w = 1, INT64 *pContextID = NULL  ) ;
-
+      private:
+         INT32 _validateDef( const BSONObj &index ) ;
       protected:
          const CHAR              *_collectionName ;
          BSONObj                 _index ;
          INT32                   _sortBufferSize ;
-
+         BOOLEAN                 _textIdx ;
    };
 
    class _rtnDropCollection : public _rtnCommand
@@ -645,16 +670,15 @@ namespace engine
          virtual INT32 doit ( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
                               _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
                               INT16 w = 1, INT64 *pContextID = NULL  ) ;
-      protected:
-         const CHAR           *_collectionName ;
-         INT64                _numToReturn ;
-         INT64                _numToSkip ;
-         const CHAR           *_matcherBuff ;
-         const CHAR           *_selectBuff ;
-         const CHAR           *_orderByBuff ;
-         BSONObj              _hintObj ;
-         INT32                _flags ;
 
+         virtual void setMainCLName ( const CHAR * mainCL )
+         {
+            _options.setMainCLName( mainCL ) ;
+         }
+
+      protected:
+         rtnQueryOptions      _options ;
+         BOOLEAN              _hintExist ;
    } ;
 
    class _rtnGetCount : public _rtnGet
@@ -664,12 +688,6 @@ namespace engine
       public:
          _rtnGetCount () ;
          virtual ~_rtnGetCount () ;
-
-         virtual INT32 init ( INT32 flags, INT64 numToSkip, INT64 numToReturn,
-                              const CHAR *pMatcherBuff,
-                              const CHAR *pSelectBuff,
-                              const CHAR *pOrderByBuff,
-                              const CHAR *pHintBuff ) ;
 
          virtual const CHAR * name () ;
          virtual RTN_COMMAND_TYPE type () ;
@@ -716,126 +734,9 @@ namespace engine
 
    } ;
 
-   class _rtnList : public _rtnCommand
-   {
-      protected:
-         _rtnList () ;
-         virtual ~_rtnList () ;
-      protected:
-         virtual INT32 init ( INT32 flags, INT64 numToSkip, INT64 numToReturn,
-                              const CHAR *pMatcherBuff,
-                              const CHAR *pSelectBuff,
-                              const CHAR *pOrderByBuff,
-                              const CHAR *pHintBuff ) ;
-         virtual INT32 doit ( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
-                              _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
-                              INT16 w = 1, INT64 *pContextID = NULL  ) ;
-      protected:
-         INT64                _numToReturn ;
-         INT64                _numToSkip ;
-         const CHAR           *_matcherBuff ;
-         const CHAR           *_selectBuff ;
-         const CHAR           *_orderByBuff ;
-         const CHAR           *_hintBuff ;
-         INT32                _flags ;
-   };
-
-   class _rtnListCollections : public _rtnList
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnListCollections () {}
-         virtual ~_rtnListCollections () {}
-
-         virtual const CHAR * name () { return NAME_LIST_COLLECTIONS ; }
-         virtual RTN_COMMAND_TYPE type () { return CMD_LIST_COLLECTIONS ; }
-   };
-
-   class _rtnListCollectionspaces : public _rtnList
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnListCollectionspaces () {}
-         virtual ~_rtnListCollectionspaces () {}
-
-         virtual const CHAR * name () { return NAME_LIST_COLLECTIONSPACES ; }
-         virtual RTN_COMMAND_TYPE type () { return CMD_LIST_COLLECTIONSPACES ; }
-   };
-
-   class _rtnListContexts : public _rtnList
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnListContexts () {}
-         virtual ~_rtnListContexts () {}
-
-         virtual const CHAR * name () { return NAME_LIST_CONTEXTS ; }
-         virtual RTN_COMMAND_TYPE type () { return CMD_LIST_CONTEXTS ; }
-   };
-
-   class _rtnListContextsCurrent : public _rtnList
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnListContextsCurrent () {}
-         virtual ~_rtnListContextsCurrent () {}
-
-         virtual const CHAR * name () { return NAME_LIST_CONTEXTS_CURRENT ; }
-         virtual RTN_COMMAND_TYPE type () { return CMD_LIST_CONTEXTS_CURRENT ; }
-   };
-
-   class _rtnListSessions : public _rtnList
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnListSessions () {}
-         virtual ~_rtnListSessions () {}
-
-         virtual const CHAR * name () { return NAME_LIST_SESSIONS ; }
-         virtual RTN_COMMAND_TYPE type () { return CMD_LIST_SESSIONS ; }
-   };
-
-   class _rtnListSessionsCurrent : public _rtnList
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnListSessionsCurrent () {}
-         virtual ~_rtnListSessionsCurrent () {}
-
-         virtual const CHAR * name () { return NAME_LIST_SESSIONS_CURRENT ; }
-         virtual RTN_COMMAND_TYPE type () { return CMD_LIST_SESSIONS_CURRENT ; }
-   };
-
-   class _rtnListStorageUnits : public _rtnList
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnListStorageUnits () {}
-         virtual ~_rtnListStorageUnits () {}
-
-         virtual const CHAR * name () { return NAME_LIST_STORAGEUNITS ; }
-         virtual RTN_COMMAND_TYPE type () { return CMD_LIST_STORAGEUNITS ; }
-   } ;
-
-   class _rtnListBackups : public _rtnList
-   {
-      DECLARE_CMD_AUTO_REGISTER () ;
-
-      public:
-         _rtnListBackups () {} ;
-         virtual ~_rtnListBackups () {} ;
-
-         virtual const CHAR * name () { return NAME_LIST_BACKUPS ; }
-         virtual RTN_COMMAND_TYPE type () { return CMD_LIST_BACKUPS ; }
-   } ;
-
+   /*
+      Only in standalone
+   */
    class _rtnRenameCollection : public _rtnCommand
    {
       DECLARE_CMD_AUTO_REGISTER()
@@ -843,6 +744,7 @@ namespace engine
       public:
          _rtnRenameCollection () ;
          virtual ~_rtnRenameCollection () ;
+         virtual INT32 spaceService () { return CMD_SPACE_SERVICE_LOCAL ; }
 
          virtual const CHAR * name () ;
          virtual RTN_COMMAND_TYPE type () ;
@@ -862,7 +764,33 @@ namespace engine
          const CHAR           *_newCollectionName ;
          const CHAR           *_csName ;
          std::string          _fullCollectionName ;
-   };
+   } ;
+
+   class _rtnRenameCollectionSpace : public _rtnCommand
+   {
+      DECLARE_CMD_AUTO_REGISTER()
+
+      public:
+         _rtnRenameCollectionSpace () ;
+         virtual ~_rtnRenameCollectionSpace () ;
+         virtual INT32 spaceService () { return CMD_SPACE_SERVICE_LOCAL ; }
+
+         virtual const CHAR * name () { return NAME_RENAME_COLLECTIONSPACE ; }
+         virtual RTN_COMMAND_TYPE type () { return CMD_RENAME_COLLECTIONSPACE ; }
+         virtual BOOLEAN      writable () { return TRUE ; }
+
+         virtual INT32 init ( INT32 flags, INT64 numToSkip, INT64 numToReturn,
+                              const CHAR *pMatcherBuff,
+                              const CHAR *pSelectBuff,
+                              const CHAR *pOrderByBuff,
+                              const CHAR *pHintBuff ) ;
+         virtual INT32 doit ( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
+                              _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
+                              INT16 w = 1, INT64 *pContextID = NULL  ) ;
+      protected:
+         const CHAR           *_oldName ;
+         const CHAR           *_newName ;
+   } ;
 
    class _rtnReorg : public _rtnCommand
    {
@@ -943,310 +871,6 @@ namespace engine
                               INT16 w = 1, INT64 *pContextID = NULL  ) ;
    };
 
-   class _rtnSnapshot : public _rtnCommand, public _aggrCmdBase
-   {
-      protected:
-         _rtnSnapshot () ;
-         virtual ~_rtnSnapshot () ;
-      public:
-         virtual INT32 init ( INT32 flags, INT64 numToSkip, INT64 numToReturn,
-                              const CHAR *pMatcherBuff,
-                              const CHAR *pSelectBuff,
-                              const CHAR *pOrderByBuff,
-                              const CHAR *pHintBuff ) ;
-         virtual INT32 doit ( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
-                              _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
-                              INT16 w = 1, INT64 *pContextID = NULL  ) ;
-
-      protected:
-         virtual BOOLEAN _useContext() { return TRUE ; }
-
-      private:
-         virtual const CHAR *getIntrCMDName() = 0 ;
-
-      protected:
-         INT64                _numToReturn ;
-         INT64                _numToSkip ;
-         const CHAR           *_matcherBuff ;
-         const CHAR           *_selectBuff ;
-         const CHAR           *_orderByBuff ;
-         const CHAR           *_hintBuff ;
-
-         INT32                _flags ;
-   };
-
-   class _rtnSnapshotInner : public _rtnSnapshot
-   {
-      protected:
-         _rtnSnapshotInner () ;
-         virtual ~_rtnSnapshotInner () ;
-
-      public:
-         virtual INT32 doit ( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
-                              _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
-                              INT16 w = 1, INT64 *pContextID = NULL  ) ;
-
-      private:
-         virtual const CHAR *getIntrCMDName() { return "" ; }
-   } ;
-
-   class _rtnSnapshotSystem : public _rtnSnapshot
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public :
-         _rtnSnapshotSystem () ;
-         virtual ~_rtnSnapshotSystem () ;
-
-         virtual const CHAR * name () ;
-         virtual RTN_COMMAND_TYPE type () ;
-
-      private:
-         virtual const CHAR *getIntrCMDName() ;
-   };
-
-   class _rtnSnapshotSystemInner : public _rtnSnapshotInner
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnSnapshotSystemInner() {}
-         virtual ~_rtnSnapshotSystemInner() {}
-
-         virtual const CHAR * name () ;
-         virtual RTN_COMMAND_TYPE type () ;
-   } ;
-
-   class _rtnSnapshotContexts : public _rtnSnapshot
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnSnapshotContexts () ;
-         virtual ~_rtnSnapshotContexts () ;
-
-         virtual const CHAR * name () ;
-         virtual RTN_COMMAND_TYPE type () ;
-
-      private:
-         virtual const CHAR *getIntrCMDName() ;
-   };
-
-   class _rtnSnapshotContextsInner : public _rtnSnapshotInner
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnSnapshotContextsInner() {}
-         virtual ~_rtnSnapshotContextsInner() {}
-
-         virtual const CHAR * name () ;
-         virtual RTN_COMMAND_TYPE type () ;
-   } ;
-
-   class _rtnSnapshotContextsCurrent : public _rtnSnapshot
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnSnapshotContextsCurrent () ;
-         virtual ~_rtnSnapshotContextsCurrent () ;
-
-         virtual const CHAR * name () ;
-         virtual RTN_COMMAND_TYPE type () ;
-
-      private:
-         virtual const CHAR *getIntrCMDName() ;
-   };
-
-   class _rtnSnapshotContextsCurrentInner : public _rtnSnapshotInner
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnSnapshotContextsCurrentInner() {}
-         virtual ~_rtnSnapshotContextsCurrentInner() {}
-         virtual const CHAR * name () ;
-         virtual RTN_COMMAND_TYPE type () ;
-   } ;
-
-   class _rtnSnapshotDatabase : public _rtnSnapshot
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnSnapshotDatabase () ;
-         virtual ~_rtnSnapshotDatabase () ;
-
-         virtual const CHAR * name () ;
-         virtual RTN_COMMAND_TYPE type () ;
-
-      private:
-         virtual const CHAR *getIntrCMDName() ;
-   };
-
-   class _rtnSnapshotDatabaseInner : public _rtnSnapshotInner
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnSnapshotDatabaseInner () {}
-         virtual ~_rtnSnapshotDatabaseInner () {}
-         virtual const CHAR * name () ;
-         virtual RTN_COMMAND_TYPE type () ;
-   };
-
-   class _rtnSnapshotCollections : public _rtnSnapshot
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnSnapshotCollections () ;
-         virtual ~_rtnSnapshotCollections () ;
-
-         virtual const CHAR * name () ;
-         virtual RTN_COMMAND_TYPE type () ;
-
-      private:
-         virtual const CHAR *getIntrCMDName() ;
-   };
-
-   class _rtnSnapshotCollectionsInner : public _rtnSnapshotInner
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnSnapshotCollectionsInner () {}
-         virtual ~_rtnSnapshotCollectionsInner () {}
-         virtual const CHAR * name () ;
-         virtual RTN_COMMAND_TYPE type () ;
-   };
-
-   class _rtnSnapshotCollectionSpaces : public _rtnSnapshot
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnSnapshotCollectionSpaces () ;
-         virtual ~_rtnSnapshotCollectionSpaces () ;
-
-         virtual const CHAR * name () ;
-         virtual RTN_COMMAND_TYPE type () ;
-
-      private:
-         virtual const CHAR *getIntrCMDName() ;
-   };
-
-   class _rtnSnapshotCollectionSpacesInner : public _rtnSnapshotInner
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnSnapshotCollectionSpacesInner () {}
-         virtual ~_rtnSnapshotCollectionSpacesInner () {}
-         virtual const CHAR * name () ;
-         virtual RTN_COMMAND_TYPE type () ;
-   };
-
-   class _rtnSnapshotReset : public _rtnSnapshotInner
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnSnapshotReset () ;
-         virtual ~_rtnSnapshotReset () ;
-
-         virtual const CHAR * name () ;
-         virtual RTN_COMMAND_TYPE type () ;
-
-      protected:
-         virtual BOOLEAN _useContext() { return FALSE ; }
-   };
-
-   class _rtnSnapshotSessions : public _rtnSnapshot
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnSnapshotSessions () ;
-         virtual ~_rtnSnapshotSessions () ;
-
-         virtual const CHAR * name () ;
-         virtual RTN_COMMAND_TYPE type () ;
-
-      private:
-         virtual const CHAR *getIntrCMDName() ;
-   };
-
-   class _rtnSnapshotSessionsInner : public _rtnSnapshotInner
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnSnapshotSessionsInner () {}
-         virtual ~_rtnSnapshotSessionsInner () {}
-         virtual const CHAR * name () ;
-         virtual RTN_COMMAND_TYPE type () ;
-   };
-
-   class _rtnSnapshotSessionsCurrent : public _rtnSnapshot
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnSnapshotSessionsCurrent () ;
-         virtual ~_rtnSnapshotSessionsCurrent () ;
-
-         virtual const CHAR * name () ;
-         virtual RTN_COMMAND_TYPE type () ;
-
-      private:
-         virtual const CHAR *getIntrCMDName() ;
-   };
-
-   class _rtnSnapshotSessionsCurrentInner : public _rtnSnapshotInner
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnSnapshotSessionsCurrentInner () {}
-         virtual ~_rtnSnapshotSessionsCurrentInner () {}
-         virtual const CHAR * name () ;
-         virtual RTN_COMMAND_TYPE type () ;
-   };
-
-   class _rtnSnapshotTransactionsCurrent : public _rtnSnapshot
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnSnapshotTransactionsCurrent () ;
-         ~_rtnSnapshotTransactionsCurrent () ;
-
-         virtual BOOLEAN isDumpCurrent() { return TRUE ;}
-         virtual const CHAR * name () ;
-         virtual RTN_COMMAND_TYPE type () ;
-         virtual INT32 doit ( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
-                              _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
-                              INT16 w = 1, INT64 *pContextID = NULL  ) ;
-         virtual BOOLEAN writable (){ return TRUE ;}
-
-         virtual const CHAR *getIntrCMDName(){ return NULL ;}
-   };
-
-   class _rtnSnapshotTransactions : public _rtnSnapshotTransactionsCurrent
-   {
-      DECLARE_CMD_AUTO_REGISTER()
-
-      public:
-         _rtnSnapshotTransactions () ;
-         ~_rtnSnapshotTransactions () ;
-
-         virtual BOOLEAN isDumpCurrent() { return FALSE ;}
-         virtual const CHAR * name () ;
-         virtual RTN_COMMAND_TYPE type () ;
-   };
-
    class _rtnTest : public _rtnCommand
    {
       protected:
@@ -1311,6 +935,27 @@ namespace engine
                               INT16 w = 1, INT64 *pContextID = NULL ) ;
       protected:
          INT32             _pdLevel ;
+   } ;
+
+   class _rtnReloadConfig : public _rtnCommand
+   {
+      DECLARE_CMD_AUTO_REGISTER()
+
+      public:
+         _rtnReloadConfig() ;
+         virtual ~_rtnReloadConfig() ;
+
+      public:
+         virtual const CHAR * name () ;
+         virtual RTN_COMMAND_TYPE type () ;
+         virtual INT32 init ( INT32 flags, INT64 numToSkip, INT64 numToReturn,
+                              const CHAR *pMatcherBuff,
+                              const CHAR *pSelectBuff,
+                              const CHAR *pOrderByBuff,
+                              const CHAR *pHintBuff ) ;
+         virtual INT32 doit ( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
+                              _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
+                              INT16 w = 1, INT64 *pContextID = NULL ) ;
    } ;
 
    class _rtnTraceStart : public _rtnCommand
@@ -1437,7 +1082,7 @@ namespace engine
       DECLARE_CMD_AUTO_REGISTER()
 
       public :
-         _rtnExportConf(){}
+         _rtnExportConf() ;
          virtual ~_rtnExportConf(){}
 
          virtual const CHAR * name () { return NAME_EXPORT_CONFIGURATION ; }
@@ -1447,14 +1092,14 @@ namespace engine
                               const CHAR *pMatcherBuff,
                               const CHAR *pSelectBuff,
                               const CHAR *pOrderByBuff,
-                              const CHAR *pHintBuff )
-         {
-            return SDB_OK ;
-         }
+                              const CHAR *pHintBuff ) ;
 
          virtual INT32 doit ( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
                               _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
                               INT16 w = 1, INT64 *pContextID = NULL ) ;
+
+      private:
+         UINT32            _mask ;
 
    } ;
 
@@ -1558,6 +1203,29 @@ namespace engine
                               INT16 w = 1, INT64 *pContextID = NULL ) ;
    } ;
 
+   class _rtnGetSessionAttr : public _rtnCommand
+   {
+      DECLARE_CMD_AUTO_REGISTER()
+
+      public:
+         _rtnGetSessionAttr () ;
+         virtual ~_rtnGetSessionAttr () ;
+
+      public:
+         virtual const CHAR * name () { return NAME_GET_SESSIONATTR ; }
+         virtual RTN_COMMAND_TYPE type () { return CMD_GET_SESSIONATTR ; }
+
+         virtual INT32 init ( INT32 flags, INT64 numToSkip, INT64 numToReturn,
+                              const CHAR * pMatcherBuff,
+                              const CHAR * pSelectBuff,
+                              const CHAR * pOrderByBuff,
+                              const CHAR * pHintBuff ) ;
+
+         virtual INT32 doit ( _pmdEDUCB * cb, _SDB_DMSCB * dmsCB,
+                              _SDB_RTNCB * rtnCB, _dpsLogWrapper * dpsCB,
+                              INT16 w = 1, INT64 * pContextID = NULL ) ;
+   } ;
+
    class _rtnTruncate : public _rtnCommand
    {
    DECLARE_CMD_AUTO_REGISTER()
@@ -1595,6 +1263,47 @@ namespace engine
       const CHAR * _fullName ;
    } ;
 
+   class _rtnPop : public _rtnCommand
+   {
+   DECLARE_CMD_AUTO_REGISTER()
+   public:
+      _rtnPop()
+      : _fullName( NULL ),
+        _logicalID( 0 ),
+        _direction( 1 )
+      {
+      }
+
+      virtual ~_rtnPop() {}
+
+   public:
+      virtual const CHAR *name() { return NAME_POP ; }
+      virtual RTN_COMMAND_TYPE type() { return CMD_POP; }
+      virtual BOOLEAN writable()
+      {
+         return TRUE ;
+      }
+
+      virtual const CHAR* collectionFullName()
+      {
+         return _fullName ;
+      }
+
+      virtual INT32 init ( INT32 flags, INT64 numToSkip, INT64 numToReturn,
+                           const CHAR *pMatcherBuff,
+                           const CHAR *pSelectBuff,
+                           const CHAR *pOrderByBuff,
+                           const CHAR *pHintBuff ) ;
+      virtual INT32 doit ( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
+                           _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
+                           INT16 w = 1, INT64 *pContextID = NULL ) ;
+
+   private:
+      const CHAR *_fullName ;
+      INT64 _logicalID ;
+      INT8 _direction ;
+   };
+
    class _rtnAlterCollection: public _rtnCommand
    {
    DECLARE_CMD_AUTO_REGISTER()
@@ -1628,10 +1337,8 @@ namespace engine
                                INT16 w = 1, INT64 *pContextID = NULL ) ;
 
    private:
-      /// old version
       BSONObj _alterObj ;
 
-      /// new version
       _rtnAlterRunner _runner ;
    } ;
 
@@ -1645,7 +1352,7 @@ namespace engine
    public:
       virtual const CHAR * name () { return NAME_SYNC_DB ; }
       virtual RTN_COMMAND_TYPE type() { return CMD_SYNC_DB ; }
-      virtual BOOLEAN writable() { return FALSE ;}
+      virtual BOOLEAN writable() { return FALSE ; }
       virtual INT32 init ( INT32 flags, INT64 numToSkip, INT64 numToReturn,
                            const CHAR *pMatcherBuff,
                            const CHAR *pSelectBuff,
@@ -1654,7 +1361,139 @@ namespace engine
       virtual INT32 doit ( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
                            _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
                            INT16 w = 1, INT64 *pContextID = NULL ) ;
+
+   private:
+      INT32          _syncType ;
+      const CHAR     *_csName ;
+      BOOLEAN        _block ;
+
    } ;
+
+   class _rtnLoadCollectionSpace : public _rtnCommand
+   {
+   DECLARE_CMD_AUTO_REGISTER()
+   public:
+      _rtnLoadCollectionSpace() ;
+      virtual ~_rtnLoadCollectionSpace() ;
+
+   public:
+      virtual const CHAR * name () { return NAME_LOAD_COLLECTIONSPACE ; }
+      virtual RTN_COMMAND_TYPE type() { return CMD_LOAD_COLLECTIONSPACE ; }
+
+      virtual INT32 init ( INT32 flags, INT64 numToSkip, INT64 numToReturn,
+                           const CHAR *pMatcherBuff,
+                           const CHAR *pSelectBuff,
+                           const CHAR *pOrderByBuff,
+                           const CHAR *pHintBuff ) ;
+      virtual INT32 doit ( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
+                           _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
+                           INT16 w = 1, INT64 *pContextID = NULL ) ;
+
+   protected:
+      const CHAR        *_csName ;
+
+   } ;
+
+   class _rtnUnloadCollectionSpace : public _rtnLoadCollectionSpace
+   {
+   DECLARE_CMD_AUTO_REGISTER()
+   public:
+      _rtnUnloadCollectionSpace() ;
+      virtual ~_rtnUnloadCollectionSpace() ;
+
+   public:
+      virtual const CHAR * name () { return NAME_UNLOAD_COLLECTIONSPACE ; }
+      virtual RTN_COMMAND_TYPE type() { return CMD_UNLOAD_COLLECTIONSPACE ; }
+
+      virtual INT32 doit ( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
+                           _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
+                           INT16 w = 1, INT64 *pContextID = NULL ) ;
+   } ;
+
+   struct _rtnAnalyzeParam
+   {
+      _rtnAnalyzeParam ()
+      {
+         _mode = SDB_ANALYZE_MODE_SAMPLE ;
+         _sampleByNum = TRUE ;
+         _sampleRecords = SDB_ANALYZE_SAMPLE_DEF ;
+         _samplePercent = 0.0 ;
+         _needCheck = TRUE ;
+      }
+
+      _rtnAnalyzeParam ( const _rtnAnalyzeParam &param )
+      {
+         _mode = param._mode ;
+         _sampleByNum = param._sampleByNum ;
+         _sampleRecords = param._sampleRecords ;
+         _samplePercent = param._samplePercent ;
+         _needCheck = param._needCheck ;
+      }
+
+      INT32    _mode ;
+      BOOLEAN  _sampleByNum ;
+      UINT32   _sampleRecords ;
+      double   _samplePercent ;
+      BOOLEAN  _needCheck ;
+   } ;
+
+   typedef struct _rtnAnalyzeParam rtnAnalyzeParam ;
+
+   class _rtnAnalyze : public _rtnCommand
+   {
+
+   DECLARE_CMD_AUTO_REGISTER()
+
+   public :
+
+      _rtnAnalyze () ;
+
+      virtual ~_rtnAnalyze () ;
+
+   public :
+
+      virtual const CHAR * name () { return NAME_ANALYZE ; }
+
+      virtual RTN_COMMAND_TYPE type () { return CMD_ANALYZE ; }
+
+      virtual BOOLEAN writable ()
+      {
+         return ( _param._mode != SDB_ANALYZE_MODE_RELOAD &&
+                  _param._mode != SDB_ANALYZE_MODE_CLEAR ) ;
+      }
+
+      virtual const CHAR * collectionFullName ()
+      {
+         return _clname ;
+      }
+
+      const CHAR * getIndexName () const
+      {
+         return _ixname ;
+      }
+
+      const rtnAnalyzeParam &getAnalyzeParam () const
+      {
+         return _param ;
+      }
+
+      virtual INT32 init ( INT32 flags, INT64 numToSkip, INT64 numToReturn,
+                           const CHAR *pMatcherBuff,
+                           const CHAR *pSelectBuff,
+                           const CHAR *pOrderByBuff,
+                           const CHAR *pHintBuff ) ;
+
+      virtual INT32 doit ( _pmdEDUCB *cb, _SDB_DMSCB *dmsCB,
+                           _SDB_RTNCB *rtnCB, _dpsLogWrapper *dpsCB,
+                           INT16 w = 1, INT64 *pContextID = NULL ) ;
+
+   private :
+      const CHAR *      _csname ;
+      const CHAR *      _clname ;
+      const CHAR *      _ixname ;
+      rtnAnalyzeParam   _param ;
+   } ;
+
 }
 
 const UINT32 pdGetTraceFunctionListNum();

@@ -69,7 +69,7 @@ namespace engine
    }
 
    // PD_TRACE_DECLARE_FUNCTION ( SDB__MTHSCOLUMNMATRIX_LOAD, "_mthSColumnMatrix::load" )
-   INT32 _mthSColumnMatrix::load( const bson::BSONObj &obj )
+   INT32 _mthSColumnMatrix::load( const bson::BSONObj &obj, BOOLEAN strictDataMode )
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY( SDB__MTHSCOLUMNMATRIX_LOAD ) ;
@@ -90,11 +90,10 @@ namespace engine
 
       try
       {
-         /// must be sorted.
          BSONObjIteratorSorted i( _pattern ) ;
          while ( i.more() )
          {
-            rc = _load( i.next() ) ;
+            rc = _load( i.next(), strictDataMode ) ;
             if ( SDB_OK != rc )
             {
                PD_LOG( PDERROR, "failed to load selector column[%s], rc:%d",
@@ -142,7 +141,7 @@ namespace engine
    }
 
    // PD_TRACE_DECLARE_FUNCTION ( SDB__MTHSCOLUMNMATRIX__LOAD, "_mthSColumnMatrix::_load" )
-   INT32 _mthSColumnMatrix::_load( const bson::BSONElement &e )
+   INT32 _mthSColumnMatrix::_load( const bson::BSONElement &e, BOOLEAN strictDataMode )
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY( SDB__MTHSCOLUMNMATRIX__LOAD ) ;
@@ -173,7 +172,8 @@ namespace engine
          SDB_ASSERT( NULL != column, "can not be null" ) ;
          rc = _loadObj( column,
                         e.embeddedObject(),
-                        actionNum ) ;
+                        actionNum,
+                        strictDataMode ) ;
          if ( SDB_OK != rc )
          {
             PD_LOG( PDERROR, "failed to load element[%s]"
@@ -204,7 +204,8 @@ namespace engine
    // PD_TRACE_DECLARE_FUNCTION ( SDB__MTHSCOLUMNMATRIX__LOADOBJ, "_mthSColumnMatrix::_loadObj" )
    INT32 _mthSColumnMatrix::_loadObj( _mthSColumn *column,
                                       const bson::BSONObj &obj,
-                                      UINT32 &actionNum )
+                                      UINT32 &actionNum,
+                                      BOOLEAN strictDataMode )
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY( SDB__MTHSCOLUMNMATRIX__LOADOBJ ) ;
@@ -252,6 +253,7 @@ namespace engine
             continue ;
          }
 
+         action->setStrictDataMode( strictDataMode ) ;
          rc = column->addAction( action ) ;
          if ( SDB_OK != rc )
          {
@@ -332,15 +334,12 @@ namespace engine
       _mthSColumn *node = NULL ;
       INT32 eleNumber = 0 ;
 
-      /// WARNING: fieldName may be changed when get next.
-      /// do not use it again until i is destroyed.
       utilSplitIterator i( ( CHAR * )fieldName ) ;
       while ( i.more() )
       {
          node = NULL ;
          const CHAR *columnName = i.next() ;
 
-         /// a.$[0].b
          if ( '$' == *columnName &&
               NULL != father &&
               SDB_OK == mthConvertSubElemToNumeric( columnName,

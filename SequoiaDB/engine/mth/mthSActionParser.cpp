@@ -43,6 +43,8 @@
 #include "mthMathParser.hpp"
 #include "mthStrParser.hpp"
 #include "mthCastParser.hpp"
+#include "mthSActionFunc.hpp"
+
 
 #define MTH_ADD_PARSER( parser )\
         do                                                                                    \
@@ -97,7 +99,6 @@ namespace engine
       const CHAR *fieldName = e.fieldName() ;
       action.clear() ;
 
-      /// ignore non-dollar field
       if ( '$' != *fieldName )
       {
          goto done ;
@@ -118,7 +119,7 @@ namespace engine
       {
          PD_LOG( PDERROR, "failed to parse action:%d", rc ) ;
          goto error ;
-      } 
+      }
       }
 
    done:
@@ -180,78 +181,107 @@ namespace engine
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY( SDB__MTHSACTIONPARSER__REGISTERPARSERS ) ;
 
-      /// parsers will not be deleted until program is quit -- yunwu.
 
-      /// add all parsers for actions
       parser *p = NULL ;
 
-      /// $include
       MTH_ADD_PARSER( _mthIncludeParser ) ;
 
-      /// $default
       MTH_ADD_PARSER( _mthDefaultParser ) ;
 
-      /// $slice
       MTH_ADD_PARSER( _mthSliceParser ) ;
 
-      /// $elemMatch
       MTH_ADD_PARSER( _mthElemMatchParser ) ;
 
-      /// $elemMatchOne
       MTH_ADD_PARSER( _mthElemMatchOneParser ) ;
 
-      /// $abs
       MTH_ADD_PARSER( _mthAbsParser ) ;
 
-      /// $ceiling
       MTH_ADD_PARSER( _mthCeilingParser ) ;
 
-      /// $floor
       MTH_ADD_PARSER( _mthFloorParser ) ;
 
-      /// $mod
       MTH_ADD_PARSER( _mthModParser ) ;
 
-      /// $substr
       MTH_ADD_PARSER( _mthSubStrParser ) ;
 
-      /// $strlen
       MTH_ADD_PARSER( _mthStrLenParser ) ;
 
-      /// $lower
       MTH_ADD_PARSER( _mthLowerParser ) ;
 
-      /// $upper
       MTH_ADD_PARSER( _mthUpperParser ) ;
 
-      /// $trim
       MTH_ADD_PARSER( _mthTrimParser ) ;
 
-      /// $ltrim
       MTH_ADD_PARSER( _mthLTrimParser ) ;
 
-      /// $rtrim
       MTH_ADD_PARSER( _mthRTrimParser ) ;
 
-      /// $cast
       MTH_ADD_PARSER( _mthCastParser ) ;
 
-      /// $add
       MTH_ADD_PARSER( _mthAddParser ) ;
 
-      /// $subtract
       MTH_ADD_PARSER( _mthSubtractParser ) ;
 
-      /// $multiply
       MTH_ADD_PARSER( _mthMultiplyParser ) ;
 
-      /// $divide
       MTH_ADD_PARSER( _mthDivideParser ) ;
+
+      MTH_ADD_PARSER( _mthTypeParser ) ;
+
+      MTH_ADD_PARSER( _mthSizeParser ) ;
    done:
       PD_TRACE_EXITRC( SDB__MTHSACTIONPARSER__REGISTERPARSERS, rc ) ;
       return rc ;
    error:
       SAFE_OSS_DELETE( p ) ;
+      goto done ;
+   }
+
+   ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHTYPEPARSER_PARSE, "_mthTypeParser::parse" )
+   INT32 _mthTypeParser::parse( const bson::BSONElement &e,
+                                _mthSAction &action ) const
+   {
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY(SDB__MTHTYPEPARSER_PARSE ) ;
+
+      if ( !e.isNumber() || ( e.numberInt() != 1 && e.numberInt() != 2 ) )
+      {
+         rc = SDB_INVALIDARG ;
+         PD_RC_CHECK( rc, PDERROR, "invalid element:e=%s",
+                      e.toString().c_str() ) ;
+      }
+
+      action.setAttribute( MTH_S_ATTR_PROJECTION ) ;
+      action.setFunc( &mthTypeBuild, &mthTypeGet ) ;
+      action.setName( _name.c_str() ) ;
+      action.setArg( BSON( "arg1" << e.numberInt() ) ) ;
+   done:
+      PD_TRACE_EXITRC( SDB__MTHTYPEPARSER_PARSE, rc ) ;
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHSIZEPARSER_PARSE, "_mthSizeParser::parse" )
+   INT32 _mthSizeParser::parse( const bson::BSONElement &e,
+                                _mthSAction &action ) const
+   {
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY(SDB__MTHSIZEPARSER_PARSE ) ;
+
+      if ( !mthIsNumber1( e ) )
+      {
+         rc = SDB_INVALIDARG ;
+         PD_RC_CHECK( rc, PDERROR, "placeholder must be 1" ) ;
+      }
+
+      action.setAttribute( MTH_S_ATTR_PROJECTION ) ;
+      action.setFunc( &mthSizeBuild, &mthSizeGet ) ;
+      action.setName( _name.c_str() ) ;
+   done:
+      PD_TRACE_EXITRC( SDB__MTHSIZEPARSER_PARSE, rc ) ;
+      return rc ;
+   error:
       goto done ;
    }
 }

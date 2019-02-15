@@ -55,12 +55,13 @@ namespace engine
                     UINT32 * readSize ) ;
    BOOLEAN portCanUsed ( UINT32 port, INT32 timeoutMilli = 1000 ) ; 
 
-   // get bson field
    INT32 omaGetIntElement ( const BSONObj &obj, const CHAR *fieldName,
                             INT32 &value ) ;
 
    INT32 omaGetStringElement ( const BSONObj &obj, const CHAR *fieldName,
                                const CHAR **value ) ;
+   INT32 omaGetStringElement ( const BSONObj &obj, const CHAR *fieldName,
+                               string& value ) ;
 
    INT32 omaGetObjElement ( const BSONObj &obj, const CHAR *fieldName,
                             BSONObj &value ) ;

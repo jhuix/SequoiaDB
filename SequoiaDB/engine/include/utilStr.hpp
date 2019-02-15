@@ -42,33 +42,61 @@
 #include <string>
 #include <vector>
 
+#define HEX_PRE          "0x"
+#define HEX_PRE_SIZE     ( sizeof( HEX_PRE ) -1 )
+#define OCT_PRE          "0"
+#define OCT_PRE_SIZE     ( sizeof( OCT_PRE ) -1 )
+
 using namespace std ;
 
 namespace engine
 {
-   /// skip spaces at begin.
    INT32 utilStrTrimBegin( const CHAR *src, const CHAR *&begin ) ;
    std::string &utilStrLtrim ( std::string &s ) ;
 
-   /// remove spaces at end.
    INT32 utilStrTrimEnd( CHAR *src ) ;
    std::string &utilStrRtrim ( std::string &s ) ;
 
-   /// trim spaces at begin or end .
    INT32 utilStrTrim( CHAR *src, const CHAR *&begin ) ;
    std::string &utilStrTrim ( std::string &s ) ;
 
+   OSS_INLINE BOOLEAN utilStrStartsWith( const string& str, const string& substr )
+   {
+      if ( str.empty() || substr.empty() )
+      {
+         return FALSE ;
+      }
+
+      return str.compare( 0, substr.size(), substr ) == 0 ? TRUE : FALSE ;
+   }
+
+   OSS_INLINE BOOLEAN utilStrEndsWith( const string& str, const string& substr )
+   {
+      if ( str.empty() || substr.empty() )
+      {
+         return FALSE ;
+      }
+
+      return str.compare( str.size() - substr.size(), substr.size(), substr ) == 0 ?
+               TRUE : FALSE ;
+   }
+
    INT32 utilStrToUpper( const CHAR *src, CHAR *&upper ) ;
 
-   INT32 utilStrJoin( const CHAR **src,
-                      UINT32 cnt,
-                      CHAR *join,
-                      UINT32 &joinSize ) ;
+   BOOLEAN utilStrIsDigit( const string& str ) ;
+
+   BOOLEAN utilStrIsDigit( const char *str ) ;
+
+   BOOLEAN utilStrIsODigit( const char *str ) ;
+
+   BOOLEAN utilStrIsXDigit( const char *str ) ;
+
+   vector<string> utilStrSplit( const string& str, const string& sep ) ;
 
    INT32 utilSplitStr( const string &input, vector<string> &listServices,
                        const string &seperators ) ;
 
-   /// non-reentrant
+   INT32 utilStr2Num( const CHAR *str, INT32 &num ) ;
    INT32 utilStr2TimeT( const CHAR *str,
                         time_t &tm,
                         UINT64 *usec = NULL ) ;
@@ -82,7 +110,6 @@ namespace engine
 
    const CHAR* utilAscTime( time_t tTime, CHAR *pBuff, UINT32 size ) ;
 
-   /// non-reentrant
    BOOLEAN isValidIPV4( const CHAR *ip ) ;
 
    string utilTimeSpanStr( UINT64 seconds ) ;
@@ -93,6 +120,8 @@ namespace engine
                            INT32 &fixVersion,    // out
                            INT32 &release,       // out
                            string &buildInfo ) ;
+
+   BOOLEAN utilIsValidOID( const CHAR *pStr ) ;
 
    class utilSplitIterator : public SDBObject
    {

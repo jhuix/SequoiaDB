@@ -9,7 +9,6 @@
 #include <sstream>
 #include "filenamegen.h"
 
-// output file path
 #define TRACEFILENAMEPATH SOURCEPATH "include/pdTrace.h"
 #define TRACEFILENAMEPATH1 SOURCEPATH "pd/pdFunctionList.cpp"
 #define TRACEINCLUDEPATH SOURCEPATH "include/"
@@ -30,4 +29,8 @@ private :
                           std::ofstream &fout1,
                           INT32 compid ) ;
 } ;
+
+const INT32 _pdTraceComponentNum = 28 ;
+const CHAR *pdGetTraceComponent ( UINT32 id ) ;
+
 #endif

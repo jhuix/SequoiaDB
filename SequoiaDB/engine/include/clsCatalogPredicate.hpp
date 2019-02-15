@@ -38,14 +38,15 @@
 #define CLSCATALOGPREDICATE_HPP_
 
 #include "rtnPredicate.hpp"
+#include "utilMap.hpp"
 
 namespace engine
 {
    class clsCatalogPredicateTree;
    class _clsCatalogItem;
 
-   typedef std::map< std::string , rtnStartStopKey * >  MAP_CLSCATAPREDICATEFIELD ;
-   typedef std::vector< clsCatalogPredicateTree * >     VEC_CLSCATAPREDICATESET ;
+   typedef _utilMap< std::string, rtnStartStopKey*, 10 > MAP_CLSCATAPREDICATEFIELD ;
+   typedef std::vector< clsCatalogPredicateTree * >      VEC_CLSCATAPREDICATESET ;
 
    /*
       _CLS_CATA_LOGIC_TYPE define
@@ -71,7 +72,8 @@ namespace engine
       CLS_CATA_LOGIC_TYPE getLogicType() ;
       void setLogicType( CLS_CATA_LOGIC_TYPE type ) ;
       void addChild( clsCatalogPredicateTree *pChild ) ;
-      INT32 addPredicate( const CHAR *pFieldName, bson::BSONElement beField );
+      INT32 addPredicate( const CHAR *pFieldName, bson::BSONElement beField,
+                          INT32 opType );
       void adjustByShardingKey() ;
       void clear() ;
       INT32 matches( _clsCatalogItem * pCatalogItem, BOOLEAN & result ) ;
@@ -79,8 +81,6 @@ namespace engine
       string toString() const ;
 
    protected:
-      /// compareLU <= 0, compare lowbound and stop key
-      /// compareLR >=0, compare upbound and start key
       INT32 _matches( bson::BSONObjIterator itrSK,
                       bson::BSONObjIterator itrLB,
                       bson::BSONObjIterator itrUB,
@@ -89,7 +89,6 @@ namespace engine
                       INT32 compareLU ) ;
 
    private:
-      // forbid copy constructor
       clsCatalogPredicateTree( clsCatalogPredicateTree &right ){}
    private:
       VEC_CLSCATAPREDICATESET       _children ;

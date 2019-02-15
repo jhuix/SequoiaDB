@@ -42,7 +42,6 @@
 #include "oss.hpp"
 #include "ossMmap.hpp"
 #include "dms.hpp"
-#include "dmsExtent.hpp"
 #include "ossUtil.hpp"
 #include "ossMem.hpp"
 #include "../bson/bson.h"
@@ -50,7 +49,9 @@
 #include "../bson/oid.h"
 #include "dmsSMEMgr.hpp"
 #include "dmsLobDef.hpp"
-
+#include "pmdEnv.hpp"
+#include "sdbIPersistence.hpp"
+#include "dmsExtDataHandler.hpp"
 
 #include <string>
 
@@ -69,17 +70,25 @@ namespace engine
    */
    struct _dmsStorageInfo
    {
-      SINT32      _pageSize ;
+      UINT32      _pageSize ;
       CHAR        _suName [ DMS_SU_NAME_SZ + 1 ] ; // storage unit file name is
-                                                   // foo.0 / foo.1, where foo
-                                                   // is suName, and 0/1 are
-                                                   // _sequence
       UINT32      _sequence ;
       UINT64      _secretValue ;
-      INT32       _lobdPageSize ;
+      UINT32       _lobdPageSize ;
 
       UINT32      _overflowRatio ;
       UINT32      _extentThreshold ;
+
+      BOOLEAN     _enableSparse ;
+      BOOLEAN     _directIO ;
+      UINT32      _cacheMergeSize ;
+      UINT32      _pageAllocTimeout ;
+
+      BOOLEAN     _dataIsOK ;
+      UINT64      _curLSNOnStart ;
+
+      DMS_STORAGE_TYPE _type ;
+      IDmsExtDataHandler *_extDataHandler ;
 
       _dmsStorageInfo ()
       {
@@ -91,6 +100,15 @@ namespace engine
 
          _overflowRatio = 0 ;
          _extentThreshold = 0 ;
+         _enableSparse = FALSE ;
+         _directIO = FALSE ;
+         _cacheMergeSize = 0 ;
+         _pageAllocTimeout = 0 ;
+
+         _dataIsOK       = FALSE ;
+         _curLSNOnStart  = ~0 ;
+         _type = DMS_STORAGE_NORMAL ;
+         _extDataHandler = NULL ;
       }
    };
    typedef _dmsStorageInfo dmsStorageInfo ;
@@ -112,16 +130,22 @@ namespace engine
       UINT64 _secretValue ;                              // with the index
       UINT32 _lobdPageSize ;                             // lobd page size
       UINT32 _createLobs ;                               // create lob files
-      UINT32 _validFlag ;                                // valid flag
-      UINT64 _lsn ;
-      CHAR   _pad [ 65344 ] ;
+      UINT32 _commitFlag ;                               // commit flag
+      UINT64 _commitLsn ;                                // commit LSN
+      UINT64 _commitTime ;                               // commit timestamp
+      CHAR   _pad [ 65336 ] ;
 
       _dmsStorageUnitHeader()
       {
+         reset() ;
+      }
+
+      void reset()
+      {
          SDB_ASSERT( DMS_PAGE_SIZE_MAX == sizeof( _dmsStorageUnitHeader ),
                      "_dmsStorageUnitHeader size must be 64K" ) ;
-         _lsn = -1 ;
          ossMemset( this, 0, DMS_PAGE_SIZE_MAX ) ;
+         _commitLsn = ~0 ;
       }
    } ;
    typedef _dmsStorageUnitHeader dmsStorageUnitHeader ;
@@ -140,7 +164,7 @@ namespace engine
       {
          SDB_ASSERT( DMS_SME_LEN == sizeof( _dmsSpaceManagementExtent ),
                      "SME size error" ) ;
-         ossMemset( this, DMS_SME_FREE, sizeof( _dmsSpaceManagementExtent ) ) ;
+         ossMemset( _smeMask, DMS_SME_FREE, sizeof( _smeMask ) ) ;
       }
       CHAR getBitMask( UINT32 bitNum ) const
       {
@@ -166,6 +190,137 @@ namespace engine
    void smeMask2String( CHAR state, CHAR *pBuffer, INT32 buffSize ) ;
 
    /*
+      DMS_CHG_STEP define
+   */
+   enum DMS_CHG_STEP
+   {
+      DMS_CHG_BEFORE    = 1,
+      DMS_CHG_AFTER
+   } ;
+
+   /*
+      _dmsDirtyList define
+   */
+   class _dmsDirtyList : public SDBObject
+   {
+      public:
+         _dmsDirtyList() ;
+         ~_dmsDirtyList() ;
+
+         INT32    init( UINT32 capacity ) ;
+         void     destory() ;
+         void     setSize( UINT32 size ) ;
+
+         void     setDirty( UINT32 pos )
+         {
+            SDB_ASSERT( pos < _size, "Invalid pos" ) ;
+            _pData[pos >> 3] |= ( 1 << (7 - (pos & 7))) ;
+            _dirtyBegin.swapLesserThan( pos ) ;
+            _dirtyEnd.swapGreaterThan( pos ) ;
+         }
+
+         void     cleanDirty( UINT32 pos )
+         {
+            SDB_ASSERT( pos < _size, "Invalid pos" ) ;
+            _pData[pos >> 3] &= ~( 1 << (7 - (pos & 7))) ;
+         }
+
+         BOOLEAN  isDirty( UINT32 pos ) const
+         {
+            SDB_ASSERT( pos < _size, "Invalid pos" ) ;
+            if ( _fullDirty )
+            {
+               return TRUE ;
+            }
+            return ( (_pData[pos >> 3] >> (7 - (pos & 7))) & 1 ) ? TRUE : FALSE ;
+         }
+
+         void     setFullDirty() { _fullDirty = TRUE ; }
+         BOOLEAN  isFullDirty() const { return _fullDirty ; }
+
+         INT32    nextDirtyPos( UINT32 &fromPos ) const ;
+         void     cleanAll() ;
+         UINT32   dirtyNumber() const ;
+         UINT32   dirtyGap() const ;
+
+      private:
+         CHAR     *_pData ;
+         UINT32   _capacity ;
+         UINT32   _size ;
+         BOOLEAN  _fullDirty ;
+
+         ossAtomic32 _dirtyBegin ;
+         ossAtomic32 _dirtyEnd ;
+   } ;
+   typedef _dmsDirtyList dmsDirtyList ;
+
+   class _dmsStorageBase ;
+
+   #define DMS_RW_ATTR_DIRTY                 0x00000001
+   #define DMS_RW_ATTR_NOTHROW               0x00000002
+   /*
+      _dmsExtRW define
+   */
+   class _dmsExtRW
+   {
+      friend class _dmsStorageBase ;
+
+      public:
+         _dmsExtRW() ;
+         ~_dmsExtRW() ;
+
+         BOOLEAN        isEmpty() const ;
+         _dmsExtRW      derive( INT32 extentID ) ;
+
+         void           setNothrow( BOOLEAN nothrow ) ;
+         BOOLEAN        isNothrow() const ;
+
+         void           setCollectionID( INT32 id ) { _collectionID = id ; }
+
+         INT32          getExtentID() const { return _extentID ; }
+         INT32          getCollectionID() const { return _collectionID ; }
+
+         /*
+            readPtr and writePtr will throw pdGeneralException
+            with error. Use pdGetLastError() can get the error number
+
+            If you set nothrow attribute, the both functions will return
+            NULL instead of throw pdGeneralException with error.
+         */
+         const CHAR*    readPtr( UINT32 offset, UINT32 len ) ;
+         CHAR*          writePtr( UINT32 offset, UINT32 len ) ;
+
+         template< typename T >
+         const T*       readPtr( UINT32 offset = 0,
+                                 UINT32 len = sizeof(T) )
+         {
+            return ( const T* )readPtr( offset, len ) ;
+         }
+
+         template< typename T >
+         T*             writePtr( UINT32 offset = 0,
+                                  UINT32 len = sizeof(T) )
+         {
+            return ( T* )writePtr( offset, len ) ;
+         }
+
+         BOOLEAN        isDirty() const ;
+
+         std::string    toString() const ;
+
+      protected:
+         void           _markDirty() ;
+
+      private:
+         INT32                _extentID ;
+         INT32                _collectionID ;
+         UINT32               _attr ;
+         ossValuePtr          _ptr ;
+         _dmsStorageBase      *_pBase ;
+   } ;
+   typedef _dmsExtRW dmsExtRW ;
+
+   /*
       _dmsContext define
    */
    class _dmsContext : public SDBObject
@@ -179,6 +334,8 @@ namespace engine
          virtual INT32  pause () = 0 ;
          virtual INT32  resume () = 0 ;
 
+         virtual UINT16 mbID() const = 0 ;
+
    };
    typedef _dmsContext  dmsContext ;
 
@@ -189,7 +346,7 @@ namespace engine
    /*
       Storage Unit Base
    */
-   class _dmsStorageBase : public ossMmapFile
+   class _dmsStorageBase : public _ossMmapFile, public IDataSyncBase
    {
       friend class _dmsExtendSegmentJob ;
 
@@ -198,6 +355,41 @@ namespace engine
                           dmsStorageInfo *pInfo ) ;
          virtual ~_dmsStorageBase() ;
 
+      public:
+         virtual BOOLEAN      isClosed() const ;
+         virtual BOOLEAN      canSync( BOOLEAN &force ) const ;
+
+         virtual INT32        sync( BOOLEAN force,
+                                    BOOLEAN sync,
+                                    IExecutor* cb ) ;
+
+         virtual void         lock() ;
+         virtual void         unlock() ;
+
+         void                 setSyncConfig( UINT32 syncInterval,
+                                             UINT32 syncRecordNum,
+                                             UINT32 syncDirtyRatio ) ;
+         void                 setSyncDeep( BOOLEAN syncDeep ) ;
+         void                 setSyncNoWriteTime( UINT32 millsec ) ;
+
+         BOOLEAN              isSyncDeep() const ;
+         UINT32               getSyncInterval() const ;
+         UINT32               getSyncRecordNum() const ;
+         UINT32               getSyncDirtyRatio() const ;
+         UINT32               getSyncNoWriteTime() const ;
+
+         UINT64               getCommitLSN() const ;
+         UINT32               getCommitFlag() const ;
+         UINT64               getCommitTime() const ;
+
+         void                 restoreForCrash() ;
+         BOOLEAN              isCrashed() const ;
+
+         void                 enableSync( BOOLEAN enable ) ;
+
+         IDataSyncManager*    getSyncMgr() { return _pSyncMgr ; }
+
+      public:
          const CHAR*    getSuFileName() const ;
          const CHAR*    getSuName() const ;
          const dmsStorageUnitHeader *getHeader() { return _dmsHeader ; }
@@ -209,6 +401,7 @@ namespace engine
 
          OSS_INLINE UINT32  pageSize () const ;
          OSS_INLINE UINT32  pageSizeSquareRoot () const ;
+         OSS_INLINE UINT32  getLobdPageSize() const ;
          OSS_INLINE UINT32  segmentPages () const ;
          OSS_INLINE UINT32  segmentPagesSquareRoot () const ;
          OSS_INLINE UINT32  maxSegmentNum() const ;
@@ -217,50 +410,51 @@ namespace engine
          OSS_INLINE INT32   maxSegID () const ;
          OSS_INLINE UINT32  dataStartSegID () const ;
          OSS_INLINE BOOLEAN isTempSU () const { return _isTempSU ; }
+         OSS_INLINE BOOLEAN isBlockScanSupport() const
+         {
+            return _blockScanSupport ;
+         }
 
          OSS_INLINE UINT32  extent2Segment( dmsExtentID extentID,
                                             UINT32 *pSegOffset = NULL ) ;
          OSS_INLINE dmsExtentID segment2Extent( UINT32 segID,
                                                 UINT32 segOffset = 0 ) ;
 
-         OSS_INLINE ossValuePtr extentAddr ( INT32 extentID ) ;
-         OSS_INLINE dmsExtentID extentID ( ossValuePtr extendAddr ) ;
-         // this function is used to prevent dmsStorageBase memory being freed
-         // before page cleaner completes its job
-         // the caller must perform the following steps BEFORE clean the pages
-         // 1) suLock to lock the collection space, so that no one is able to
-         // drop the collectionspace
-         // 2) lock page cleaner, mark page cleaning is working
-         // 3) suUnlock, so that other threads able to drop cs
-         // 4) unlock page cleaner, once it's done
-         // Since dmsStorageBase destructor will wait for latch before releasing
-         // memory, so we should be safe here.
-         // Note in page cleaning function, we check
-         OSS_INLINE void lockPageCleaner () ;
-         OSS_INLINE void unlockPageCleaner () ;
+         OSS_INLINE dmsExtRW    extent2RW( INT32 extentID,
+                                           INT32 collectionID = -1 ) ;
+         OSS_INLINE dmsExtentID rw2extentID( const dmsExtRW &rw ) ;
 
-         OSS_INLINE UINT32 getLobdPageSize() const
+         OSS_INLINE const ossValuePtr beginFixedAddr( INT32 extentID,
+                                                      UINT32 pageNum ) ;
+         OSS_INLINE void        endFixedAddr( const ossValuePtr ptr ) ;
+
+         OSS_INLINE void        markAllDirty( DMS_CHG_STEP step ) ;
+         OSS_INLINE void        markDirty( INT32 collectionID,
+                                           INT32 extentID,
+                                           DMS_CHG_STEP step ) ;
+
+         OSS_INLINE DMS_STORAGE_TYPE getStorageType()
          {
-            return _lobPageSize ;
+            return _pStorageInfo->_type ;
          }
 
-         OSS_INLINE UINT64 getCurrentLSN() const
-         {
-            return _lastLSN.peek() ;
-         }
-
-         OSS_INLINE UINT32 getValidFlag() const
-         {
-            return _validFlag ;
-         }
+      private:
+         /*
+            Make these function internal
+         */
+         OSS_INLINE ossValuePtr extentAddr( INT32 extentID ) ;
+         OSS_INLINE dmsExtentID extentID( ossValuePtr extendAddr ) ;
 
       public:
-         INT32 openStorage ( const CHAR *pPath, BOOLEAN createNew = TRUE,
-                             BOOLEAN delWhenExist = FALSE ) ;
+         INT32 openStorage ( const CHAR *pPath,
+                             IDataSyncManager *pSyncMgr,
+                             BOOLEAN createNew = TRUE ) ;
          void  closeStorage () ;
          INT32 removeStorage() ;
 
-         /// flush functions
+         INT32 renameStorage( const CHAR *csName,
+                              const CHAR *suFileName ) ;
+
          INT32 flushHeader( BOOLEAN sync = FALSE ) ;
          INT32 flushSME( BOOLEAN sync = FALSE ) ;
          INT32 flushMeta( BOOLEAN sync = FALSE,
@@ -270,21 +464,16 @@ namespace engine
                            BOOLEAN sync = FALSE ) ;
          INT32 flushSegment( UINT32 segmentID, BOOLEAN sync = FALSE ) ;
          INT32 flushAll( BOOLEAN sync = FALSE ) ;
-         void  flushDirtySegments( UINT32 *pNum = NULL,
+         INT32 flushDirtySegments( UINT32 *pNum = NULL,
+                                   BOOLEAN force = TRUE,
                                    BOOLEAN sync = TRUE ) ;
 
-         void  restoreForCrash() { _isCrash = FALSE ; }
-         void  resetLastLSN( UINT64 lsn ) { _lastLSN.init( lsn ) ; }
-         UINT64 getLastTick() const { return _lastTick ; }
-
-         /// virtual interface
          virtual void  syncMemToMmap () {}
-         virtual INT32 tryToFlush( BOOLEAN ignoreTick, BOOLEAN &failed ) = 0 ;
          virtual BOOLEAN isOpened() const { return ossMmapFile::_opened ; }
 
       private:
+         virtual const CHAR*  _getEyeCatcher() const = 0 ;
          virtual UINT64 _dataOffset()  = 0 ;
-         virtual const CHAR* _getEyeCatcher() const = 0 ;
          virtual UINT32 _curVersion() const = 0 ;
          virtual INT32  _checkVersion( dmsStorageUnitHeader *pHeader ) = 0 ;
          virtual INT32  _onCreate( OSSFILE *file, UINT64 curOffSet ) = 0 ;
@@ -296,13 +485,40 @@ namespace engine
          virtual void   _initHeaderPageSize( dmsStorageUnitHeader *pHeader,
                                              dmsStorageInfo *pInfo ) ;
          virtual INT32  _checkPageSize( dmsStorageUnitHeader *pHeader ) ;
-         virtual BOOLEAN _keepInRam() const { return FALSE ; }
 
-         /// flush callback:  SDB_OK: continue, no SDB_OK: stop
-         virtual INT32  _onFlushDirty( BOOLEAN sync ) { return SDB_OK ; }
+         /*
+            For Persistence
+         */
+         virtual INT32  _onFlushDirty( BOOLEAN force, BOOLEAN sync )
+         {
+            return SDB_OK ;
+         }
+
+         virtual INT32  _onMarkHeaderValid( UINT64 &lastLSN,
+                                            BOOLEAN sync,
+                                            UINT64 lastTime )
+         {
+            return SDB_OK ;
+         }
+
+         virtual INT32  _onMarkHeaderInvalid( INT32 collectionID )
+         {
+            return SDB_OK ;
+         }
+
+         virtual void _onAllocSpaceReady( dmsContext *context, BOOLEAN &doit )
+         {
+            doit = TRUE ;
+         }
+
+         virtual UINT64 _getOldestWriteTick() const { return ~0 ; }
+
+         virtual void   _onRestore() {}
 
       protected:
-         // No space will extent new segment
+         virtual INT32 _extendSegments( UINT32 numSeg ) ;
+
+      protected:
          INT32    _findFreeSpace ( UINT16 numPages, SINT32 &foundPage,
                                    dmsContext *context ) ;
          INT32    _releaseSpace ( SINT32 pageStart, UINT16 numPages ) ;
@@ -312,29 +528,24 @@ namespace engine
          INT32    _writeFile( OSSFILE *file, const CHAR *pData,
                               INT64 dataLen ) ;
 
-         void     _markDirty ( INT32 extentID ) ;
-         void     _markHeaderInvalid( BOOLEAN doublecheck ) ;
-         void     _markHeaderValid() ;
+         INT32    _markHeaderValid( BOOLEAN sync,
+                                    BOOLEAN force,
+                                    BOOLEAN hasFlushedData = TRUE,
+                                    UINT64 lastTime = 0 ) ;
 
-         virtual INT32 _extendSegments ( UINT32 numSeg ) ;
+         void     _markHeaderInvalid( INT32 collectionID,
+                                      BOOLEAN isAll ) ;
 
-         OSS_INLINE void _updateLastLSN( UINT64 offset )
-         {
-            if ( -1 != (INT64)offset )
-            {
-               _lastLSN.swapGreaterThan( offset ) ;
-            }
-            return ;
-         }
+         void     _incWriteRecord() ;
 
-         void     _registerNewWriting() ;
-         BOOLEAN  _noWriteForAWhile() const ;
+         void     _disableBlockScan() ;
 
       private:
          INT32    _initializeStorageUnit () ;
          void     _initHeader ( dmsStorageUnitHeader *pHeader ) ;
          INT32    _validateHeader( dmsStorageUnitHeader *pHeader ) ;
          INT32    _preExtendSegment() ;
+         INT32    _postOpen( INT32 cause ) ;
 
       protected:
          dmsStorageUnitHeader          *_dmsHeader ;     // 64KB
@@ -345,11 +556,27 @@ namespace engine
          UINT32                        _pageSize ;    // cache, not use header
          UINT32                        _lobPageSize ; // cache, not use header
 
-         CHAR                          *_dirtyList ;
-         volatile UINT32               _validFlag ;
-         volatile UINT64               _lastTick ;
-         _ossAtomic64                  _lastLSN ;
-         ossSpinXLatch                 _pagecleanerLatch ;
+      private:
+         dmsDirtyList                  _dirtyList ;
+         IDataSyncManager              *_pSyncMgr ;
+         ossSpinXLatch                 _persistLatch ;
+         ossSpinXLatch                 _commitLatch ;
+         BOOLEAN                       _isClosed ;
+         volatile UINT32               _commitFlag ;
+         BOOLEAN                       _isCrash ;
+         BOOLEAN                       _forceSync ;
+
+         UINT32                        _syncInterval ;
+         UINT32                        _syncRecordNum ;
+         UINT32                        _syncDirtyRatio ; /// not use, reserved
+         UINT32                        _syncNoWriteTime ;
+         BOOLEAN                       _syncDeep ;
+
+         volatile UINT64               _lastWriteTick ;
+         volatile UINT32               _writeReordNum ;
+         UINT64                        _lastSyncTime ;
+
+         BOOLEAN                       _syncEnable ;
 
       private:
          ossSpinSLatch                 _segmentLatch ;
@@ -362,23 +589,13 @@ namespace engine
          UINT32                        _pageSizeSquare ;
          CHAR                          _fullPathName[ OSS_MAX_PATHSIZE + 1 ] ;
          BOOLEAN                       _isTempSU ;
-
-         BOOLEAN                       _isCrash ;
-
+         BOOLEAN                       _blockScanSupport ;
    } ;
    typedef _dmsStorageBase dmsStorageBase ;
 
    /*
       _dmsStorageBase OSS_INLINE functions :
    */
-   OSS_INLINE void _dmsStorageBase::lockPageCleaner ()
-   {
-      ossLatch ( &_pagecleanerLatch ) ;
-   }
-   OSS_INLINE void _dmsStorageBase::unlockPageCleaner ()
-   {
-      ossUnlatch ( &_pagecleanerLatch ) ;
-   }
    OSS_INLINE UINT32 _dmsStorageBase::pageSize () const
    {
       return _pageSize ;
@@ -386,6 +603,10 @@ namespace engine
    OSS_INLINE UINT32 _dmsStorageBase::pageSizeSquareRoot () const
    {
       return _pageSizeSquare ;
+   }
+   OSS_INLINE UINT32 _dmsStorageBase::getLobdPageSize() const
+   {
+      return _lobPageSize ;
    }
    OSS_INLINE UINT32 _dmsStorageBase::segmentPages () const
    {
@@ -432,10 +653,8 @@ namespace engine
    {
       if ( pSegOffset )
       {
-         // the same with : extentID % _segmentPages
          *pSegOffset = extentID & (( 1 << _segmentPagesSquare ) - 1 ) ;
       }
-      // the same with: extentID / _segmentPages + _dataSegID
       return ( extentID >> _segmentPagesSquare ) + _dataSegID ;
    }
    OSS_INLINE dmsExtentID _dmsStorageBase::segment2Extent( UINT32 segID,
@@ -445,7 +664,6 @@ namespace engine
       {
          return DMS_INVALID_EXTENT ;
       }
-      // the same with: ( segID - _dataSegID ) * _segmentPages + segOffset
       return (( segID - _dataSegID ) << _segmentPagesSquare ) + segOffset ;
    }
    OSS_INLINE ossValuePtr _dmsStorageBase::extentAddr( INT32 extentID )
@@ -456,13 +674,12 @@ namespace engine
       }
       UINT32 segOffset = 0 ;
       UINT32 segID = extent2Segment( extentID, &segOffset ) ;
-      if ( (INT32)segID > _maxSegID )
+      if ( segID > (UINT32)_maxSegID )
       {
          return 0 ;
       }
-      return _segments[ segID ]._ptr +
+      return getSegmentInfo( segID ) +
              (ossValuePtr)( segOffset << _pageSizeSquare ) ;
-      // the same with: segOffset * _segmentPages
    }
    OSS_INLINE dmsExtentID _dmsStorageBase::extentID( ossValuePtr extendAddr )
    {
@@ -470,16 +687,17 @@ namespace engine
       {
          return DMS_INVALID_EXTENT ;
       }
-      // find seg ID
       INT32 segID = 0 ;
       UINT32 segOffset = 0 ;
+      ossValuePtr tmpPtr = 0 ;
+      UINT32 tmpLength = 0 ;
       while ( segID <= _maxSegID )
       {
-         if ( _segments[segID]._ptr >= extendAddr &&
-              extendAddr < _segments[segID]._ptr +
-                           (ossValuePtr)_segments[segID]._length )
+         tmpPtr = getSegmentInfo( segID, &tmpLength ) ;
+         if ( tmpPtr >= extendAddr &&
+              extendAddr < tmpPtr + (ossValuePtr)tmpLength )
          {
-            segOffset = (UINT32)((extendAddr - _segments[segID]._ptr) >>
+            segOffset = (UINT32)((extendAddr - tmpPtr) >>
                                   _pageSizeSquare) ;
             break ;
          }
@@ -491,21 +709,64 @@ namespace engine
       }
       return segment2Extent( (UINT32)segID, segOffset ) ;
    }
-   OSS_INLINE void _dmsStorageBase::_markDirty ( INT32 extentID )
+   OSS_INLINE dmsExtRW _dmsStorageBase::extent2RW( INT32 extentID,
+                                                   INT32 collectionID )
    {
-      // make sure the extentID is valid
-      if ( DMS_INVALID_EXTENT == extentID ||
-           extentID > DMS_MAX_PG )
+      dmsExtRW rw ;
+      rw._pBase = this ;
+      rw._extentID = extentID ;
+      rw._collectionID = collectionID ;
+      rw._ptr = extentAddr( extentID ) ;
+      return rw ;
+   }
+   OSS_INLINE dmsExtentID _dmsStorageBase::rw2extentID( const dmsExtRW &rw )
+   {
+      return extentID( rw._ptr ) ;
+   }
+   OSS_INLINE const ossValuePtr _dmsStorageBase::beginFixedAddr( INT32 extentID,
+                                                                 UINT32 pageNum )
+   {
+      return extentAddr( extentID ) ;
+   }
+   OSS_INLINE void _dmsStorageBase::endFixedAddr( const ossValuePtr ptr )
+   {
+   }
+   OSS_INLINE void _dmsStorageBase::markAllDirty( DMS_CHG_STEP step )
+   {
+      _markHeaderInvalid( -1, TRUE ) ;
+      if ( DMS_CHG_BEFORE == step )
+      {
          return ;
-      //_markHeaderInvalid() ;
-      // segment id is the real segment id minus the starting data segment id
-      // position
-      UINT32 segID = extent2Segment( extentID, NULL ) - _dataSegID ;
-      SDB_ASSERT ( segID < maxSegmentNum(),
-                   "calculated segment id cannot be greater than max "
-                   "number of segments in the storage unit" ) ;
-      // _dirtyList [ segID / 8 ] |= ( 1 << ( segID % 8 ) )
-      _dirtyList [ segID >> 3 ] |= ( 1 << ( segID & 7 ) ) ;
+      }
+      _lastWriteTick = pmdGetDBTick() ;
+      _dirtyList.setFullDirty() ;
+      if ( _pSyncMgr && _syncRecordNum > 0 &&
+           _writeReordNum >= _syncRecordNum )
+      {
+         _pSyncMgr->notifyChange() ;
+      }
+   }
+   OSS_INLINE void _dmsStorageBase::markDirty( INT32 collectionID,
+                                               INT32 extentID,
+                                               DMS_CHG_STEP step )
+   {
+      UINT32 segID = extent2Segment( extentID, NULL ) ;
+      if ( (INT32)segID <= _maxSegID )
+      {
+         _markHeaderInvalid( collectionID, FALSE ) ;
+         if ( DMS_CHG_BEFORE == step )
+         {
+            return ;
+         }
+         _lastWriteTick = pmdGetDBTick() ;
+         _dirtyList.setDirty( segID - _dataSegID ) ;
+
+         if ( _pSyncMgr && _syncRecordNum > 0 &&
+              _writeReordNum >= _syncRecordNum )
+         {
+            _pSyncMgr->notifyChange() ;
+         }
+      }
    }
 
    /*
@@ -550,7 +811,7 @@ namespace engine
     *  FREE                N      N       N       N       N       N       N         N
     *  NORMAL              Y      Y       Y       Y       Y       Y       Y         Y
     *  DROPPED             N      N       N       N       N       N       N         N
-    *  OFFLINE REORG       N (only alloed in shadow copy phase )
+    *  OFFLINE REORG       N (only alloed in shadow copy phase, rebuild )
     *                             N       N       N       N       N ( only allowed in
     *  truncate phase )                                                   N         N
     *  ONLINE REORG        Y      Y       Y       Y       Y       Y       Y         Y

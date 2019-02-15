@@ -83,12 +83,9 @@ namespace engine
       clear() ;
 
       _cb = cb ;
-      INT32 rc = rtnQuery( options._fullName, options._query,
-                           options._selector, options._orderBy,
-                           options._hint, options._flag,
-                           _cb, options._skip, options._limit,
-                           sdbGetDMSCB(), _rtnCB,
-                           _contextID, NULL, FALSE ) ;
+      rtnQueryOptions tempOptions( options ) ;
+      INT32 rc = rtnQuery( tempOptions, _cb, sdbGetDMSCB(), _rtnCB,
+                           _contextID, NULL, FALSE, FALSE ) ;
       _lastErr = rc ;
 
       return rc ;
@@ -100,10 +97,8 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
 
-      /// context id must be invalid
       SDB_ASSERT( -1 == pReply->contextID, "Context id must be -1" ) ;
 
-      /// first clear
       clear() ;
 
       _lastErr = pReply->flags ;
@@ -111,7 +106,6 @@ namespace engine
 
       rc = pReply->flags ;
 
-      /// has data
       if ( SDB_OK == rc &&
            pReply->header.messageLength > (INT32)sizeof( MsgOpReply ) )
       {

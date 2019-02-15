@@ -34,6 +34,47 @@ SDB_EXTERN_C_START
 
 #define SDB_MD5_DIGEST_LENGTH 16
 
+typedef struct _htbNode
+{
+   UINT64 lastTime ;
+   CHAR *name ;
+} htbNode ;
+
+typedef struct _hashTable
+{
+   UINT32  capacity ;
+   htbNode **node ;
+} hashTable ;
+
+INT32 hash_table_create_node( const CHAR *key, htbNode **node ) ;
+
+INT32 hash_table_destory_node( htbNode **node ) ;
+
+INT32 hash_table_insert( hashTable *tb, htbNode *node ) ;
+
+INT32 hash_table_remove( hashTable *tb, const CHAR *key, BOOLEAN dropCS ) ;
+
+INT32 hash_table_fetch( hashTable *tb, const CHAR *key, htbNode **node ) ;
+
+INT32 hash_table_create( hashTable **tb, const UINT32 bucketSize ) ;
+
+INT32 hash_table_destroy( hashTable **tb ) ;
+
+INT32 insertCachedObject( hashTable *tb, const CHAR *key ) ;
+
+INT32 removeCachedObject( hashTable *tb, const CHAR *key, BOOLEAN dropCS ) ;
+
+BOOLEAN fetchCachedObject( hashTable *tb, const CHAR *key ) ;
+
+INT32 updateCachedObject( const INT32 code, hashTable *tb, const CHAR *key ) ;
+
+INT32 initCacheStrategy( BOOLEAN enableCacheStrategy,
+                         const UINT32 timeInterval ) ;
+INT32 initHashTable( hashTable **tb ) ;
+INT32 releaseHashTable( hashTable **tb ) ;
+
+INT32 regulateQueryFlags( INT32 *newFlags, const INT32 flags ) ;
+
 INT32 clientCheckRetMsgHeader( const CHAR *pSendBuf, const CHAR *pRecvBuf,
                                BOOLEAN endianConvert ) ;
 
@@ -82,6 +123,11 @@ INT32 clientBuildRemoveLobMsgCpp( CHAR **ppBuffer, INT32 *bufferSize,
                                   SINT32 flags, SINT16 w,
                                   UINT64 reqID,
                                   BOOLEAN endianConvert ) ;
+INT32 clientBuildTruncateLobMsgCpp( CHAR **ppBuffer, INT32 *bufferSize,
+                                    const CHAR *pMeta,
+                                    SINT32 flags, SINT16 w,
+                                    UINT64 reqID,
+                                    BOOLEAN endianConvert ) ;
 #else
 INT32 clientBuildUpdateMsg ( CHAR **ppBuffer, INT32 *bufferSize,
                              const CHAR *CollectionName, SINT32 flag,
@@ -136,6 +182,12 @@ INT32 clientBuildRemoveLobMsg( CHAR **ppBuffer, INT32 *bufferSize,
                                SINT32 flags, SINT16 w,
                                UINT64 reqID,
                                BOOLEAN endianConvert ) ;
+
+INT32 clientBuildTruncateLobMsg( CHAR **ppBuffer, INT32 *bufferSize,
+                                 const bson *meta,
+                                 SINT32 flags, SINT16 w,
+                                 UINT64 reqID,
+                                 BOOLEAN endianConvert ) ;
 
 #endif
 INT32 clientBuildGetMoreMsg ( CHAR **ppBuffer, INT32 *bufferSize,
@@ -218,6 +270,11 @@ INT32 clientBuildReadLobMsg( CHAR **ppBuffer, INT32 *bufferSize,
 INT32 clientBuildWriteLobMsg( CHAR **ppBuffer, INT32 *bufferSize,
                               const CHAR *buf, UINT32 len,
                               SINT64 offset, SINT32 flags, SINT16 w,
+                              SINT64 contextID, UINT64 reqID,
+                              BOOLEAN endianConvert ) ;
+INT32 clientBuildLockLobMsg( CHAR ** ppBuffer, INT32 *bufferSize,
+                              INT64 offset, INT64 length,
+                              SINT32 flags, SINT16 w,
                               SINT64 contextID, UINT64 reqID,
                               BOOLEAN endianConvert ) ;
 INT32 clientBuildCloseLobMsg( CHAR **ppBuffer, INT32 *bufferSize,

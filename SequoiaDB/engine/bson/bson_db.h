@@ -26,7 +26,6 @@
 #pragma once
 
 #include "util/optime.h"
-//#include "util/time_support.h"
 
 /*#ifndef log
 #define log(...) std::cerr
@@ -40,8 +39,8 @@ namespace bson {
     @param time - in millis (but stored in seconds)
     */
     inline BSONObjBuilder& BSONObjBuilder::appendTimestamp(
-      const StringData& fieldName, unsigned long long time, unsigned int inc) {
-        OpTime t( (unsigned) (time / 1000) , inc );
+      const StringData& fieldName, long long time, unsigned int inc) {
+        OpTime t( (time / 1000) , inc );
         appendTimestamp( fieldName , t.asDate() );
         return *this;
     }
@@ -61,8 +60,6 @@ namespace bson {
             return string(codeWScopeCode(), *(int*)(valuestr())-1);
         default:
             break ;
-            //log() << "can't convert type: " << (int)(type()) << " to code"
-            //      << endl;
         }
         uassert( 10062 ,  "not code" , 0 );
         return "";

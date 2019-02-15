@@ -87,13 +87,21 @@ namespace engine
       INT32 rc = SDB_OK ;
       qgmFilterUnit *filterUnit = NULL ;
 
+      if ( _limit < -1 )
+      {
+         _limit = -1 ;
+      }
+      if ( _skip < 0 )
+      {
+         _skip = 0 ;
+      }
+
       if ( QGM_OPTI_TYPE_SCAN == getType() )
       {
          goto done ;
       }
       else
       {
-         // create a filterUnit
          filterUnit = SDB_OSS_NEW qgmFilterUnit( QGM_OPTI_TYPE_FILTER ) ;
          if ( !filterUnit )
          {
@@ -135,20 +143,51 @@ namespace engine
          filterUnit->emptyCondition() ;
       }
 
+      if ( QGM_OPTI_TYPE_FILTER == getType() &&
+           QGM_OPTI_TYPE_SCAN == getSubNode(0)->getType() )
+      {
+         qgmOptiSelect *pNode = (qgmOptiSelect*)getSubNode(0) ;
+
+         if ( pNode->_limit >= 0 )
+         {
+            if ( pNode->_limit <= _skip )
+            {
+               pNode->_limit = 0 ;
+               pNode->_skip = 0 ;
+            }
+            else
+            {
+               pNode->_limit -= _skip ;
+               pNode->_skip += _skip ;
+            }
+         }
+         else if ( _skip > 0 )
+         {
+            pNode->_skip += _skip ;
+         }
+
+         if ( _limit >= 0 )
+         {
+            if ( -1 == pNode->_limit || _limit < pNode->_limit )
+            {
+               pNode->_limit = _limit ;
+            }
+         }
+
+         _limit = -1 ;
+         _skip = 0 ;
+      }
+
       if ( getParent() && QGM_OPTI_TYPE_FILTER == getType() )
       {
          qgmOPFieldPtrVec fieldAlias ;
          _getFieldAlias( fieldAlias, FALSE ) ;
 
-         // if  sub node is not join, and selectors has no field alias,
-         // the selectors can be empty
          if ( QGM_OPTI_TYPE_JOIN != getSubNode(0)->getType() &&
               0 == fieldAlias.size() && !hasExpr() )
          {
             _selector.clear() ;
          }
-         // if the parent is aggr node, and the node has no condition and no
-         // constraint, the node can be remove
          else if ( QGM_OPTI_TYPE_AGGR == getParent()->getType() &&
                    NULL == _condition && !hasConstraint() )
          {
@@ -158,7 +197,6 @@ namespace engine
 
             if ( aggrUnit )
             {
-               // step1: replace table alias
                if ( validSelfAlias() && 1 == _getSubAlias( subAlias ) )
                {
                   aggrUnit->replaceRele( subAlias[0] ) ;
@@ -170,11 +208,9 @@ namespace engine
                   _getFieldAlias( fieldAlias, TRUE ) ;
                }
 
-               // step2: replace feild alias
                aggrUnit->replaceFieldAlias( fieldAlias ) ;
                getParent()->updateChange( aggrUnit ) ;
 
-               // step3: remove local filter unit
                if ( filterUnit )
                {
                   removeOprUnit( filterUnit, TRUE, FALSE ) ;
@@ -361,7 +397,6 @@ namespace engine
             {
                removeOprUnit( typeUnit, TRUE, FALSE ) ;
             }
-            // need push to the first
             _oprUnits.insert( _oprUnits.begin(), oprUnit ) ;
          }
          else // scan
@@ -372,7 +407,6 @@ namespace engine
       }
       else if ( QGM_OPTI_TYPE_FILTER == oprUnit->getType() )
       {
-         // update local selector
          qgmOPFieldVec *fields = oprUnit->getFields() ;
          if ( !oprUnit->isWildCardField() && fields->size() != 0 &&
               ( QGM_OPTI_TYPE_SCAN == getType() || typeUnit ) )
@@ -398,7 +432,6 @@ namespace engine
             }
             else
             {
-               // push to oprUnit, not change optional status
                _oprUnits.push_back( filterUnit ) ;
             }
          }
@@ -495,7 +528,6 @@ namespace engine
       _initFrom() ;
       _qgmExtendSelectPlan plan ;
 
-      /// not a leaf node, validate.
       if ( NULL != _from )
       {
          rc = _from->outputStream( s ) ;
@@ -658,7 +690,6 @@ namespace engine
       plan->pushAlias( _alias ) ;
       plan->_original = _selector ;
 
-      // order by
       if ( !_orderby.empty() )
       {
          itr = _orderby.begin() ;
@@ -755,7 +786,6 @@ namespace engine
                goto error ;
             }
             {
-            /// ensure that every param in func exist in stream.
             vector<qgmOpField>::const_iterator itrPara = func.param.begin() ;
             for ( ; itrPara != func.param.end(); itrPara++ )
             {
@@ -795,7 +825,6 @@ namespace engine
                f.value.value = (*itr).value ;
                f.value.type = SQL_GRAMMAR::DBATTR ;
 
-               /// to avoid the upper unable to find field.
                if ( !itr->alias.empty() )
                {
                   f.value.value.relegation().clear() ;
@@ -842,10 +871,6 @@ namespace engine
                BOOLEAN found ;
                qgmOpField *sExist = NULL ;
                UINT32 pos = 0 ;
-               /// eg: select sum(T.a), T.a from T ;
-               /// we do not need put T.a into selector.
-               /// but if it is: select sum(T.a), T.b from T;
-               /// we need push T.a into selector.
                rc = _paramExistInSelector( itrPara->value, found,
                                            sExist, &pos ) ;
                if ( SDB_OK != rc )
@@ -894,7 +919,6 @@ namespace engine
                goto error ;
             }
          }
-         /// do not mind if it is failed.
          plan->insertPlan( QGM_EXTEND_GROUPBY ) ;
 
          itr = _groupby.begin() ;
@@ -946,11 +970,7 @@ namespace engine
       vector<qgmDbAttr*> conditionFields ;
       vector<qgmDbAttr*>::iterator citr ;
       _qgmConditionNodeHelper cTree( _condition ) ;
-      rc = cTree.getAllAttr( conditionFields ) ;
-      if ( SDB_OK != rc )
-      {
-         goto error ;
-      }
+      cTree.getAllAttr( conditionFields ) ;
       for ( citr = conditionFields.begin()
             ; citr != conditionFields.end()
             ; citr++ )

@@ -140,11 +140,8 @@ void _ossAsioMsgProcessor::_handleReadPacketHead (
    }
    if ( !_message )
    {
-      // page size unit is 4096 bytes
       INT32 bufSize = ossRoundUpToMultipleX ( _header.messageLength,
                                               SDB_PAGE_SIZE ) ;
-      // currently let's malloc a buffer. later we should change this to a
-      // static log buffer to avoid frequent dynamic memory allocation
       _message = (CHAR*)SDB_OSS_MALLOC ( bufSize ) ;
       if ( !_message )
       {
@@ -234,12 +231,12 @@ PD_TRACE_DECLARE_FUNCTION ( SDB__TMPAIR_CHK_DLINE, "_timerPair::check_deadline" 
 void _timerPair::check_deadline()
 {
    PD_TRACE_ENTRY ( SDB__TMPAIR_CHK_DLINE );
-   if ( _timer.expires_at() <= deadline_timer::traits_type::now() )
+   if ( _timer.expires_at() <= boost::asio::steady_timer::clock_type::now() )
    {
       if ( _onTimer )
          _onTimer ( NULL, NULL, NULL ) ;
    }
-   _timer.expires_from_now ( boost::posix_time::milliseconds (_timeoutMS)) ;
+   _timer.expires_from_now ( boost::chrono::milliseconds (_timeoutMS)) ;
    _timer.async_wait ( boost::bind ( &_timerPair::check_deadline,
                        this ) ) ;
    PD_TRACE_EXIT ( SDB__TMPAIR_CHK_DLINE );
@@ -249,7 +246,7 @@ PD_TRACE_DECLARE_FUNCTION ( SDB__TMPAIR_RUN, "_timerPair::run" )
 void _timerPair::run ()
 {
    PD_TRACE_ENTRY ( SDB__TMPAIR_RUN );
-   _timer.expires_from_now ( boost::posix_time::milliseconds (_timeoutMS)) ;
+   _timer.expires_from_now ( boost::chrono::milliseconds (_timeoutMS)) ;
    if ( _onTimer )
          _onTimer ( NULL, NULL, NULL ) ;
    _timer.async_wait ( boost::bind (&_timerPair::check_deadline,
@@ -271,7 +268,6 @@ void _ossASIO::_handleAccept ( boost::shared_ptr<ossAsioMsgProcessor> processor,
       goto done ;
    }
    processor->run() ;
-   // repeatedly call accept in order to accept more messages
    _accept() ;
 done :
    PD_TRACE_EXIT ( SDB__OSSAIO__HNDAPT );
@@ -310,7 +306,6 @@ INT32 _ossASIO::connect ( CHAR *pHostName, CHAR *pServiceName,
    if ( !rc )
    {
       *sock = &processor->socket() ;
-      // start run the processor if connection is established
       processor->run() ;
    }
    else

@@ -40,13 +40,20 @@
 #include "dmsStorageUnit.hpp"
 #include "pmdEDUMgr.hpp"
 
+using namespace bson ;
+
 namespace engine
 {
    class migMaster ;
+
+   /*
+      dmsStorageLoadOp define
+   */
    class dmsStorageLoadOp : public SDBObject
    {
    private:
       CHAR           *_pCurrentExtent ;
+      UINT32         _buffSize ;
       INT32           _currentExtentSize ;
       dmsExtent      *_currentExtent ;
       dmsStorageUnit *_su ;
@@ -58,6 +65,7 @@ namespace engine
 
    public:
       dmsStorageLoadOp( ) : _pCurrentExtent(NULL),
+                            _buffSize( 0 ),
                             _currentExtentSize(0),
                             _currentExtent(NULL),
                             _su(NULL)
@@ -67,9 +75,9 @@ namespace engine
       ~dmsStorageLoadOp()
       {
          SAFE_OSS_FREE ( _pCurrentExtent ) ;
+         _buffSize = 0 ;
       }
 
-      // Flag Load
       BOOLEAN isFlagLoad ( dmsMB *mb )
       {
          return DMS_IS_MB_LOAD ( mb->_flag ) ;
@@ -85,7 +93,6 @@ namespace engine
          OSS_BIT_CLEAR ( mb->_flag, DMS_MB_FLAG_LOAD ) ;
       }
 
-      // Flag Load Load
       BOOLEAN isFlagLoadLoad ( dmsMB *mb )
       {
          return DMS_IS_MB_FLAG_LOAD_LOAD ( mb->_flag ) ;
@@ -101,7 +108,6 @@ namespace engine
          OSS_BIT_CLEAR ( mb->_flag, DMS_MB_FLAG_LOAD_LOAD ) ;
       }
 
-      // Flag Load Build
       BOOLEAN isFlagLoadBuild ( dmsMB *mb )
       {
          return DMS_IS_MB_FLAG_LOAD_BUILD ( mb->_flag ) ;
@@ -125,6 +131,7 @@ namespace engine
       }
 
       INT32 pushToTempDataBlock ( dmsMBContext *mbContext,
+                                  pmdEDUCB *cb,
                                   BSONObj &record,
                                   BOOLEAN isLast,
                                   BOOLEAN isAsynchr ) ;
@@ -142,4 +149,4 @@ namespace engine
 
 }
 
-#endif
+#endif // DMSSTORAGE_LOADEXTENT_HPP_

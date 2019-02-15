@@ -44,6 +44,9 @@
 #include "dmsCompress.hpp"
 #include "pdTrace.hpp"
 #include "dmsTrace.hpp"
+#include "utilDictionary.hpp"
+#include "dmsStorageDataCapped.hpp"
+#include "rtnLobPieces.hpp"
 
 using namespace bson ;
 
@@ -110,6 +113,11 @@ namespace engine
          appendString( szTmp, DMS_INDEXTYPE_TMP_STR_SZ, "2d" ) ;
          OSS_BIT_CLEAR( type, IXM_EXTENT_TYPE_2D ) ;
       }
+      if ( IXM_EXTENT_HAS_TYPE( type, IXM_EXTENT_TYPE_TEXT ) )
+      {
+         appendString( szTmp, DMS_INDEXTYPE_TMP_STR_SZ, "Text" ) ;
+         OSS_BIT_CLEAR( type, IXM_EXTENT_TYPE_TEXT ) ;
+      }
 
       if ( type )
       {
@@ -122,7 +130,7 @@ namespace engine
    UINT32 _dmsDump::dumpHeader( void *inBuf, UINT32 inSize,
                                 CHAR *outBuf, UINT32 outSize,
                                 CHAR *addrPrefix, UINT32 options,
-                                SINT32 &pageSize, INT32 &pageNum )
+                                UINT32 &pageSize, UINT32 &pageNum )
    {
       UINT32 len                         = 0 ;
       UINT32 hexDumpOption               = 0 ;
@@ -159,6 +167,12 @@ namespace engine
       }
       if ( DMS_SU_DMP_OPT_FORMATTED & options )
       {
+         ossTimestamp commitTm ;
+         commitTm.time = header->_commitTime / 1000 ;
+         commitTm.microtm = ( header->_commitTime % 1000 ) * 1000 ;
+         CHAR strTime[ OSS_TIMESTAMP_STRING_LEN + 1 ] = { 0 } ;
+         ossTimestampToString( commitTm, strTime ) ;
+
          len += ossSnprintf ( outBuf + len, outSize - len,
                               " Eye Catcher : %s"OSS_NEWLINE,
                               eyeCatcher ) ;
@@ -187,8 +201,23 @@ namespace engine
                               " Page Num    : %d"OSS_NEWLINE,
                               header->_pageNum ) ;
          len += ossSnprintf ( outBuf + len, outSize - len,
-                              " Secret value: %d"OSS_NEWLINE,
-                              header->_secretValue ) ;
+                              " Secret value: 0x%016lx (%llu)"OSS_NEWLINE,
+                              header->_secretValue, header->_secretValue ) ;
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              " Lob Page Sz : %d"OSS_NEWLINE,
+                              header->_lobdPageSize ) ;
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              " Lob Flag    : %d"OSS_NEWLINE,
+                              header->_createLobs ) ;
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              " Commit Flag : %d"OSS_NEWLINE,
+                              header->_commitFlag ) ;
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              " Commit LSN  : 0x%016lx (%lld)"OSS_NEWLINE,
+                              header->_commitLsn, header->_commitLsn ) ;
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              " Commit Time : %s (%llu)"OSS_NEWLINE,
+                              strTime, header->_commitTime ) ;
       }
       len += ossSnprintf ( outBuf + len, outSize - len, OSS_NEWLINE ) ;
 
@@ -277,7 +306,8 @@ namespace engine
                              CHAR *outBuf, UINT32 outSize,
                              CHAR *addrPrefix, UINT32 options,
                              const CHAR *collectionName,
-                             vector< UINT16 > &collections )
+                             vector< UINT16 > &collections,
+                             BOOLEAN force )
    {
       UINT32 len = 0 ;
 
@@ -297,7 +327,7 @@ namespace engine
       {
          len += dumpMB ( (CHAR*)inBuf + (i*DMS_MB_SIZE), DMS_MB_SIZE,
                          outBuf + len, outSize -len, addrPrefix, options,
-                         collectionName, collections ) ;
+                         collectionName, collections, force ) ;
          if ( len == outSize )
          {
             goto exit ;
@@ -315,7 +345,8 @@ namespace engine
                             CHAR *outBuf, UINT32 outSize,
                             CHAR *addrPrefix, UINT32 options,
                             const CHAR *collectionName,
-                            vector< UINT16 > &collections )
+                            vector< UINT16 > &collections,
+                            BOOLEAN force )
    {
       UINT32 len = 0 ;
       UINT32 hexDumpOption = 0 ;
@@ -333,13 +364,11 @@ namespace engine
          goto exit ;
       }
 
-      // if we want to find a specific collection
       if ( collectionName )
       {
          if ( ossStrncmp ( mb->_collectionName, collectionName,
                            DMS_COLLECTION_NAME_SZ ) != 0 )
          {
-            // if it doesn't match our expectation
             goto exit ;
          }
       }
@@ -348,6 +377,10 @@ namespace engine
            !OSS_BIT_TEST ( mb->_flag, DMS_MB_FLAG_DROPED ) )
       {
          collections.push_back ( mb->_blockID ) ;
+      }
+      else if ( !force )
+      {
+         goto exit ;
       }
 
       if ( DMS_SU_DMP_OPT_HEX & options )
@@ -384,16 +417,16 @@ namespace engine
                              " Collection ID     : %u"OSS_NEWLINE,
                               mb->_blockID ) ;
 
-         CHAR *compressorType = NULL ;
-         if ( 1 == mb->_compressorType )
+         const CHAR *compressorType = NULL ;
+         if ( UTIL_COMPRESSOR_LZW == mb->_compressorType )
          {
             compressorType = "lzw" ;
          }
-         else if ( 0 == mb->_compressorType )
+         else if ( UTIL_COMPRESSOR_SNAPPY == mb->_compressorType )
          {
             compressorType = "snappy" ;
          }
-         else if ( -1 == mb->_compressorType )
+         else if ( UTIL_COMPRESSOR_INVALID == mb->_compressorType )
          {
             compressorType = "none" ;
          }
@@ -403,21 +436,14 @@ namespace engine
          }
 
          len += ossSnprintf( outBuf + len, outSize - len,
-                             " First extent ID   : 0x%08lx (%d)"OSS_NEWLINE
-                             " Last extent ID    : 0x%08lx (%d)"OSS_NEWLINE
-                             " Logical ID        : 0x%08lx (%d)"OSS_NEWLINE
-                             " Index HWM         : 0x%d"OSS_NEWLINE
+                             " First extent ID   : 0x%08x (%d)"OSS_NEWLINE
+                             " Last extent ID    : 0x%08x (%d)"OSS_NEWLINE
+                             " Logical ID        : 0x%08x (%d)"OSS_NEWLINE
+                             " Index HWM         : %u"OSS_NEWLINE
                              " Number of indexes : %u"OSS_NEWLINE
-                             " First Load ExtID  : 0x%08lx (%d)"OSS_NEWLINE
-                             " Last Load ExtID   : 0x%08lx (%d)"OSS_NEWLINE
-                             " Expand extent ID  : 0x%08lx (%d)"OSS_NEWLINE
-                             " Total records     : %llu"OSS_NEWLINE
-                             " Total data pages  : %u"OSS_NEWLINE
-                             " Total data free sp: %llu"OSS_NEWLINE
-                             " Total index pages : %u"OSS_NEWLINE
-                             " Total idx free sp : %llu"OSS_NEWLINE
-                             " Dictionary extent ID: 0x%08lx (%d)"OSS_NEWLINE
-                             " Compression Type  : %s"OSS_NEWLINE,
+                             " First Load ExtID  : 0x%08x (%d)"OSS_NEWLINE
+                             " Last Load ExtID   : 0x%08x (%d)"OSS_NEWLINE
+                             " Expand extent ID  : 0x%08x (%d)"OSS_NEWLINE,
                              mb->_firstExtentID, mb->_firstExtentID,
                              mb->_lastExtentID, mb->_lastExtentID,
                              mb->_logicalID, mb->_logicalID,
@@ -425,13 +451,82 @@ namespace engine
                              mb->_numIndexes,
                              mb->_loadFirstExtentID, mb->_loadFirstExtentID,
                              mb->_loadLastExtentID, mb->_loadLastExtentID,
-                             mb->_mbExExtentID, mb->_mbExExtentID,
-                             mb->_totalRecords, mb->_totalDataPages,
-                             mb->_totalDataFreeSpace, mb->_totalIndexPages,
+                             mb->_mbExExtentID, mb->_mbExExtentID ) ;
+
+         len += ossSnprintf( outBuf + len, outSize - len,
+                             " Total records     : %llu"OSS_NEWLINE
+                             " Total lobs        : %llu"OSS_NEWLINE
+                             " Total data pages  : %u"OSS_NEWLINE
+                             " Total data free sp: %llu"OSS_NEWLINE
+                             " Total index pages : %u"OSS_NEWLINE
+                             " Total idx free sp : %llu"OSS_NEWLINE
+                             " Total lob pages   : %u"OSS_NEWLINE
+                             " Total org data len: %llu"OSS_NEWLINE
+                             " total data len    : %llu"OSS_NEWLINE,
+                             mb->_totalRecords,
+                             mb->_totalLobs,
+                             mb->_totalDataPages,
+                             mb->_totalDataFreeSpace,
+                             mb->_totalIndexPages,
                              mb->_totalIndexFreeSpace,
+                             mb->_totalLobPages,
+                             mb->_totalOrgDataLen,
+                             mb->_totalDataLen ) ;
+
+         len += ossSnprintf( outBuf + len, outSize - len,
+                             " Dict extent ID    : 0x%08x (%d)"OSS_NEWLINE
+                             " New Dict extent ID: 0x%08x (%d)"OSS_NEWLINE
+                             " Dict stat page ID : 0x%08x (%d)"OSS_NEWLINE
+                             " Dictionary version: %u"OSS_NEWLINE
+                             " Compression Type  : 0x%02x (%s)"OSS_NEWLINE
+                             " Last comp ratio   : %d"OSS_NEWLINE,
                              mb->_dictExtentID, mb->_dictExtentID,
-                             compressorType ) ;
-         // Delete list
+                             mb->_newDictExtentID, mb->_newDictExtentID,
+                             mb->_dictStatPageID, mb->_dictStatPageID,
+                             mb->_dictVersion,
+                             mb->_compressorType, compressorType,
+                             mb->_lastCompressRatio ) ;
+
+         ossTimestamp dataTm ;
+         dataTm.time = mb->_commitTime / 1000 ;
+         dataTm.microtm = ( mb->_commitTime % 1000 ) * 1000 ;
+         CHAR strDataTime[ OSS_TIMESTAMP_STRING_LEN + 1 ] = { 0 } ;
+         ossTimestampToString( dataTm, strDataTime ) ;
+
+         ossTimestamp idxTm ;
+         idxTm.time = mb->_idxCommitTime / 1000 ;
+         idxTm.microtm = ( mb->_idxCommitTime % 1000 ) * 1000 ;
+         CHAR strIdxTime[ OSS_TIMESTAMP_STRING_LEN + 1 ] = { 0 } ;
+         ossTimestampToString( idxTm, strIdxTime ) ;
+
+         ossTimestamp lobTm ;
+         lobTm.time = mb->_lobCommitTime / 1000 ;
+         lobTm.microtm = ( mb->_lobCommitTime % 1000 ) * 1000 ;
+         CHAR strLobTime[ OSS_TIMESTAMP_STRING_LEN + 1 ] = { 0 } ;
+         ossTimestampToString( lobTm, strLobTime ) ;
+
+         len += ossSnprintf( outBuf + len, outSize - len,
+                             " Data Commit Flag  : %d"OSS_NEWLINE
+                             " Data Commit LSN   : 0x%016lx (%lld)"OSS_NEWLINE
+                             " Data Commit Time  : %s (%llu)"OSS_NEWLINE
+                             " Idx Commit Flag   : %d"OSS_NEWLINE
+                             " Idx Commit LSN    : 0x%016lx (%lld)"OSS_NEWLINE
+                             " Idx Commit Time   : %s (%llu)"OSS_NEWLINE
+                             " Lob Commit Flag   : %d"OSS_NEWLINE
+                             " Lob Commit LSN    : 0x%016lx (%lld)"OSS_NEWLINE
+                             " Lob Commit Time   : %s (%llu)"OSS_NEWLINE,
+                             mb->_commitFlag,
+                             mb->_commitLSN, mb->_commitLSN,
+                             strDataTime, mb->_commitTime,
+                             mb->_idxCommitFlag,
+                             mb->_idxCommitLSN, mb->_idxCommitLSN,
+                             strIdxTime, mb->_idxCommitTime,
+                             mb->_lobCommitFlag,
+                             mb->_lobCommitLSN, mb->_lobCommitLSN,
+                             strLobTime, mb->_lobCommitTime ) ;
+         len += ossSnprintf( outBuf + len, outSize - len,
+                             " Extend option extent ID: 0x%08x (%d)"OSS_NEWLINE,
+                             mb->_mbOptExtentID, mb->_mbOptExtentID ) ;
          len += ossSnprintf( outBuf + len, outSize - len,
                              " Deleted list :"OSS_NEWLINE ) ;
          tmpInt = 16 ;
@@ -453,21 +548,30 @@ namespace engine
                tmpSize = tmpInt >> 20 ;  // tmpInt / 1048576
                uom = 'M' ;
             }
+            if ( !force &&
+                 DMS_INVALID_EXTENT == mb->_deleteList[i]._extent &&
+                 DMS_INVALID_OFFSET == mb->_deleteList[i]._offset )
+            {
+               continue ;
+            }
             len += ossSnprintf( outBuf + len, outSize - len,
-                                "   %3u%c : %08lx %08lx"OSS_NEWLINE,
+                                "   %3u%c : %08x %08x"OSS_NEWLINE,
                                 tmpSize, uom,
                                 mb->_deleteList[i]._extent,
                                 mb->_deleteList[i]._offset ) ;
          }
 
-         // index list
          len += ossSnprintf( outBuf + len, outSize - len,
                              " Index extent:"OSS_NEWLINE ) ;
 
          for ( UINT16 i = 0 ; i < DMS_COLLECTION_MAX_INDEX ; i++ )
          {
+            if ( !force && DMS_INVALID_EXTENT == mb->_indexExtent[i] )
+            {
+               continue ;
+            }
             len += ossSnprintf( outBuf + len, outSize - len,
-                                "   %2u : 0x%08lx"OSS_NEWLINE,
+                                "   %2u : 0x%08x"OSS_NEWLINE,
                                 i, mb->_indexExtent[i] ) ;
          }
       }
@@ -542,7 +646,6 @@ namespace engine
                               " Meta Extent Header :"OSS_NEWLINE ) ;
          len += dumpExtentHeader ( inBuf, inSize, outBuf + len,
                                    outSize - len ) ;
-         // make sure the extent is valid and in use
          if ( DMS_EXTENT_FLAG_FREED == mbEx->_header._flag )
          {
             len += ossSnprintf ( outBuf + len, outSize - len,
@@ -568,7 +671,7 @@ namespace engine
                }
 
                len += ossSnprintf ( outBuf + len, outSize - len,
-                                    "  %6u : [0x%08lx, 0x%08lx]"OSS_NEWLINE,
+                                    "  %6u : [0x%08x, 0x%08x]"OSS_NEWLINE,
                                     i, firstID, lastID ) ;
             }
          } // end for
@@ -579,6 +682,58 @@ namespace engine
       len += ossSnprintf ( outBuf + len, outSize - len, OSS_NEWLINE ) ;
 
    exit:
+      return len ;
+   }
+
+   UINT32 _dmsDump::_dumpDictDetail( void *inBuf, UINT32 inSize,
+                                     CHAR *outBuf, UINT32 outSize )
+   {
+      UINT32 len = 0 ;
+      utilDictionaryDetail detail ;
+
+      utilDictHead *head
+         = (utilDictHead *)( (CHAR*)inBuf + sizeof( dmsDictExtent ) ) ;
+      if ( UTIL_DICT_LZW == head->_type )
+      {
+         getDictionaryDetail( (void *)head, detail ) ;
+         len += ossSnprintf( outBuf + len, outSize - len,
+                             "Dictionary detail:"OSS_NEWLINE ) ;
+         len += ossSnprintf( outBuf + len, outSize - len,
+                             "   Type: %s"OSS_NEWLINE,
+                             VALUE_NAME_LZW ) ;
+         len += ossSnprintf( outBuf + len, outSize - len,
+                             "   Version: %u"OSS_NEWLINE,
+                             detail._version ) ;
+         len += ossSnprintf( outBuf + len, outSize - len,
+                             "   Maximum code: %u"OSS_NEWLINE,
+                             detail._maxCode ) ;
+         len += ossSnprintf( outBuf + len, outSize - len,
+                             "   Code size: %u"OSS_NEWLINE,
+                             detail._codeSize ) ;
+      }
+
+      return len ;
+   }
+
+   UINT32 _dmsDump::_dumpExtOptionDetail( CHAR *inBuf, UINT32 inSize,
+                                          CHAR *outBuf, UINT32 outSize,
+                                          DMS_STORAGE_TYPE type )
+   {
+      UINT32 len = 0 ;
+      if ( DMS_STORAGE_CAPPED == type )
+      {
+         dmsCappedCLOptions *options =
+            (dmsCappedCLOptions *)(inBuf + DMS_OPTEXTENT_HEADER_SZ) ;
+         len += ossSnprintf( outBuf + len, outSize - len,
+                             "Extend option detail:"OSS_NEWLINE ) ;
+         len += ossSnprintf( outBuf + len, outSize - len,
+                             "   Size: %lld"OSS_NEWLINE, options->_maxSize ) ;
+         len += ossSnprintf( outBuf + len, outSize - len,
+                             "   Max: %lld"OSS_NEWLINE, options->_maxRecNum ) ;
+         len += ossSnprintf( outBuf + len, outSize - len,
+                             "   Overwrite: %s"OSS_NEWLINE,
+                             (options->_overwrite) ? "true" : "false" ) ;
+      }
       return len ;
    }
 
@@ -611,7 +766,7 @@ namespace engine
       }
 
       len += ossSnprintf( outBuf + len, outSize - len,
-                          " ExtentId: 0x%08lx (%d)"OSS_NEWLINE,
+                          " ExtentId: 0x%08x (%d)"OSS_NEWLINE,
                           extID, extID ) ;
       if ( DMS_SU_DMP_OPT_HEX & options )
       {
@@ -638,22 +793,78 @@ namespace engine
                                 "Error: Extent is not in use"OSS_NEWLINE ) ;
             goto exit ;
          }
+
+         len += _dumpDictDetail( inBuf, inSize, outBuf + len, outSize - len ) ;
       }
 
-      // TBD: validate the dictionary
       len += ossSnprintf ( outBuf + len, outSize - len, OSS_NEWLINE ) ;
    exit:
       return len ;
    }
 
-   UINT32 _dmsDump::dumpDataExtent( pmdEDUCB *cb, void *inBuf, UINT32 inSize,
+   UINT32 _dmsDump::dumpExtOptExtent( CHAR *inBuf, UINT32 inSize,
+                                      CHAR *outBuf, UINT32 outSize,
+                                      CHAR *addrPrefix, UINT32 options,
+                                      dmsExtentID extID,
+                                      DMS_STORAGE_TYPE type )
+   {
+      UINT32 len = 0 ;
+      UINT32 hexDumpOption = 0 ;
+      dmsOptExtent *extent = (dmsOptExtent *)inBuf ;
+
+      if ( extent->_eyeCatcher[0] != DMS_OPT_EXTENT_EYECATCHER0
+           || extent->_eyeCatcher[1] != DMS_OPT_EXTENT_EYECATCHER1 )
+      {
+         len += ossSnprintf( outBuf + len, outSize - len,
+                             "Error: Invalid eye catcher: %c%c"OSS_NEWLINE,
+                             extent->_eyeCatcher[0],
+                             extent->_eyeCatcher[1] ) ;
+         goto exit ;
+      }
+
+      len += ossSnprintf( outBuf + len, outSize - len,
+                          " ExtentId: 0x%08x (%d)"OSS_NEWLINE,
+                          extID, extID ) ;
+      if ( DMS_SU_DMP_OPT_HEX & options )
+      {
+         if ( DMS_SU_DMP_OPT_HEX_PREFIX_AS_ADDR & options )
+         {
+            hexDumpOption |= OSS_HEXDUMP_PREFIX_AS_ADDR ;
+         }
+         if ( !(DMS_SU_DMP_OPT_HEX_WITH_ASCII & options ) )
+         {
+            hexDumpOption |= OSS_HEXDUMP_RAW_HEX_ONLY ;
+         }
+         len += ossHexDumpBuffer( inBuf, inSize, outBuf + len, outSize - len,
+                                  addrPrefix, hexDumpOption ) ;
+      }
+      if ( DMS_SU_DMP_OPT_FORMATTED & options )
+      {
+         len += ossSnprintf( outBuf + len, outSize - len,
+                         " Extend Option Extent Header :"OSS_NEWLINE ) ;
+         len += dumpExtentHeader( inBuf, inSize, outBuf + len, outSize - len ) ;
+         if ( DMS_EXTENT_FLAG_FREED == extent->_flag )
+         {
+            len += ossSnprintf( outBuf + len, outSize - len,
+                                "Error: Extent is not in use"OSS_NEWLINE ) ;
+            goto exit ;
+         }
+         len += _dumpExtOptionDetail( inBuf, inSize, outBuf + len,
+                                      outSize - len, type ) ;
+      }
+      len += ossSnprintf ( outBuf + len, outSize - len, OSS_NEWLINE ) ;
+   exit:
+      return len ;
+   }
+
+   UINT32 _dmsDump::dumpDataExtent( pmdEDUCB *cb, CHAR *inBuf, UINT32 inSize,
                                     CHAR *outBuf, UINT32 outSize,
                                     CHAR *addrPrefix, UINT32 options,
                                     dmsExtentID &nextExtent,
+                                    dmsCompressorEntry *compressorEntry,
                                     set< dmsRecordID > *ridList,
                                     BOOLEAN dumpRecord,
-                                    utilCompressor *compressor,
-                                    utilCompressorContext compContext )
+                                    BOOLEAN capped )
    {
       UINT32 len           = 0 ;
       UINT32 hexDumpOption = 0 ;
@@ -708,7 +919,6 @@ namespace engine
                               " Data Extent Header:"OSS_NEWLINE ) ;
          len += dumpExtentHeader ( inBuf, inSize, outBuf + len,
                                    outSize - len ) ;
-         // make sure the extent is valid and in use
          if ( DMS_EXTENT_FLAG_FREED == extent->_flag )
          {
             len += ossSnprintf ( outBuf + len, outSize - len,
@@ -718,34 +928,16 @@ namespace engine
 
          if( dumpRecord )
          {
-            // start dump all records
-            dmsOffset nextRecord = extent->_firstRecordOffset ;
-            INT32 recordCount = 0 ;
-
-            while ( DMS_INVALID_OFFSET != nextRecord && len < outSize )
+            if ( capped )
             {
-               if ( nextRecord >= (SINT32)inSize )
-               {
-                  len += ossSnprintf (  outBuf + len, outSize - len,
-                                        "Error : nextRecord %d is greater "
-                                        "than inSize %d",
-                                        nextRecord, inSize ) ;
-                  goto exit ;
-               }
-               len += ossSnprintf ( outBuf + len, outSize - len,
-                                    "    Record %d:"OSS_NEWLINE,
-                                    recordCount ) ;
-               len += dumpDataRecord ( cb, ((CHAR*)inBuf)+nextRecord,
-                                       inSize - nextRecord,
-                                       outBuf + len, outSize - len,
-                                       nextRecord, ridList,
-                                       compressor, compContext) ;
-               len += ossSnprintf ( outBuf + len, outSize - len, OSS_NEWLINE ) ;
-               ++recordCount ;
-               if ( compContext )
-               {
-                  compressor->rePrepare( compContext ) ;
-               }
+               len += _dumpCappedExtent( inBuf, inSize, outBuf + len,
+                                         outSize - len, compressorEntry, cb ) ;
+            }
+            else
+            {
+               len += _dumpNormalExtent( inBuf, inSize, outBuf + len,
+                                         outSize - len, compressorEntry,
+                                         ridList, cb ) ;
             }
          }
       }
@@ -793,6 +985,11 @@ namespace engine
                 IXM_EXTENT_CB_EYECATCHER1 == extent->_eyeCatcher[1] )
       {
          return dumpIndexCBExtentHeader ( inBuf, inSize, outBuf, outSize ) ;
+      }
+      else if ( DMS_OPT_EXTENT_EYECATCHER0 == extent->_eyeCatcher[0] &&
+                DMS_OPT_EXTENT_EYECATCHER1 == extent->_eyeCatcher[1] )
+      {
+         return dumpExtOptExtentHeader( inBuf, inSize, outBuf, outSize ) ;
       }
       else
       {
@@ -926,14 +1123,170 @@ namespace engine
       return len ;
    }
 
+   UINT32 _dmsDump::dumpExtOptExtentHeader( void *inBuf, UINT32 inSize,
+                                            CHAR * outBuf, UINT32 outSize )
+   {
+      UINT32 len = 0 ;
+      dmsOptExtent *extent = (dmsOptExtent *)inBuf ;
+
+      if ( NULL == inBuf || NULL == outBuf
+           ||  inSize < DMS_DICTEXTENT_HEADER_SZ)
+      {
+         len = ossSnprintf( outBuf, outSize,
+                            "Error: dumpExtOptExtentHeader input size (%d) "
+                            "is too small"OSS_NEWLINE, inSize ) ;
+         goto exit ;
+      }
+
+      len += _dmsDump::_dumpExtentHeaderComm( (dmsExtent *)extent,
+                                              outBuf, outSize ) ;
+      len += ossSnprintf( outBuf + len, outSize - len,
+                          "    Extend option size: %u"OSS_NEWLINE,
+                          extent->_optSize ) ;
+   exit:
+      return len ;
+   }
+
+   UINT32 _dmsDump::_dumpNormalExtent( CHAR *inBuf, UINT32 inSize,
+                                       CHAR *outBuf, UINT32 outSize,
+                                       dmsCompressorEntry *compressorEntry,
+                                       set< dmsRecordID > *ridList,
+                                       pmdEDUCB *cb )
+   {
+      UINT32 len = 0 ;
+      dmsExtent *extent = (dmsExtent *)inBuf ;
+      dmsOffset nextRecord = extent->_firstRecordOffset ;
+      INT32 recordCount = 0 ;
+
+      while ( DMS_INVALID_OFFSET != nextRecord && len < outSize )
+      {
+         if ( nextRecord >= (SINT32)inSize )
+         {
+            len += ossSnprintf (  outBuf + len, outSize - len,
+                                  "Error : nextRecord %d is greater "
+                                  "than inSize %d",
+                                  nextRecord, inSize ) ;
+            goto exit ;
+         }
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "    Record %d:"OSS_NEWLINE,
+                              recordCount ) ;
+         len += dumpDataRecord ( cb, ((CHAR*)extent)+nextRecord,
+                                 inSize - nextRecord,
+                                 outBuf + len, outSize - len,
+                                 nextRecord, compressorEntry,
+                                 ridList) ;
+
+         len += ossSnprintf ( outBuf + len, outSize - len, OSS_NEWLINE ) ;
+         ++recordCount ;
+      }
+   exit:
+      return len ;
+   }
+
+   UINT32 _dmsDump::_dumpCappedExtent( CHAR *inBuf, UINT32 inSize,
+                                       CHAR *outBuf, UINT32 outSize,
+                                       dmsCompressorEntry *compressorEntry,
+                                       pmdEDUCB *cb )
+   {
+      UINT32 len = 0 ;
+      dmsExtent *extent = (dmsExtent *)inBuf ;
+      dmsOffset nextRecord = extent->_firstRecordOffset ;
+      dmsOffset lastRecord = extent->_lastRecordOffset ;
+      INT32 recordCount = 0 ;
+
+      if ( NULL == inBuf || NULL == outBuf || inSize < sizeof(dmsCappedRecord) )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "Error: dumpCappedDataRecord input size (%d) "
+                              "is too small"OSS_NEWLINE,
+                              inSize ) ;
+         nextRecord = DMS_INVALID_OFFSET ;
+         goto exit ;
+      }
+
+      while ( DMS_INVALID_OFFSET != nextRecord && len < outSize )
+      {
+         dmsCappedRecord *record = NULL ;
+         INT64 logicalID = -1 ;
+         dmsOffset myOffset = DMS_INVALID_OFFSET ;
+         if ( nextRecord >= (SINT32)inSize )
+         {
+            len += ossSnprintf (  outBuf + len, outSize - len,
+                                  "Error : nextRecord %d is greater "
+                                  "than inSize %d",
+                                  nextRecord, inSize ) ;
+            goto exit ;
+         }
+
+         record = (dmsCappedRecord*)( ((CHAR*)inBuf) + nextRecord ) ;
+         logicalID = record->getLogicalID() ;
+
+         if ( logicalID < 0 )
+         {
+            if ( nextRecord <= lastRecord )
+            {
+               len += ossSnprintf( outBuf + len, outSize - len,
+                                   "Error: logicalID (%lld) is invalid"OSS_NEWLINE,
+                                   logicalID ) ;
+               nextRecord = DMS_INVALID_OFFSET ;
+            }
+            else
+            {
+               nextRecord = DMS_INVALID_OFFSET ;
+               goto exit ;
+            }
+         }
+         else
+         {
+            myOffset = logicalID % DMS_CAP_EXTENT_BODY_SZ +
+                       DMS_EXTENT_METADATA_SZ ;
+            if ( myOffset != nextRecord )
+            {
+               if ( nextRecord <= lastRecord )
+               {
+                  len += ossSnprintf( outBuf + len, outSize - len,
+                                      "Error: logicalID (%lld) and offset (%u) "
+                                      "dose not match"OSS_NEWLINE,
+                                      logicalID, nextRecord ) ;
+                  nextRecord = DMS_INVALID_OFFSET ;
+               }
+               else
+               {
+                  nextRecord = DMS_INVALID_OFFSET ;
+                  goto exit ;
+               }
+            }
+         }
+
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "    Record %d:"OSS_NEWLINE,
+                              recordCount ) ;
+
+         len += dumpCappedDataRecord ( cb, record,
+                                       outBuf + len, outSize - len,
+                                       compressorEntry ) ;
+
+         if ( DMS_INVALID_OFFSET != nextRecord )
+         {
+            nextRecord = ossRoundUpToMultipleX( nextRecord + record->getSize(),
+                                                4 ) ;
+         }
+
+         len += ossSnprintf ( outBuf + len, outSize - len, OSS_NEWLINE ) ;
+         ++recordCount ;
+      }
+   exit:
+      return len ;
+   }
+
    #define DMS_DUMP_DATA_RECORD_FLAG_TEXT_LEN         63
 
-   UINT32 _dmsDump::dumpDataRecord( pmdEDUCB *cb, void *inBuf, UINT32 inSize,
+   UINT32 _dmsDump::dumpDataRecord( pmdEDUCB *cb, CHAR *inBuf, UINT32 inSize,
                                     CHAR *outBuf, UINT32 outSize,
                                     dmsOffset &nextRecord,
-                                    set< dmsRecordID > *ridList,
-                                    utilCompressor *compressor,
-                                    utilCompressorContext compContext )
+                                    dmsCompressorEntry *compressorEntry,
+                                    set< dmsRecordID > *ridList )
    {
       INT32 rc = SDB_OK ;
       SDB_ASSERT ( cb, "cb can't be NULL" ) ;
@@ -957,31 +1310,31 @@ namespace engine
          goto exit ;
       }
 
-      flag       = DMS_RECORD_GETFLAG(inBuf) ;
-      recordSize = DMS_RECORD_GETSIZE(inBuf) ;
+      flag       = record->getFlag() ;
+      recordSize = record->getSize() ;
 
-      if ( DMS_RECORD_FLAG_NORMAL == DMS_RECORD_GETSTATE(inBuf) )
+      if ( record->isNormal() )
       {
          ossStrncat( flagText, "Normal", DMS_DUMP_DATA_RECORD_FLAG_TEXT_LEN ) ;
       }
-      if ( OSS_BIT_TEST ( flag, DMS_RECORD_FLAG_OVERFLOWF) )
+      if ( record->isOvf() )
       {
          appendString( flagText, DMS_DUMP_DATA_RECORD_FLAG_TEXT_LEN,
                        "OvfFrom" ) ;
          isOvf = TRUE ;
       }
-      if ( OSS_BIT_TEST ( flag, DMS_RECORD_FLAG_OVERFLOWT) )
+      if ( record->isOvt() )
       {
          appendString( flagText, DMS_DUMP_DATA_RECORD_FLAG_TEXT_LEN,
                        "OvfTo" ) ;
       }
-      if ( OSS_BIT_TEST ( flag, DMS_RECORD_FLAG_DELETED) )
+      if ( record->isDeleted() )
       {
          isDel = TRUE ;
          appendString( flagText, DMS_DUMP_DATA_RECORD_FLAG_TEXT_LEN,
                        "Deleted" ) ;
       }
-      if ( OSS_BIT_TEST( flag, DMS_RECORD_FLAG_DELETING ) )
+      if ( record->isDeleting() )
       {
          appendString( flagText, DMS_DUMP_DATA_RECORD_FLAG_TEXT_LEN,
                        "Deleting" ) ;
@@ -1020,13 +1373,12 @@ namespace engine
       nextRecord = record->_nextOffset ;
       if ( isDel )
       {
-         // dump nothing for deleted record, and set nextRecord to invalid
          nextRecord = DMS_INVALID_OFFSET ;
          goto exit ;
       }
       else if ( isOvf )
       {
-         dmsRecordID rid = DMS_RECORD_GETOVF(inBuf) ;
+         dmsRecordID rid = record->getOvfRID() ;
          len += ossSnprintf ( outBuf + len, outSize - len,
                               "       Overflowed To: 0x%08x : 0x%08x ( "
                               "extent %d offset %d )"OSS_NEWLINE,
@@ -1039,16 +1391,15 @@ namespace engine
       }
       else
       {
-         // for normal and ovfto types, let's dump data
          try
          {
             ossValuePtr recordPtr = 0 ;
-            DMS_RECORD_EXTRACTDATA ( compressor, compContext,
-                                     (ossValuePtr)(inBuf), recordPtr ) ;
+            DMS_RECORD_EXTRACTDATA ( record, recordPtr,
+                                     compressorEntry ) ;
             BSONObj obj ( (CHAR*)recordPtr ) ;
             len += ossSnprintf ( outBuf + len, outSize - len,
                                  "       Record: %s"OSS_NEWLINE,
-                                 obj.toString().c_str() ) ;
+                                 obj.toString( FALSE, TRUE ).c_str() ) ;
          }
          catch ( std::exception &e )
          {
@@ -1060,6 +1411,64 @@ namespace engine
       }
 
    exit :
+      return len ;
+   error:
+      goto exit ;
+   }
+
+   UINT32 _dmsDump::dumpCappedDataRecord( pmdEDUCB *cb, dmsCappedRecord *record,
+                                          CHAR *outBuf,
+                                          UINT32 outSize,
+                                          dmsCompressorEntry *compressorEntry )
+   {
+      INT32 rc = SDB_OK ;
+      SDB_ASSERT ( cb, "cb can't be NULL" ) ;
+      UINT32 len = 0 ;
+      CHAR flag = 0 ;
+      CHAR flagText [DMS_DUMP_DATA_RECORD_FLAG_TEXT_LEN+1] = {0} ;
+
+      flag = record->getFlag() ;
+      if ( record->isNormal() && record->getLogicalID() >= 0 )
+      {
+         ossStrncat( flagText, "Normal", DMS_DUMP_DATA_RECORD_FLAG_TEXT_LEN ) ;
+      }
+
+      len += ossSnprintf ( outBuf + len, outSize - len,
+                           "       Flag        : 0x%02x (%s)"OSS_NEWLINE,
+                           flag, flagText ) ;
+      len += ossSnprintf ( outBuf + len, outSize - len,
+                           "       Compressed  : %s"OSS_NEWLINE,
+                           OSS_BIT_TEST ( flag, DMS_RECORD_FLAG_COMPRESSED ) ?
+                           "True":"False" ) ;
+      len += ossSnprintf ( outBuf + len, outSize - len,
+                           "       Record Size : %u"OSS_NEWLINE,
+                           record->getSize() ) ;
+      len += ossSnprintf ( outBuf + len, outSize - len,
+                           "       Record Number: %u"OSS_NEWLINE,
+                           record->getRecordNo() ) ;
+      len += ossSnprintf ( outBuf + len, outSize - len,
+                           "       LogicalID: %lld"OSS_NEWLINE,
+                           record->getLogicalID() ) ;
+
+      try
+      {
+         ossValuePtr recordPtr = 0 ;
+         DMS_RECORD_EXTRACTDATA ( record, recordPtr,
+                                  compressorEntry ) ;
+         BSONObj obj ( (CHAR*)recordPtr ) ;
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "       Record: %s"OSS_NEWLINE,
+                              obj.toString( FALSE, TRUE ).c_str() ) ;
+      }
+      catch ( std::exception &e )
+      {
+         len += ossSnprintf ( outBuf + len, outSize - len,
+                              "Error: Failed to format "
+                              "record: %s"OSS_NEWLINE,
+                              e.what() ) ;
+      }
+
+   exit:
       return len ;
    error:
       goto exit ;
@@ -1095,7 +1504,6 @@ namespace engine
          goto exit ;
       }
 
-      // get all child extents
       for ( INT32 i = 0 ; i < extentHead->_totalKeyNodeNum ; ++i )
       {
          UINT32 keyOffset = sizeof(ixmExtentHead) + sizeof(ixmKeyNode)*i ;
@@ -1118,7 +1526,6 @@ namespace engine
       {
          childExtents.push_back ( extentHead->_right ) ;
       }
-      // dump hex
       if ( DMS_SU_DMP_OPT_HEX & options )
       {
          if ( DMS_SU_DMP_OPT_HEX_PREFIX_AS_ADDR & options )
@@ -1139,7 +1546,6 @@ namespace engine
                               " Index Extent Header:"OSS_NEWLINE ) ;
          len += dumpExtentHeader ( inBuf, inSize, outBuf + len,
                                    outSize - len ) ;
-         // make sure extent is valid and in use
          if ( DMS_EXTENT_FLAG_FREED == extentHead->_flag )
          {
             len += ossSnprintf ( outBuf + len, outSize - len,
@@ -1149,7 +1555,6 @@ namespace engine
 
          if( dumpIndexKey )
          {
-            // dump all index keys
             for ( INT32 i = 0; i < extentHead->_totalKeyNodeNum; ++i )
             {
                UINT32 keyOffset = sizeof(ixmExtentHead) +
@@ -1253,19 +1658,19 @@ namespace engine
       keyOfst   = keyNode->_keyOffset ;
 
       len += ossSnprintf ( outBuf + len, outSize - len,
-                           "       Left Ptr     : 0x%08lx (%d)"OSS_NEWLINE,
+                           "       Left Ptr     : 0x%08x (%d)"OSS_NEWLINE,
                            left, left ) ;
       if ( rid._offset & 1 )
       {
          len += ossSnprintf ( outBuf + len, outSize - len,
-                              "       Record ID    : 0x%08lx : 0x%08lx "
+                              "       Record ID    : 0x%08x : 0x%08x "
                               "(Unused)"OSS_NEWLINE,
                               rid._extent, rid._offset ) ;
       }
       else
       {
          len += ossSnprintf ( outBuf + len, outSize - len,
-                              "       Record ID    : 0x%08lx : 0x%08lx "
+                              "       Record ID    : 0x%08x : 0x%08x "
                               "(extent: %d; offset: %d)"OSS_NEWLINE,
                               rid._extent, rid._offset, rid._extent,
                               rid._offset ) ;
@@ -1432,6 +1837,176 @@ namespace engine
    exit :
       return len ;
    }
+
+
+UINT32 _dmsDump::dumpDmsLobMeta( CHAR *inBuf, UINT32 inSize,
+                                 CHAR * outBuf,UINT32 outSize,
+                                 CHAR * addrPrefix, UINT32 options )
+{
+   UINT32 len           = 0 ;
+   UINT32 hexDumpOption = 0 ;
+
+   if ( DMS_SU_DMP_OPT_HEX & options )
+   {
+      if ( DMS_SU_DMP_OPT_HEX_PREFIX_AS_ADDR & options )
+      {
+         hexDumpOption |= OSS_HEXDUMP_PREFIX_AS_ADDR ;
+      }
+      if ( !( DMS_SU_DMP_OPT_HEX_WITH_ASCII & options ) )
+      {
+         hexDumpOption |= OSS_HEXDUMP_RAW_HEX_ONLY ;
+      }
+      len += ossHexDumpBuffer(inBuf, inSize, outBuf+len, outSize-len,
+                            addrPrefix, hexDumpOption ) ;
+   }
+
+
+   if ( DMS_SU_DMP_OPT_FORMATTED & options )
+   {
+      dmsLobMeta *lobMeta = (dmsLobMeta*)inBuf;
+      const char *tag = NULL;
+      len += ossSnprintf(outBuf + len, outSize -len, "Lobd Meta:"OSS_NEWLINE) ;
+
+      len += ossSnprintf(outBuf + len, outSize - len,
+                                    " Lob Len        :%lld"OSS_NEWLINE,
+                                    lobMeta->_lobLen);
+
+      CHAR strTime[ OSS_TIMESTAMP_STRING_LEN + 1 ] = { 0 } ;
+      ossTimestamp tm(lobMeta->_createTime);
+      ossTimestampToString(tm , strTime ) ;
+      len += ossSnprintf(outBuf + len, outSize - len,
+                                    " Create Time    :%s (%llu)"OSS_NEWLINE,
+                                    strTime, lobMeta->_createTime) ;
+
+      tag = lobMeta->isDone()? "DMS_LOB_COMPLETE":"DMS_LOB_UNCOMPLETE";
+      len += ossSnprintf(outBuf + len, outSize - len,
+                                    " Status         :%s (%u)"OSS_NEWLINE,
+                                    tag, lobMeta->_status);
+
+      tag = (lobMeta->_version == DMS_LOB_META_CURRENT_VERSION )
+                          ? "DMS_LOB_META_CURRENT_VERSION"
+                          : NULL;
+
+      len += ossSnprintf(outBuf + len, outSize - len,
+                                    " Version        :%s (%u)"OSS_NEWLINE,
+                                    tag, lobMeta->_version) ;
+
+      tm = lobMeta->_createTime;
+      ossTimestampToString(tm , strTime ) ;
+      len += ossSnprintf(outBuf + len, outSize - len,
+                                    " Mod Time       :%s (%llu)"OSS_NEWLINE,
+                                    strTime, lobMeta->_modificationTime);
+
+      tag = lobMeta->hasPiecesInfo()
+                       ? "DMS_LOB_META_FLAG_PIECESINFO_INSIDE"
+                       : "NO PIECESINFO";
+
+      len += ossSnprintf(outBuf + len, outSize - len, " Flag           :%s (%u)"OSS_NEWLINE, tag, lobMeta->_flag);
+
+      len += ossSnprintf(outBuf + len,
+                                   outSize - len,
+                                   " PiecesInfo Num :%d"OSS_NEWLINE,
+                                   lobMeta->_piecesInfoNum);
+
+      if ( (lobMeta->_piecesInfoNum <=  0) ||
+            (lobMeta->_piecesInfoNum > (INT32)(DMS_LOB_META_LENGTH /sizeof( _rtnLobPieces ) )) )
+         goto exit;
+
+      len += ossSnprintf(outBuf + len, outSize - len, " Pieces:");
+      _rtnLobPieces* piecesInfoBuf = (_rtnLobPieces*)(inBuf + DMS_LOB_META_LENGTH
+                               - sizeof( _rtnLobPieces ) * lobMeta->_piecesInfoNum);
+      for(INT32 i = 0; i < lobMeta->_piecesInfoNum; i ++)
+      {
+         len += ossSnprintf ( outBuf+len, outSize-len,
+                                          "      { first:%u; last:%u }"OSS_NEWLINE,
+                                          piecesInfoBuf[i].first,
+                                          piecesInfoBuf[i].last);
+      }
+   }
+
+   exit :
+   len += ossSnprintf ( outBuf + len, outSize - len, OSS_NEWLINE ) ;
+   return len ;
+
+}
+
+UINT32 _dmsDump::dumpDmsLobData( CHAR *inBuf, UINT32 inSize,
+                                 CHAR * outBuf, UINT32 outSize,
+                                 CHAR * addrPrefix, UINT32 options )
+{
+   UINT32 len           = 0 ;
+   UINT32 hexDumpOption = 0 ;
+
+   len += ossSnprintf(outBuf + len, outSize -len, "Lobd Data:") ;
+
+   if ( DMS_SU_DMP_OPT_HEX & options )
+   {
+      if ( DMS_SU_DMP_OPT_HEX_PREFIX_AS_ADDR & options )
+      {
+         hexDumpOption |= OSS_HEXDUMP_PREFIX_AS_ADDR ;
+      }
+      if ( !( DMS_SU_DMP_OPT_HEX_WITH_ASCII & options ) )
+      {
+         hexDumpOption |= OSS_HEXDUMP_RAW_HEX_ONLY ;
+      }
+      len += ossHexDumpBuffer(inBuf, inSize, outBuf+len, outSize-len,
+                            addrPrefix, hexDumpOption ) ;
+   }
+
+
+   if ( DMS_SU_DMP_OPT_FORMATTED & options )
+   {
+   }
+
+   len += ossSnprintf ( outBuf + len, outSize - len, OSS_NEWLINE ) ;
+   return len ;
+
+}
+
+
+UINT32 _dmsDump::dumpDmsLobDataMapBlk(dmsLobDataMapBlk *blk, CHAR * outBuf,
+                              UINT32 outSize, CHAR * addrPrefix,
+                              UINT32 options, UINT32 pageSize)
+{
+   UINT32 len           = 0 ;
+   UINT32 hexDumpOption = 0 ;
+
+   if ( DMS_SU_DMP_OPT_HEX & options )
+   {
+      if ( DMS_SU_DMP_OPT_HEX_PREFIX_AS_ADDR & options )
+      {
+         hexDumpOption |= OSS_HEXDUMP_PREFIX_AS_ADDR ;
+      }
+      if ( !( DMS_SU_DMP_OPT_HEX_WITH_ASCII & options ) )
+      {
+         hexDumpOption |= OSS_HEXDUMP_RAW_HEX_ONLY ;
+      }
+      len += ossHexDumpBuffer(blk, pageSize, outBuf+len, outSize-len,
+                         addrPrefix, hexDumpOption ) ;
+   }
+
+   if ( DMS_SU_DMP_OPT_FORMATTED & options )
+   {
+      const char *tag = NULL;
+      len += ossSnprintf(outBuf + len, outSize -len, "Lobm dmsLobDataMapBlk:"OSS_NEWLINE);
+      bson::OID oid;
+      ossMemcpy(&oid, blk->_oid, DMS_LOB_OID_LEN);
+      len += ossSnprintf(outBuf + len, outSize -len,  " Oid            :%s"OSS_NEWLINE, oid.str().c_str());
+      len += ossSnprintf(outBuf + len, outSize - len, " Sequence       :%u"OSS_NEWLINE, blk->_sequence);
+      len += ossSnprintf(outBuf + len, outSize - len, " Data Len       :%u"OSS_NEWLINE, blk->_dataLen);
+      len += ossSnprintf(outBuf + len, outSize - len, " Prev PageId    :%d"OSS_NEWLINE, blk->_prevPageInBucket);
+      len += ossSnprintf(outBuf + len, outSize - len, " Next PageId    :%d"OSS_NEWLINE, blk->_nextPageInBucket);
+      len += ossSnprintf(outBuf + len, outSize - len, " CL LogicId     :%u"OSS_NEWLINE, blk->_clLogicalID);
+      len += ossSnprintf(outBuf + len, outSize - len, " MB Id          :%u"OSS_NEWLINE, blk->_mbID);
+
+      tag = blk->isNormal()? "DMS_LOB_PAGE_NORMAL":"DMS_LOB_PAGE_REMOVED";
+      len += ossSnprintf(outBuf + len, outSize - len, " Status         :%s (%u)"OSS_NEWLINE,tag, blk->_status);
+   }
+
+   len += ossSnprintf ( outBuf + len, outSize - len, OSS_NEWLINE ) ;
+   return len ;
+}
+
 
 }
 

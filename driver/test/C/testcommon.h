@@ -12,12 +12,10 @@
 #endif
 #include "client.h"
 
-
-
 #define HOST                  "localhost"
 #define SERVER                "11810" // for coord
 #define SERVER1               "11800" // for catalog
-#define SERVER2               "21100" // for data
+#define SERVER2               "20100" // for data
 #define USER                  ""
 #define PASSWD                ""
 #define USER1                 "sequoiadb"
@@ -32,7 +30,6 @@
 #define NUM_RECORD            5
 
 
-// for rg
 #define GROUPNAME1            "testgroup1"
 #define GROUPNAME2            "testgroup2"
 #define GROUPNAME3            "testgroup3"
@@ -164,13 +161,15 @@ int genRecord ( sdbConnectionHandle *sdb, const char *clFullName, long num ) ;
 long getRecordNum ( sdbCursorHandle cursor ) ;
 
 /* get name have pid, add by xiaojun */
-void getUniqueName( const CHAR *modName, CHAR getName[] ) ;
+void getUniqueName( const CHAR *modName, CHAR *pBuffer ) ;
 
 BOOLEAN isCluster( sdbConnectionHandle db ) ;
 
 INT32 isTranOn( sdbConnectionHandle db, BOOLEAN *flag ) ;
 
 INT32 gettid() ;
+
+INT32 bson_compare(const CHAR *pStr, const bson *b) ;
 
 SDB_EXTERN_C_END
 

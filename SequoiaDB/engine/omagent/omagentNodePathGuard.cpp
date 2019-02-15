@@ -51,42 +51,42 @@ namespace engine {
       const CHAR *dbpath = options->getDbPath() ;
       UINT32 pathLen = ossStrlen( dbpath ) ;
 
-      /// dbpath
       _nodePaths.push_back( dbpath ) ;
-      /// indexpath
       if ( 0 != ossStrncmp( dbpath, options->getIndexPath(), pathLen ) )
       {
          _nodePaths.push_back( options->getIndexPath() ) ;
       }
-      /// lobpath
       if ( 0 != ossStrncmp( dbpath, options->getLobPath(), pathLen ) )
       {
          _nodePaths.push_back( options->getLobPath() ) ;
       }
-      /// dialog path
+      if ( 0 != ossStrncmp( dbpath, options->getLobMetaPath(), pathLen ) )
+      {
+         _nodePaths.push_back( options->getLobMetaPath() ) ;
+      }
       if ( 0 != ossStrncmp( dbpath, options->getDiagLogPath(), pathLen ) )
       {
          _nodePaths.push_back( options->getDiagLogPath() ) ;
       }
-      /// auditlog path
       if ( 0 != ossStrncmp( dbpath, options->getAuditLogPath(), pathLen ) )
       {
          _nodePaths.push_back( options->getAuditLogPath() ) ;
       }
-      /// repl-log path
       if ( 0 != ossStrncmp( dbpath, options->getReplLogPath(), pathLen ) )
       {
          _nodePaths.push_back( options->getReplLogPath() ) ;
       }
-      /// backup path
       if ( 0 != ossStrncmp( dbpath, options->getBkupPath(), pathLen ) )
       {
          _nodePaths.push_back( options->getBkupPath() ) ;
       }
-      /// temp path
       if ( 0 != ossStrncmp( dbpath, options->getTmpPath(), pathLen ) )
       {
          _nodePaths.push_back( options->getTmpPath() ) ;
+      }
+      if ( 0 != ossStrncmp( dbpath, options->getArchivePath(), pathLen ) )
+      {
+         _nodePaths.push_back( options->getArchivePath() ) ;
       }
    }
 
@@ -95,7 +95,6 @@ namespace engine {
       BOOLEAN ret = FALSE ;
       std::vector< std::string > *paths = NULL ;
 
-      /// name is same
       if ( 0 == ossStrcmp( name(), pOther->name() ) )
       {
          goto done ;
@@ -132,27 +131,39 @@ namespace engine {
    {
       INT32 rc = SDB_OK ;
 
-      /// dbpath
       rc = _checkExistedFiles( options->getDbPath(), "*.data", 1 ) ;
       if ( rc )
       {
          goto error ;
       }
-      /// indexpath
+      rc = _checkExistedFiles( options->getDbPath(), "sdb.conf", 1 ) ;
+      if ( rc )
+      {
+         goto error ;
+      }
       rc = _checkExistedFiles( options->getIndexPath(), "*.idx", 1 ) ;
       if ( rc )
       {
          goto error ;
       }
-      /// lob path
-      rc = _checkExistedFiles( options->getLobPath(), "*.lobm", 1 ) ;
+      rc = _checkExistedFiles( options->getLobMetaPath(), "*.lobm", 1 ) ;
       if ( rc )
       {
          goto error ;
       }
-      /// repl path
+      rc = _checkExistedFiles( options->getLobPath(), "*.lobd", 1 ) ;
+      if ( rc )
+      {
+         goto error ;
+      }
       rc = _checkExistedFiles( options->getReplLogPath(),
                                "sequoiadbLog.*", 1 ) ;
+      if ( rc )
+      {
+         goto error ;
+      }
+      rc = _checkExistedFiles( options->getArchivePath(),
+                               "archivelog.*", 1 );
       if ( rc )
       {
          goto error ;
@@ -176,11 +187,10 @@ namespace engine {
 
       INT32 rc = SDB_OK ;
 
-      /// if dir is exist, need to check which has files
       rc = ossAccess( path ) ;
       if ( SDB_OK == rc )
       {
-         std::map<std::string, std::string> subFiles ;
+         std::multimap<std::string, std::string> subFiles ;
          rc = ossEnumFiles( path, subFiles, filter, deep ) ;
          if ( rc )
          {

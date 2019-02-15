@@ -45,6 +45,7 @@ struct Socket
 #ifdef SDB_SSL
    SSLHandle*  sslHandle ;
 #endif
+   socketInterruptFunc isInterruptFunc ;
 } ;
 
 #if defined (_WINDOWS)
@@ -61,6 +62,9 @@ static void _clientDisconnect ( SOCKET sock ) ;
 #ifdef SDB_SSL
 static INT32 _clientSecure( Socket* sock ) ;
 #endif
+#define MAX_RECV_RETRIES 5
+#define MAX_SEND_RETRIES 5
+
 
 INT32 clientConnect ( const CHAR *pHostName,
                       const CHAR *pServiceName,
@@ -86,7 +90,6 @@ INT32 clientConnect ( const CHAR *pHostName,
    }
 
 #if defined (_WINDOWS)
-   // init socket for windows
    ossOnceRun( &initOnce, _winSockInit );
    if ( FALSE == sockInitialized )
    {
@@ -108,10 +111,38 @@ INT32 clientConnect ( const CHAR *pHostName,
 
    ossMemset ( &sockAddress, 0, sizeof(sockAddress) ) ;
    sockAddress.sin_family = AF_INET ;
+#if defined (_WINDOWS)
    if ( (hp = gethostbyname ( pHostName ) ) )
-      sockAddress.sin_addr.s_addr = *((UINT32*)hp->h_addr_list[0] ) ;
+#elif defined (_LINUX)
+   struct hostent hent ;
+   struct hostent *retval = NULL ;
+   INT32 error             = 0 ;
+   CHAR hbuf[8192]         = { 0 } ;
+   hp                      = &hent ;
+   if ( (0 == gethostbyname_r ( pHostName, &hent, hbuf, sizeof(hbuf), 
+                                &retval, &error )) && NULL != retval )
+#elif defined (_AIX)
+   struct hostent hent ;
+   struct hostent_data hent_data ;
+   hp = &hent ;
+   if ( (0 == gethostbyname_r ( pHostname, &hent, &hent_data ) ) )
+#endif
+   {
+      UINT32 *pAddr = (UINT32 *)hp->h_addr_list[0] ;
+      if ( pAddr )
+      {
+         sockAddress.sin_addr.s_addr = *( pAddr ) ;  
+      }
+      else 
+      {
+         rc = SDB_SYS ;
+         goto error ;
+      }
+   }
    else
+   {
       sockAddress.sin_addr.s_addr = inet_addr ( pHostName ) ;
+   }
    servinfo = getservbyname ( pServiceName, "tcp" ) ;
    if ( !servinfo )
    {
@@ -138,7 +169,9 @@ INT32 clientConnect ( const CHAR *pHostName,
       goto error ;
    }
 
-   setKeepAlive( rawSocket, 1, 15, 5, 3 ) ;
+   setKeepAlive( rawSocket, 1, OSS_SOCKET_KEEP_IDLE,
+                 OSS_SOCKET_KEEP_INTERVAL,
+                 OSS_SOCKET_KEEP_CONTER ) ;
    _disableNagle( rawSocket ) ;
 
    s = (Socket*) SDB_OSS_MALLOC ( sizeof( Socket ) ) ;
@@ -151,6 +184,7 @@ INT32 clientConnect ( const CHAR *pHostName,
 #ifdef SDB_SSL
    s->sslHandle = NULL ;
 #endif
+   s->isInterruptFunc = NULL ;
 
    if ( useSSL )
    {
@@ -265,7 +299,7 @@ error:
 }
 
 INT32 setKeepAlive( SOCKET sock, INT32 keepAlive, INT32 keepIdle,
-                   INT32 keepInterval, INT32 keepCount )
+                    INT32 keepInterval, INT32 keepCount )
 {
    INT32 rc = SDB_OK ;
 #if defined (_WINDOWS)
@@ -279,7 +313,6 @@ INT32 setKeepAlive( SOCKET sock, INT32 keepAlive, INT32 keepIdle,
       goto error ;
    }
    
-   // set keep alive options
 #if defined (_WINDOWS)
    alive_in.onoff             = keepAlive ;
    alive_in.keepalivetime     = keepIdle * 1000 ; // ms
@@ -349,12 +382,6 @@ static INT32 _disableNagle( SOCKET sock )
       goto error ;
    }
 
-   rc = setsockopt ( sock, SOL_SOCKET, SO_KEEPALIVE, (CHAR *) &temp,
-                     sizeof ( INT32 ) ) ;
-   if ( rc )
-   {
-      goto error ;
-   }
 done:
    return rc ;
 error:
@@ -411,14 +438,16 @@ done:
    return ;
 }
 
-INT32 clientSend ( Socket* sock, const CHAR *pMsg, INT32 len, INT32 timeout )
+INT32 clientSend ( Socket* sock, const CHAR *pMsg, INT32 len, 
+                   INT32 *pSentLen, INT32 timeout )
 {
    INT32 rc = SDB_OK ;
+   UINT32 retries = 0 ;
    SOCKET rawSocket ;
    struct timeval maxSelectTime ;
    fd_set fds ;
 
-   if ( !sock )
+   if ( !sock || !pSentLen )
    {
       rc = SDB_INVALIDARG ;
       goto error ;
@@ -428,42 +457,53 @@ INT32 clientSend ( Socket* sock, const CHAR *pMsg, INT32 len, INT32 timeout )
    {
       goto done ;
    }
-
+   *pSentLen = 0 ;
    rawSocket = sock->rawSocket ;
-   maxSelectTime.tv_sec = timeout / 1000000 ;
-   maxSelectTime.tv_usec = timeout % 1000000 ;
+   if ( timeout >= 0 )
+   {
+      maxSelectTime.tv_sec = timeout / 1000000 ;
+      maxSelectTime.tv_usec = timeout % 1000000 ;
+   }
+   else
+   {
+      maxSelectTime.tv_sec = 1000000 ;
+      maxSelectTime.tv_usec = 0 ;
+   }
+
    while ( TRUE )
    {
       FD_ZERO ( &fds ) ;
       FD_SET ( rawSocket, &fds ) ;
       rc = select ( rawSocket + 1, NULL, &fds, NULL,
                     timeout>=0?&maxSelectTime:NULL ) ;
-      // 0 means timeout
       if ( 0 == rc )
       {
          rc = SDB_TIMEOUT ;
          goto done ;
       }
-      // if < 0, means something wrong
       if ( 0 > rc )
       {
          rc = SOCKET_GETLASTERROR ;
-         if (
 #if defined (_WINDOWS)
-            WSAEINTR
+         if ( WSAEINTR == rc )
 #else
-            EINTR
+         if ( EINTR == rc )
 #endif
-            == rc )
          {
-            // if we failed due to interrupt, let's continue
-            continue ;
+            if ( NULL == sock->isInterruptFunc || !sock->isInterruptFunc() )
+            {
+               continue ;
+            }
+            else
+            {
+               rc = SDB_APP_INTERRUPT ;
+               goto error ;
+            }
          }
          rc = SDB_NETWORK ;
          goto error ;
       }
 
-      // if the socket we interested is not receiving anything, let's continue
       if ( FD_ISSET ( rawSocket, &fds ) )
       {
          break ;
@@ -500,10 +540,30 @@ INT32 clientSend ( Socket* sock, const CHAR *pMsg, INT32 len, INT32 timeout )
          if ( -1 == rc )
 #endif
          {
+            rc = SOCKET_GETLASTERROR ;
+#if defined (_WINDOWS)
+            if ( WSAETIMEDOUT == rc)
+#else
+            if ( EAGAIN == rc || EWOULDBLOCK == rc || ETIMEDOUT == rc)
+#endif
+            {
+               rc = SDB_TIMEOUT ;
+               goto error ;
+            }
+#if defined ( _WINDOWS )
+            if ( ( WSAEINTR == rc ) && ( retries < MAX_SEND_RETRIES ) )
+#else
+            if ( ( EINTR == rc ) && ( retries < MAX_SEND_RETRIES ) )
+#endif
+            {
+               ++retries ;
+               continue ;
+            }
             rc = SDB_NETWORK ;
             goto error ;
          }
       }
+      *pSentLen += rc ;
       len -= rc ;
       pMsg += rc ;
    }
@@ -513,8 +573,9 @@ done :
 error :
    goto done ;
 }
-#define MAX_RECV_RETRIES 5
-INT32 clientRecv ( Socket* sock, CHAR *pMsg, INT32 len, INT32 timeout )
+
+INT32 clientRecv ( Socket* sock, CHAR *pMsg, INT32 len, 
+                   INT32 *pReceivedLen, INT32 timeout )
 {
    INT32 rc = SDB_OK ;
    UINT32 retries = 0 ;
@@ -522,7 +583,7 @@ INT32 clientRecv ( Socket* sock, CHAR *pMsg, INT32 len, INT32 timeout )
    struct timeval maxSelectTime ;
    fd_set fds ;
 
-   if ( !sock )
+   if ( !sock || !pReceivedLen )
    {
       rc = SDB_INVALIDARG ;
       goto error ;
@@ -532,6 +593,8 @@ INT32 clientRecv ( Socket* sock, CHAR *pMsg, INT32 len, INT32 timeout )
    {
       goto done ;
    }
+
+   *pReceivedLen = 0 ;
 
 #ifdef SDB_SSL
    if ( NULL != sock->sslHandle )
@@ -552,7 +615,7 @@ INT32 clientRecv ( Socket* sock, CHAR *pMsg, INT32 len, INT32 timeout )
             }
             goto error;
          }
-
+         *pReceivedLen += rc ;
          len -= rc ;
          pMsg += rc ;
          rc = SDB_OK;
@@ -563,39 +626,49 @@ INT32 clientRecv ( Socket* sock, CHAR *pMsg, INT32 len, INT32 timeout )
    }
 #endif /* SDB_SSL */
    rawSocket = sock->rawSocket ;
-   maxSelectTime.tv_sec = timeout / 1000000 ;
-   maxSelectTime.tv_usec = timeout % 1000000 ;
-   // wait loop until either we timeout or get a message
+   if ( timeout >= 0 )
+   {
+      maxSelectTime.tv_sec = timeout / 1000000 ;
+      maxSelectTime.tv_usec = timeout % 1000000 ;
+   }
+   else
+   {
+      maxSelectTime.tv_sec = 1000000 ;
+      maxSelectTime.tv_usec = 0 ;
+   }
    while ( TRUE )
    {
       FD_ZERO ( &fds ) ;
       FD_SET ( rawSocket, &fds ) ;
       rc = select ( rawSocket + 1, &fds, NULL, NULL,
                     timeout>=0?&maxSelectTime:NULL ) ;
-      // 0 means timeout
       if ( 0 == rc )
       {
          rc = SDB_TIMEOUT ;
          goto done ;
       }
-      // if < 0, means something wrong
       if ( 0 > rc )
       {
          rc = SOCKET_GETLASTERROR ;
-         if (
 #if defined (_WINDOWS)
-               WSAEINTR
+         if ( WSAEINTR == rc )
 #else
-               EINTR
-#endif
-               == rc )
+         if ( EINTR == rc )
+#endif 
          {
-            continue ;
+            if ( NULL == sock->isInterruptFunc || !sock->isInterruptFunc() )
+            {
+               continue ;
+            }
+            else
+            {
+               rc = SDB_APP_INTERRUPT ;
+               goto error ;
+            }
          }
          rc = SDB_NETWORK ;
          goto error ;
       }
-      // if the socket is not receiving anything, let's continue
       if ( FD_ISSET ( rawSocket, &fds ) )
       {
          break ;
@@ -610,6 +683,7 @@ INT32 clientRecv ( Socket* sock, CHAR *pMsg, INT32 len, INT32 timeout )
 #endif
       if ( rc > 0 )
       {
+         *pReceivedLen += rc ;
          len -= rc ;
          pMsg += rc ;
       }
@@ -620,7 +694,6 @@ INT32 clientRecv ( Socket* sock, CHAR *pMsg, INT32 len, INT32 timeout )
       }
       else
       {
-         // if rc < 0
          rc = SOCKET_GETLASTERROR ;
 #if defined (_WINDOWS)
          if ( WSAETIMEDOUT == rc )
@@ -628,16 +701,14 @@ INT32 clientRecv ( Socket* sock, CHAR *pMsg, INT32 len, INT32 timeout )
          if ( (EAGAIN == rc || EWOULDBLOCK == rc ) )
 #endif
          {
-            rc = SDB_NETWORK ;
+            rc = SDB_TIMEOUT ;
             goto error ;
          }
-         if ( (
 #if defined ( _WINDOWS )
-              WSAEINTR
+         if ( ( WSAEINTR == rc ) && ( retries < MAX_RECV_RETRIES ) )
 #else
-              EINTR
+         if ( ( EINTR == rc ) && ( retries < MAX_RECV_RETRIES ) )
 #endif
-              == rc ) && ( retries < MAX_RECV_RETRIES ) )
          {
             ++retries ;
             continue ;
@@ -652,4 +723,15 @@ done :
 error :
    goto done ;
 }
+
+void clientSetInterruptFunc( Socket* sock, socketInterruptFunc func )
+{
+   if ( !sock )
+   {
+      return ;
+   }
+
+   sock->isInterruptFunc = func ;
+}
+
 

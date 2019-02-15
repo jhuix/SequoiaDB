@@ -45,6 +45,7 @@
 #include "msgDef.h"
 #include "dms.hpp"
 #include "utilStr.hpp"
+#include "clsReplBucket.hpp"
 
 using namespace bson ;
 
@@ -85,7 +86,7 @@ namespace engine
    /*
       Header:: backup version define
    */
-   #define BAR_BACKUP_CUR_VERSION                     1
+   #define BAR_BACKUP_CUR_VERSION                     2
 
    /*
       Backup length define
@@ -142,7 +143,12 @@ namespace engine
       CHAR              _hostName[BAR_BACKUP_HOSTNAME_LEN] ;
       CHAR              _svcName[BAR_BACKUP_SVCNAME_LEN] ;
       UINT64            _nodeID ;
-      CHAR              _pad[61964] ;
+      UINT64            _lastLSN ;
+      UINT32            _lastLSNCode ;
+      UINT64            _thinDataSize ;
+      UINT64            _compressDataSize ;
+      INT32             _compressionType ;
+      CHAR              _pad[61932] ;
 
       _barBackupHeader ()
       {
@@ -165,6 +171,11 @@ namespace engine
          makeBeginTime() ;
          _secretValue = ossPack32To64( (UINT32)_startTime,
                                        (UINT32)(ossRand()*239641) ) ;
+         _lastLSN          = ~0 ;
+         _lastLSNCode      = 0 ;
+         _thinDataSize     = 0 ;
+         _compressDataSize = 0 ;
+         _compressionType  = UTIL_COMPRESSOR_INVALID ;
       }
       void createTime( UINT64 &curTime, CHAR *pBuff, UINT32 size )
       {
@@ -216,7 +227,8 @@ namespace engine
       UINT32            _sequence ;
       UINT64            _time ;
       UINT64            _secretValue ;
-      CHAR              _pad[4064] ;
+      INT32             _compressionType ;
+      CHAR              _pad[4060] ;
 
       _barBackupDataHeader ()
       {
@@ -227,6 +239,7 @@ namespace engine
          ossStrncpy( _eyeCatcher, BAR_BACKUP_DATA_EYECATCHER,
                      BAR_BACKUP_HEADER_EYECATCHER_LEN ) ;
          _version       = BAR_BACKUP_CUR_VERSION ;
+         _compressionType = UTIL_COMPRESSOR_INVALID ;
          _time          = time( NULL ) ;
       }
    } ;
@@ -260,9 +273,9 @@ namespace engine
       UINT32            _metaSize ;
       UINT64            _dataSize ;
       CHAR              _md5Value[BAR_BACKUP_MD5_LEN] ;
-      CHAR              _thinCopy ;
-      CHAR              _reserved[11] ;
-      // up for header(64B), down for meta bson obj data(max 960B)
+      UINT8             _thinCopy ;
+      UINT8             _compressed ;
+      CHAR              _reserved[10] ;
       CHAR              _metaData[960] ;
 
       void init ()
@@ -276,6 +289,7 @@ namespace engine
          _dataType         = BAR_DATA_TYPE_RAW_DATA ;
          _dataSize         = 0 ;
          _thinCopy         = 0 ;
+         _compressed       = 0 ;
       }
       _barBackupExtentHeader ()
       {
@@ -316,6 +330,7 @@ namespace engine
 
 #pragma pack()
 
+   class _utilCompressor ;
    /*
       _barBaseLogger define
    */
@@ -343,11 +358,25 @@ namespace engine
          BOOLEAN  parseMainFile( const string &fileName,
                                  string &backupName ) ;
 
+         BOOLEAN  parseIncFile( const string &fileName,
+                                string &backupName,
+                                UINT32 &incID ) ;
+
+         BOOLEAN  parseMetaFile( const string &fileName,
+                                 string &backupName,
+                                 UINT32 &incID ) ;
+
+         BOOLEAN  parseDateFile( const string &fileName,
+                                 string &backupName,
+                                 UINT32 &seq ) ;
+
       protected:
-         UINT32      _ensureMetaFileSeq () ;
-         UINT32      _ensureMetaFileSeq ( const string &backupName ) ;
+         UINT32      _ensureMetaFileSeq ( set< UINT32 > *pSetSeq = NULL ) ;
+         UINT32      _ensureMetaFileSeq ( const string &backupName,
+                                          set< UINT32 > *pSetSeq = NULL ) ;
          UINT32      _ensureMetaFileSeq ( const string &path,
-                                          const string &backupName ) ;
+                                          const string &backupName,
+                                          set< UINT32 > *pSetSeq = NULL ) ;
          INT32       _initInner ( const CHAR *path, const CHAR *backupName,
                                   const CHAR *prefix ) ;
 
@@ -373,6 +402,10 @@ namespace engine
 
          string      _replaceWildcard( const CHAR *source ) ;
 
+         BOOLEAN     _isDigital( const CHAR *pStr, UINT32 *pNum = NULL ) ;
+
+         CHAR*       _allocCompressBuff( UINT64 buffSize ) ;
+
       protected:
          barBackupHeader               _metaHeader ;
          string                        _path ;
@@ -385,6 +418,9 @@ namespace engine
          dpsTransCB                    *_pTransCB ;
          _pmdOptionsMgr                *_pOptCB ;
          _clsMgr                       *_pClsCB ;
+         _utilCompressor               *_pCompressor ;
+         CHAR                          *_pCompressBuff ;
+         UINT64                        _buffSize ;
 
    } ;
    typedef _barBaseLogger barBaseLogger ;
@@ -410,12 +446,16 @@ namespace engine
                         BOOLEAN rewrite = TRUE,
                         const CHAR *backupDesp = NULL ) ;
 
+         void     setBackupLog( BOOLEAN backupLog ) ;
+         void     enableCompress( BOOLEAN compressed,
+                                  UTIL_COMPRESSOR_TYPE compType ) ;
+
          INT32    backup ( _pmdEDUCB *cb ) ;
 
       protected:
          virtual UINT32    _getBackupType () const = 0 ;
 
-         virtual INT32     _prepareBackup ( _pmdEDUCB *cb ) = 0 ;
+         virtual INT32     _prepareBackup ( _pmdEDUCB *cb, BOOLEAN &isEmpty ) = 0 ;
          virtual INT32     _doBackup ( _pmdEDUCB *cb ) = 0 ;
          virtual INT32     _afterBackup ( _pmdEDUCB *cb ) = 0 ;
          virtual INT32     _onWriteMetaFile () = 0 ;
@@ -426,6 +466,9 @@ namespace engine
 
          INT32       _writeData( const CHAR *buf, INT64 len,
                                  BOOLEAN isExtHeader ) ;
+
+         INT32       _writeExtent( barBackupExtentHeader *pHeader,
+                                   const CHAR *pData ) ;
 
          barBackupExtentHeader *_nextDataExtent ( UINT32 dataType ) ;
 
@@ -439,10 +482,15 @@ namespace engine
       protected:
          BOOLEAN                       _rewrite ;
          UINT32                        _metaFileSeq ;
+         UINT64                        _lastLSN ;
+         UINT32                        _lastLSNCode ;
 
          UINT64                        _curFileSize ;
          OSSFILE                       _curFile ;
          BOOLEAN                       _isOpened ;
+
+         BOOLEAN                       _needBackupLog ;
+         BOOLEAN                       _compressed ;
 
    } ;
    typedef _barBkupBaseLogger barBkupBaseLogger ;
@@ -459,7 +507,7 @@ namespace engine
       protected:
          virtual UINT32    _getBackupType () const ;
 
-         virtual INT32     _prepareBackup ( _pmdEDUCB *cb ) ;
+         virtual INT32     _prepareBackup ( _pmdEDUCB *cb, BOOLEAN &isEmpty ) ;
          virtual INT32     _doBackup ( _pmdEDUCB *cb ) ;
          virtual INT32     _afterBackup ( _pmdEDUCB *cb ) ;
          virtual INT32     _onWriteMetaFile () ;
@@ -486,11 +534,48 @@ namespace engine
          UINT64            _curOffset ;
          UINT32            _curSequence ;
          INT32             _replStatus ;
+         BOOLEAN           _hasRegBackup ;
 
          CHAR              *_pExtentBuff ;
    } ;
    typedef _barBKOfflineLogger barBKOfflineLogger ;
 
+   /*
+      _barBackupHeaderSimple define
+   */
+   struct _barBackupHeaderSimple
+   {
+      DPS_LSN_OFFSET    _beginLSNOffset ;
+      DPS_LSN_OFFSET    _endLSNOffset ;
+      DPS_LSN_OFFSET    _transLSNOffset ;
+      UINT32            _dataFileNum ;
+      UINT32            _lastDataSequence ;
+      UINT64            _lastExtentID ;
+
+      _barBackupHeaderSimple( const _barBackupHeader *pHeader )
+      {
+         _beginLSNOffset = pHeader->_beginLSNOffset ;
+         _endLSNOffset = pHeader->_endLSNOffset ;
+         _transLSNOffset = pHeader->_transLSNOffset ;
+         _dataFileNum = pHeader->_dataFileNum ;
+         _lastDataSequence = pHeader->_lastDataSequence ;
+         _lastExtentID = pHeader->_lastExtentID ;
+      }
+      _barBackupHeaderSimple()
+      {
+         _beginLSNOffset   = DPS_INVALID_LSN_OFFSET ;
+         _endLSNOffset     = DPS_INVALID_LSN_OFFSET ;
+         _transLSNOffset   = DPS_INVALID_LSN_OFFSET ;
+         _dataFileNum      = 0 ;
+         _lastDataSequence = 0 ;
+         _lastExtentID     = 0 ;
+      }
+   } ;
+   typedef _barBackupHeaderSimple barBackupHeaderSimple ;
+
+
+   typedef std::map< UINT32, barBackupHeaderSimple >  MAP_BACKUP_INFO ;
+   typedef MAP_BACKUP_INFO::iterator                  MAP_BACKUP_INFO_IT ;
    /*
       _barRSBaseLogger define
    */
@@ -505,17 +590,21 @@ namespace engine
          BSONObj  getConf () const { return _confObj ; }
 
          INT32    init( const CHAR *path, const CHAR *backupName,
-                        const CHAR *prefix = NULL, INT32 incID = -1 ) ;
+                        const CHAR *prefix = NULL, INT32 incID = -1,
+                        INT32 beginID = -1, BOOLEAN skipConf = FALSE ) ;
 
          INT32    restore ( _pmdEDUCB *cb ) ;
 
       protected:
-         virtual INT32     _prepareRestore ( _pmdEDUCB *cb ) = 0 ;
+         virtual INT32     _prepareRestore ( _pmdEDUCB *cb,
+                                             BOOLEAN &isEmpty ) = 0 ;
          virtual INT32     _doRestore ( _pmdEDUCB *cb ) = 0 ;
          virtual INT32     _afterRestore ( _pmdEDUCB *cb ) = 0 ;
 
       protected:
-         INT32       _initCheckAndPrepare ( INT32 incID ) ;
+         INT32       _initCheckAndPrepare ( INT32 incID,
+                                            INT32 beginID,
+                                            set< UINT32 > &setSeq ) ;
          INT32       _updateFromMetafile( UINT32 incID ) ;
          INT32       _loadConf () ;
 
@@ -544,6 +633,12 @@ namespace engine
          CHAR                          *_pBuff ;
          UINT64                        _buffSize ;
 
+         MAP_BACKUP_INFO               _mapBackupInfo ;
+         INT32                         _beginID ;
+
+         BOOLEAN                       _skipConf ;
+         BOOLEAN                       _isDoRestoring ;
+
    } ;
    typedef _barRSBaseLogger barRSBaseLogger ;
 
@@ -557,7 +652,8 @@ namespace engine
          virtual ~_barRSOfflineLogger () ;
 
       protected:
-         virtual INT32     _prepareRestore ( _pmdEDUCB *cb ) ;
+         virtual INT32     _prepareRestore ( _pmdEDUCB *cb,
+                                             BOOLEAN &isEmpty ) ;
          virtual INT32     _doRestore ( _pmdEDUCB *cb ) ;
          virtual INT32     _afterRestore ( _pmdEDUCB *cb ) ;
 
@@ -598,6 +694,8 @@ namespace engine
 
          OSSFILE              _curSUFile ;
          BOOLEAN              _openedSU ;
+
+         clsBucket            _replBucket ;
    } ;
    typedef _barRSOfflineLogger barRSOfflineLogger ;
 
@@ -608,7 +706,45 @@ namespace engine
    {
       string         _relPath ;
       string         _name ;
-      UINT32         _maxIncID ;
+      set<UINT32>    _setSeq ;
+
+      bool operator<( const _barBackupInfo &rhs ) const
+      {
+         BOOLEAN lEmpty = _relPath.empty() ? TRUE : FALSE ;
+         BOOLEAN rEmpty = rhs._relPath.empty() ? TRUE : FALSE ;
+         int result = 0 ;
+
+         if ( lEmpty && !rEmpty )
+         {
+            return true ;
+         }
+         else if ( !lEmpty && rEmpty )
+         {
+            return false ;
+         }
+         else if ( !lEmpty && !rEmpty )
+         {
+            result = ossStrcmp( _relPath.c_str(), rhs._relPath.c_str() ) ;
+            if ( 0 != result )
+            {
+               return result < 0 ? true : false ;
+            }
+         }
+
+         result = ossStrcmp( _name.c_str(), rhs._name.c_str() ) ;
+         return result < 0 ? true : false ;
+      }
+
+      bool operator==( const _barBackupInfo &rhs ) const
+      {
+         if ( _relPath.length() == rhs._relPath.length() &&
+              _relPath == rhs._relPath &&
+              _name == rhs._name )
+         {
+            return true ;
+         }
+         return false ;
+      }
    } ;
    typedef _barBackupInfo barBackupInfo ;
 
@@ -629,29 +765,27 @@ namespace engine
          INT32          list( vector< BSONObj > &vecBackup,
                               BOOLEAN detail = FALSE ) ;
 
-         INT32          drop () ;
+         INT32          drop ( INT32 incID = -1 ) ;
 
          UINT32         count () ;
 
       protected:
          INT32          _enumBackups ( const string &fullPath,
                                        const string &subPath ) ;
-         //INT32          _enumSpecBackup () ;
 
          INT32          _backupToBSON ( const barBackupInfo &info,
                                         vector< BSONObj > &vecBackup,
                                         BOOLEAN detail ) ;
 
          INT32          _metaHeaderToBSON( barBackupHeader *pHeader,
+                                           UINT32 incID,
                                            const string &relPath,
                                            BOOLEAN hasError,
                                            BSONObj &obj,
                                            BOOLEAN detail ) ;
 
-         INT32          _drop( const string &backupName ) ;
-
-         UINT32         _findMaxSeq( const string &backupName,
-                                     BOOLEAN isDataFile ) ;
+         INT32          _dropByInc( const string &backupName, UINT32 incID ) ;
+         INT32          _dropAllInc( const string &backupName ) ;
 
       private:
          vector< barBackupInfo >             _backupInfo ;

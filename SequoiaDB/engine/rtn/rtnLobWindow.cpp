@@ -38,18 +38,18 @@
 namespace engine
 {
 const UINT32 RTN_MIN_READ_LEN = DMS_PAGE_SIZE512K ;
-const UINT32 RTN_MAX_READ_LEN = DMS_PAGE_SIZE128K * 1024 ;
-const UINT32 RTN_LOOP_WRITE_LEN = DMS_PAGE_SIZE512K * 4 ;
+const UINT32 RTN_MAX_READ_LEN = DMS_PAGE_SIZE128K * 512 ;      /// 64MB
 
    _rtnLobWindow::_rtnLobWindow()
    :_pageSize( DMS_DO_NOT_CREATE_LOB ),
     _logarithmic( 0 ),
+    _mergeMeta( FALSE ),
+    _metaPageDataCached( FALSE ),
     _curOffset( 0 ),
     _pool( NULL ),
     _cachedSz( 0 ),
-    _analysisCache( FALSE )
+    _metaSize( 0 )
    {
-
    }
 
    _rtnLobWindow::~_rtnLobWindow()
@@ -61,7 +61,33 @@ const UINT32 RTN_LOOP_WRITE_LEN = DMS_PAGE_SIZE512K * 4 ;
       }
    }
 
-   INT32 _rtnLobWindow::init( INT32 pageSize )
+   BOOLEAN _rtnLobWindow::_hasData() const
+   {
+      if ( _cachedSz > 0 )
+      {
+         return TRUE ;
+      }
+
+      if ( !_writeData.empty() )
+      {
+         return TRUE ;
+      }
+
+      return FALSE ;
+   }
+
+   UINT32 _rtnLobWindow::_getCurDataPageSize() const
+   {
+      if ( !_mergeMeta || _curOffset >= _pageSize - DMS_LOB_META_LENGTH )
+      {
+         return _pageSize ;
+      }
+      return _pageSize - DMS_LOB_META_LENGTH ;
+   }
+
+   INT32 _rtnLobWindow::init( INT32 pageSize,
+                              BOOLEAN mergeMeta,
+                              BOOLEAN metaPageDataCached )
    {
       INT32 rc = SDB_OK ;
       SDB_ASSERT( DMS_DO_NOT_CREATE_LOB < pageSize,
@@ -71,13 +97,13 @@ const UINT32 RTN_LOOP_WRITE_LEN = DMS_PAGE_SIZE512K * 4 ;
 
       if ( !ossIsPowerOf2( pageSize, &_logarithmic ) )
       {
-         PD_LOG( PDERROR, "invalid page size:%d, it should be a power of 2",
+         PD_LOG( PDERROR, "Invalid page size:%d, it should be a power of 2",
                  pageSize ) ;
          rc = SDB_INVALIDARG ;
          goto error ;
       }
 
-      _pool = ( CHAR * )SDB_OSS_MALLOC( pageSize ) ;
+      _pool = ( CHAR * )SDB_OSS_MALLOC( pageSize * 2 ) ;
       if ( NULL == _pool )
       {
          PD_LOG( PDERROR, "failed to allocate mem." ) ;
@@ -86,58 +112,107 @@ const UINT32 RTN_LOOP_WRITE_LEN = DMS_PAGE_SIZE512K * 4 ;
       }
 
       _pageSize = pageSize ;
+      _mergeMeta = mergeMeta ;
+      _metaPageDataCached = metaPageDataCached ;
+
    done:
       return rc ;
    error:
       goto done ;
    }
 
-   // PD_TRACE_DECLARE_FUNCTION ( SDB_RTNLOBWINDOW_ADDOUTPUTDATA, "_rtnLobWindow::addOutputData" )
-   INT32 _rtnLobWindow::prepare2Write( SINT64 offset, UINT32 len, const CHAR *data )
+   BOOLEAN _rtnLobWindow::continuous( INT64 offset ) const
    {
-      INT32 rc = SDB_OK ;
-      PD_TRACE_ENTRY( SDB_RTNLOBWINDOW_ADDOUTPUTDATA ) ;
-      SDB_ASSERT( 0 <= offset && NULL != data, "invalid arguments" ) ;
-      SDB_ASSERT( _writeData.empty(), "the last write has not been done" ) ;
-      
-      /// TOOD: seek write ?
-      if ( offset != _curOffset )
+      if ( offset == _curOffset + _cachedSz )
       {
-         PD_LOG( PDERROR, "invalid offset:%lld, current offset:%lld"
-                 ", we do not support seek write yet",
-                 offset, _curOffset ) ;
-         rc = SDB_INVALIDARG ;
-         goto error ;
-      }
-
-      /// never cached data
-      if ( 0 == _cachedSz )
-      {
-         _writeData.tuple.columns.offset = offset ;
-         _writeData.tuple.columns.len = len ;
-         _writeData.data = data ;
-         _analysisCache = FALSE ;
+         return TRUE ;
       }
       else
       {
-         /// join cached data and write data.
-         SDB_ASSERT( _cachedSz < _pageSize, "impossible" ) ;
-         INT32 mvSize = _pageSize - _cachedSz ;
-         mvSize = ( UINT32 )mvSize <= len ? mvSize : len ;
-         ossMemcpy( _pool + _cachedSz, data, mvSize ) ;
-         _cachedSz += mvSize ;
-         if ( 0 != len - mvSize )
+         return FALSE ;
+      }
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB_RTNLOBWINDOW_PREPARE4WRITE, "_rtnLobWindow::prepare4Write" )
+   INT32 _rtnLobWindow::prepare4Write( INT64 offset, UINT32 len,
+                                       const CHAR *data )
+   {
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY( SDB_RTNLOBWINDOW_PREPARE4WRITE ) ;
+      SDB_ASSERT( 0 <= offset && NULL != data, "invalid arguments" ) ;
+      SDB_ASSERT( _writeData.empty(), "the last write has not been done" ) ;
+
+      if ( !continuous( offset ) )
+      {
+         if ( _hasData() )
          {
-            _writeData.tuple.columns.offset = offset + mvSize ;
+            PD_LOG( PDERROR, "Invalid offset:%lld, current offset:%lld"
+                    ", seek happened when still has data",
+                    offset, _curOffset ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+         else
+         {
+            _curOffset = offset ;
+         }
+      }
+
+      if ( _metaPageDataCached && _mergeMeta &&
+           _curOffset < _pageSize - DMS_LOB_META_LENGTH )
+      {
+         UINT32 lastLen = _pageSize - DMS_LOB_META_LENGTH - _curOffset ;
+         CHAR *pCurMeta = _pool + _pageSize + DMS_LOB_META_LENGTH + _curOffset ;
+
+         if ( len <= lastLen )
+         {
+            ossMemcpy( pCurMeta, data, len ) ;
+            _metaSize = OSS_MAX( _metaSize, _curOffset + len ) ;
+            _curOffset += len ;
+            goto done ;
+         }
+         else
+         {
+            ossMemcpy( pCurMeta, data, lastLen ) ;
+            _metaSize = _curOffset + lastLen ;
+            SDB_ASSERT( _pageSize - DMS_LOB_META_LENGTH == _metaSize,
+                        "meta size must be pagesize - metalen" ) ;
+            _curOffset += lastLen ;
+            SDB_ASSERT( _pageSize - DMS_LOB_META_LENGTH == _curOffset,
+                        "Cur offset must be pageSize - metaLen" ) ;
+            len -= lastLen ;
+            data += lastLen ;
+         }
+      }
+
+      if ( 0 == _cachedSz )
+      {
+         _writeData.tuple.columns.offset = _curOffset ;
+         _writeData.tuple.columns.len = len ;
+         _writeData.data = data ;
+      }
+      else
+      {
+         UINT32 curOffsetInPage = RTN_LOB_GET_OFFSET_IN_SEQUENCE( _curOffset,
+                                                                  _mergeMeta,
+                                                                  _pageSize ) ;
+         UINT32 curPageRemainSize = _pageSize - curOffsetInPage - (UINT32)_cachedSz ;
+
+         SDB_ASSERT( (UINT32)_cachedSz + curOffsetInPage < (UINT32)_pageSize, "impossible" ) ;
+
+         UINT32 mvSize = curPageRemainSize <= len ? curPageRemainSize : len ;
+         ossMemcpy( _pool + curOffsetInPage + _cachedSz, data, mvSize ) ;
+         _cachedSz += mvSize ;
+         if ( len > mvSize )
+         {
+            _writeData.tuple.columns.offset = _curOffset + _cachedSz ;
             _writeData.tuple.columns.len = len - mvSize ;
             _writeData.data = data + mvSize ;
          }
-
-         _analysisCache = TRUE ;
       }
-      _curOffset += len ;
+
    done:
-      PD_TRACE_EXITRC( SDB_RTNLOBWINDOW_ADDOUTPUTDATA, rc ) ;
+      PD_TRACE_EXITRC( SDB_RTNLOBWINDOW_PREPARE4WRITE, rc ) ;
       return rc ;
    error:
       goto done ;
@@ -166,56 +241,58 @@ const UINT32 RTN_LOOP_WRITE_LEN = DMS_PAGE_SIZE512K * 4 ;
       BOOLEAN hasNext = FALSE ;
       MsgLobTuple &t = tuple.tuple ;
 
-      if ( !_analysisCache )
+      UINT32 curOffsetInPage = RTN_LOB_GET_OFFSET_IN_SEQUENCE( _curOffset,
+                                                               _mergeMeta,
+                                                               _pageSize ) ;
+      UINT32 curPageRemainSize = _pageSize - curOffsetInPage ;
+
+      if ( 0 == _cachedSz )
       {
-         if ( (UINT32)_pageSize < _writeData.tuple.columns.len )
+         if ( curPageRemainSize <= _writeData.tuple.columns.len && !_writeData.empty() )
          {
-            t.columns.len = _pageSize ;
-            t.columns.sequence = RTN_LOB_GET_SEQUENCE(
-                                         ( _writeData.tuple.columns.offset ),_logarithmic) ;
-            t.columns.offset = 0 ;
+            SDB_ASSERT( _curOffset == _writeData.tuple.columns.offset, "incorrect offset" ) ;
+            t.columns.len = curPageRemainSize ;
+            t.columns.offset = curOffsetInPage ;
+            t.columns.sequence = RTN_LOB_GET_SEQUENCE( _curOffset,
+                                                       _mergeMeta,
+                                                       _logarithmic ) ;
             tuple.data = _writeData.data ;
 
-            _writeData.tuple.columns.len -= _pageSize ;
-            _writeData.tuple.columns.offset += _pageSize ;
-            _writeData.data += _pageSize ;
-            hasNext = TRUE ;
-         }
-         else if ( (UINT32)_pageSize == _writeData.tuple.columns.len )
-         {
-            t.columns.len = _pageSize ;
-            t.columns.sequence = RTN_LOB_GET_SEQUENCE(
-                                     ( _writeData.tuple.columns.offset ),_logarithmic) ;
-            t.columns.offset = 0 ;
-            tuple.data = _writeData.data ;
+            _writeData.tuple.columns.len -= curPageRemainSize ;
+            _writeData.tuple.columns.offset += curPageRemainSize ;
+            _writeData.data += curPageRemainSize ;
+            if ( 0 == _writeData.tuple.columns.len )
+            {
+               _writeData.clear() ;
+            }
 
+            _curOffset += curPageRemainSize ;
             hasNext = TRUE ;
-            _writeData.clear() ;
          }
          else
          {
-            /// cache data
             goto done ;
          }
       }
-      else if ( _pageSize == _cachedSz )
+      else if ( curPageRemainSize == (UINT32)_cachedSz )
       {
-         /// we should find the exact offset.
-         SINT64 offset = _writeData.empty() ?
-                         _curOffset : _writeData.tuple.columns.offset ;
          t.columns.len = _cachedSz ;
-         t.columns.sequence = RTN_LOB_GET_SEQUENCE(
-                              ( offset - _cachedSz ),_logarithmic) ;
-         t.columns.offset = 0 ;
-         tuple.data = _pool ;
+         t.columns.offset = curOffsetInPage ;
+         t.columns.sequence = RTN_LOB_GET_SEQUENCE( _curOffset,
+                                                    _mergeMeta,
+                                                    _logarithmic ) ;
+         tuple.data = _pool + curOffsetInPage ;
 
+         _curOffset += _cachedSz ;
          hasNext = TRUE ;
-         _analysisCache = FALSE ;
+
+         _cachedSz = 0 ;
       }
       else
       {
          SDB_ASSERT( _writeData.empty(), "should be joined before" ) ;
       }
+
    done:
       PD_TRACE_EXIT( SDB_RTNLOBWINDOW__GETNEXTWRITESEQUENCE ) ;
       return hasNext ;
@@ -223,22 +300,22 @@ const UINT32 RTN_LOOP_WRITE_LEN = DMS_PAGE_SIZE512K * 4 ;
 
    void _rtnLobWindow::cacheLastDataOrClearCache()
    {
-      if ( _pageSize == _cachedSz )
-      {
-         _cachedSz = 0 ;
-      }
-
       if ( !_writeData.empty() )
       {
-         SDB_ASSERT( _writeData.tuple.columns.len < ( UINT32 )_pageSize, "impossible" ) ;
-         SDB_ASSERT( 0 == _cachedSz || _cachedSz == _pageSize, "impossible" ) ;
-         ossMemcpy( _pool, _writeData.data, _writeData.tuple.columns.len ) ;
+         UINT32 curOffsetInPage = RTN_LOB_GET_OFFSET_IN_SEQUENCE( _curOffset,
+                                                                  _mergeMeta,
+                                                                  _pageSize ) ;
+
+         SDB_ASSERT( curOffsetInPage + (UINT32)_cachedSz + _writeData.tuple.columns.len < (UINT32)_pageSize,
+                     "Write data len must less than data page remain size" ) ;
+         SDB_ASSERT( 0 == _cachedSz, "Cached size must be 0" ) ;
+         SDB_ASSERT( _curOffset == _writeData.tuple.columns.offset, "incorrect offset" ) ;
+
+         ossMemcpy( _pool + curOffsetInPage + _cachedSz, _writeData.data,
+                    _writeData.tuple.columns.len ) ;
          _cachedSz += _writeData.tuple.columns.len ;
          _writeData.clear() ;
       }
-
-      _analysisCache = FALSE ;
-      return ;
    }
 
    BOOLEAN _rtnLobWindow::getCachedData( _rtnLobTuple &tuple )
@@ -251,47 +328,79 @@ const UINT32 RTN_LOOP_WRITE_LEN = DMS_PAGE_SIZE512K * 4 ;
       }
 
       t.columns.len = _cachedSz ;
-      t.columns.sequence = RTN_LOB_GET_SEQUENCE(
-                          _curOffset - _cachedSz, _logarithmic ) ;
-      t.columns.offset = 0 ;
-      tuple.data = _pool ;
+      t.columns.sequence = RTN_LOB_GET_SEQUENCE( _curOffset,
+                                                 _mergeMeta,
+                                                 _logarithmic ) ;
+      t.columns.offset = RTN_LOB_GET_OFFSET_IN_SEQUENCE( _curOffset,
+                                                         _mergeMeta,
+                                                         _pageSize ) ;
+      tuple.data = _pool + t.columns.offset ;
 
+      SDB_ASSERT( t.columns.offset + _cachedSz < _pageSize,
+                  "incorrect cached data" ) ;
+
+      _curOffset += _cachedSz ;
       hasNext = TRUE ;
+
       _cachedSz = 0 ;
-      _analysisCache = FALSE ; 
+
    done:
       return hasNext ;
    }
 
-   // PD_TRACE_DECLARE_FUNCTION ( SDB_RTNLOBWINDOW_PREPARE2READ, "_rtnLobWindow::_rtnLobWindow::prepare2Read" )
-   INT32 _rtnLobWindow::prepare2Read( SINT64 lobLen,
-                                      SINT64 offset,
+   BOOLEAN _rtnLobWindow::getMetaPageData( _rtnLobTuple &tuple )
+   {
+      BOOLEAN hasNext = FALSE ;
+      MsgLobTuple &t = tuple.tuple ;
+
+      if ( 0 == _metaSize )
+      {
+         goto done ;
+      }
+
+      t.columns.len = _metaSize + DMS_LOB_META_LENGTH ;
+      t.columns.sequence = DMS_LOB_META_SEQUENCE ;
+      t.columns.offset = 0 ;
+      tuple.data = _pool + _pageSize ;
+
+      SDB_ASSERT( DMS_LOB_META_LENGTH + _metaSize <= _pageSize,
+                  "incorrect meta size" ) ;
+
+      hasNext = TRUE ;
+      _metaSize = 0 ;
+
+   done:
+      return hasNext ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB_RTNLOBWINDOW_PREPARE4READ, "_rtnLobWindow::_rtnLobWindow::prepare4Read" )
+   INT32 _rtnLobWindow::prepare4Read( INT64 lobLen,
+                                      INT64 offset,
                                       UINT32 len,
                                       RTN_LOB_TUPLES &tuples )
    {
       INT32 rc = SDB_OK ;
-      PD_TRACE_ENTRY( SDB_RTNLOBWINDOW_PREPARE2READ ) ;
+      PD_TRACE_ENTRY( SDB_RTNLOBWINDOW_PREPARE4READ ) ;
       SDB_ASSERT( offset < lobLen, "impossible" ) ;
       UINT32 totalRead = 0 ;
-      SINT64 currentOffset = offset ;
+      _curOffset = offset ;
       UINT32 maxLen = RTN_MAX_READ_LEN <= ( lobLen - offset ) ?
                       RTN_MAX_READ_LEN : ( lobLen - offset ) ;
       UINT32 needRead = len <= RTN_MIN_READ_LEN ?
                         RTN_MIN_READ_LEN : len ;
       tuples.clear() ;
 
-      while ( currentOffset < lobLen &&
+      while ( _curOffset < lobLen &&
               totalRead < needRead &&
               totalRead < maxLen ) 
       {
-         UINT32 offsetOfTuple =
-                      RTN_LOB_GET_OFFSET_IN_SEQUENCE( currentOffset,
-                                                      _pageSize ) ;
+         UINT32 offsetOfTuple = RTN_LOB_GET_OFFSET_IN_SEQUENCE( _curOffset,
+                                                                _mergeMeta,
+                                                                _pageSize ) ;
          UINT32 lenOfTuple = _pageSize - offsetOfTuple ;
-         if ( ( lobLen - currentOffset ) < lenOfTuple )
+         if ( ( lobLen - _curOffset ) < lenOfTuple )
          {
-            /// we want to read a whole piece unless hit the end of lob.
-            lenOfTuple = lobLen - currentOffset ;
+            lenOfTuple = lobLen - _curOffset ;
          }
 
          if ( 0 == lenOfTuple )
@@ -299,10 +408,11 @@ const UINT32 RTN_LOOP_WRITE_LEN = DMS_PAGE_SIZE512K * 4 ;
             break ;
          }
 
-         UINT32 sequence = RTN_LOB_GET_SEQUENCE( currentOffset,
+         UINT32 sequence = RTN_LOB_GET_SEQUENCE( _curOffset,
+                                                 _mergeMeta,
                                                  _logarithmic ) ;
 
-         currentOffset += lenOfTuple ;
+         _curOffset += lenOfTuple ;
          totalRead += lenOfTuple ;
 
          tuples.push_back( _rtnLobTuple( lenOfTuple,
@@ -311,10 +421,9 @@ const UINT32 RTN_LOOP_WRITE_LEN = DMS_PAGE_SIZE512K * 4 ;
                                          NULL ) ) ;
       }
 
-      PD_TRACE_EXITRC( SDB_RTNLOBWINDOW_PREPARE2READ, rc ) ;
+      PD_TRACE_EXITRC( SDB_RTNLOBWINDOW_PREPARE4READ, rc ) ;
       return rc ;
    }
 
-   
 }
 

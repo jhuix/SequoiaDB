@@ -59,32 +59,24 @@
 #define SDB_ENGINE_SUBVERSION_6        6
 #define SDB_ENGINE_SUBVERSION_7        7
 #define SDB_ENGINE_SUBVERSION_8        8
+#define SDB_ENGINE_SUBVERSION_9        9
 #define SDB_ENGINE_SUBVERSION_10       10
+#define SDB_ENGINE_SUBVERSION_11       11
 #define SDB_ENGINE_SUBVERSION_12       12
 #define SDB_ENGINE_SUBVERSION_13       13
 #define SDB_ENGINE_SUBVERSION_14       14
 
-#define SDB_ENGINE_SUBVERSION_CURRENT  SDB_ENGINE_SUBVERSION_0
+#define SDB_ENGINE_SUBVERSION_CURRENT  SDB_ENGINE_SUBVERSION_9
 
 /*
       SequoiaDB Engine Fix version
 */
 #define SDB_ENGINE_FIXVERSION_1        1
 
-//#define SDB_ENGINE_FIXVERSION_CURRENT  SDB_ENGINE_FIXVERSION_1
 
 /*
       Build time
 */
-#ifdef SDB_ENTERPRISE
-
-   #ifdef _DEBUG
-      #define SDB_ENGINE_BUILD_TIME    SDB_ENGINE_BUILD_CURRENT"(Enterprise-Debug)"
-   #else
-      #define SDB_ENGINE_BUILD_TIME    SDB_ENGINE_BUILD_CURRENT"(Enterprise)"
-   #endif // _DEBUG
-
-#else
 
    #ifdef _DEBUG
       #define SDB_ENGINE_BUILD_TIME    SDB_ENGINE_BUILD_CURRENT"(Debug)"
@@ -92,7 +84,6 @@
       #define SDB_ENGINE_BUILD_TIME    SDB_ENGINE_BUILD_CURRENT
    #endif // _DEBUG
 
-#endif // SDB_ENTERPRISE
 
 /*
  *    Get the version, subversion and release version.

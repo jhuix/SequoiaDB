@@ -60,18 +60,20 @@ namespace engine
 {
 
    #define SDBCMART_LOG_FILE_NAME      "sdbcmart.log"
-   #define PMD_SDBCM_WAIT_TIMEOUT      ( 6 )   /// seconds
+   #define PMD_SDBCM_WAIT_TIMEOUT      ( 30 )   /// seconds
 
 #if defined( _WINDOWS )
    #define COMMANDS_OPTIONS \
        ( PMD_COMMANDS_STRING (PMD_OPTION_HELP, ",h"), "help" ) \
        ( PMD_OPTION_VERSION, "version" ) \
        ( PMD_OPTION_AS_PROC, "as process, not service" ) \
+       ( PMD_COMMANDS_STRING( PMD_OPTION_IGNOREULIMIT, ",i"), "skip checking ulimit" )\
 
 #else
    #define COMMANDS_OPTIONS \
        ( PMD_COMMANDS_STRING (PMD_OPTION_HELP, ",h"), "help" ) \
        ( PMD_OPTION_VERSION, "version" ) \
+       ( PMD_COMMANDS_STRING( PMD_OPTION_IGNOREULIMIT, ",i"), "skip checking ulimit" )\
 
 #endif // _WINDOWS
 
@@ -138,7 +140,6 @@ namespace engine
          COMMANDS_HIDE_OPTIONS
       PMD_ADD_PARAM_OPTIONS_END
 
-      // validate arguments
       rc = utilReadCommandLine( argc, argv, all, vm, FALSE ) ;
       if ( rc )
       {
@@ -146,11 +147,9 @@ namespace engine
          displayArg ( desc ) ;
          goto done ;
       }
-      /// read cmd first
       if ( vm.count( PMD_OPTION_HELP ) )
       {
          displayArg( desc ) ;
-         //rc = SDB_PMD_HELP_ONLY ;
          goto done ;
       }
       if ( vm.count( PMD_OPTION_HELPFULL ) )
@@ -161,7 +160,6 @@ namespace engine
       if ( vm.count( PMD_OPTION_VERSION ) )
       {
          ossPrintVersion( "Sdb CM Start version" ) ;
-         //rc = SDB_PMD_VERSION_ONLY ;
          goto done ;
       }
 #if defined( _WINDOWS )
@@ -170,18 +168,29 @@ namespace engine
          asProc = TRUE ;
       }
 #endif //_WINDOWS
-
-      // check user info before create dir or files
-      if ( !vm.count( PMD_OPTION_CURUSER ) )
-      {
-         UTIL_CHECK_AND_CHG_USER() ;
-      }
-      // check mode
       if ( vm.count( PMD_OPTION_STANDALONE ) )
       {
          asStandalone = TRUE ;
          asProc = TRUE ;
          procShortName = SDBSDBCMPROG ;
+      }
+
+      if ( !vm.count( PMD_OPTION_IGNOREULIMIT ) )
+      {
+         rc = utilSetAndCheckUlimit() ;
+         if ( rc )
+         {
+            ossPrintf( "Error: Start sequoiadb will set ulimit by file"
+                       "[conf/limits.conf], if you want to set ulimit by "
+                       "current terminal, please use parameter '-i'."
+                       OSS_NEWLINE  ) ;
+            goto error ;
+         }
+      }
+
+      if ( !vm.count( PMD_OPTION_CURUSER ) )
+      {
+         UTIL_CHECK_AND_CHG_USER() ;
       }
 
       rc = ossGetEWD ( progName, OSS_MAX_PATHSIZE ) ;
@@ -191,8 +200,6 @@ namespace engine
                      "directory"OSS_NEWLINE ) ;
          goto error ;
       }
-
-      // build dialog info
       rc = utilBuildFullPath( progName, SDBCM_LOG_PATH,
                               OSS_MAX_PATHSIZE, dialogFile ) ;
       if ( rc )
@@ -200,7 +207,6 @@ namespace engine
          ossPrintf( "Failed to build dialog path: %d"OSS_NEWLINE, rc ) ;
          goto error ;
       }
-      // make sure the dir exist
       rc = ossMkdir( dialogFile ) ;
       if ( rc && SDB_FE != rc )
       {
@@ -215,7 +221,6 @@ namespace engine
          ossPrintf( "Failed to build dialog file: %d"OSS_NEWLINE, rc ) ;
          goto error ;
       }
-      // enable pd log
       sdbEnablePD( dialogFile ) ;
       setPDLevel( PDINFO ) ;
 
@@ -231,18 +236,15 @@ namespace engine
 
       if ( !asStandalone )
       {
-         // first to check whether the process exist
          ossEnumProcesses( procs, procShortName.c_str(), TRUE, TRUE ) ;
          if ( procs.size() > 0 )
          {
-            // find it
             ossPrintf( "Success: sdbcmd is already started (%d)"OSS_NEWLINE,
                        (*procs.begin())._pid ) ;
             goto done ;
          }
       }
 
-      // start progress
       rc = startSdbcm ( argvs, pid, asProc ) ;
       if ( rc )
       {
@@ -274,7 +276,6 @@ namespace engine
          }
       }
 
-      // wait bussiness ok
       rc = utilWaitNodeOK( cmInfo, NULL,
                            asStandalone ? pid : OSS_INVALID_PID,
                            SDB_TYPE_OMA, PMD_SDBCM_WAIT_TIMEOUT,

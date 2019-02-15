@@ -38,12 +38,12 @@
 #include "core.hpp"
 #include <algorithm>
 #include "pd.hpp"
-#include "mthMatcher.hpp"
 #include "mthModifier.hpp"
 #include "dms.hpp"
 #include "rtn.hpp"
 #include "pdTrace.hpp"
 #include "mthTrace.hpp"
+#include "utilMath.hpp"
 
 using namespace bson ;
 using namespace std ;
@@ -58,9 +58,7 @@ namespace engine
             subBuilder.append ( fieldName, value ) ; \
             subBuilder.done () ; \
          } \
-      } while ( 0)
-
-
+      } while ( 0 )
 
 #define ADD_CHG_ELEMENT( builder, ele, strChg ) \
    do { \
@@ -70,7 +68,7 @@ namespace engine
          subBuilder.append ( ele ) ; \
          subBuilder.done () ; \
       } \
-   } while ( 0)
+   } while ( 0 )
 
 #define ADD_CHG_ELEMENT_AS( builder, ele, eleFieldName, strChg ) \
    do { \
@@ -80,7 +78,7 @@ namespace engine
          subBuilder.appendAs ( ele, eleFieldName ) ; \
          subBuilder.done () ; \
       } \
-   } while ( 0)
+   } while ( 0 )
 
 #define ADD_CHG_UNSET_FIELD( builder, fieldName ) \
    do { \
@@ -90,7 +88,7 @@ namespace engine
          subBuilder.append ( fieldName, "" ) ; \
          subBuilder.done () ; \
       } \
-   } while ( 0)
+   } while ( 0 )
 
 #define ADD_CHG_NUMBER( builder, fieldName, value, strChg ) \
    do { \
@@ -102,7 +100,7 @@ namespace engine
       } \
    } while ( 0 )
 
-#define ADD_CHG_ARRAY_OBJ(builder, obj, objFiledName, strChg ) \
+#define ADD_CHG_ARRAY_OBJ( builder, obj, objFiledName, strChg ) \
    do { \
       if ( builder ) \
       { \
@@ -111,6 +109,9 @@ namespace engine
          subBuilder.done () ; \
       } \
    } while ( 0 )
+
+#define SET_ARRAY_POS_NAME    "pos"
+#define SET_ARRAY_OBJS_NAME   "objs"
 
    /*
       _mthModifier implement
@@ -137,11 +138,12 @@ namespace engine
                       ele.toString().c_str() ) ;
          goto error ;
       }
-      else if ( ( PUSH_ALL == type || PULL_ALL == type ) &&
+      else if ( ( PUSH_ALL == type || PULL_ALL == type ||
+                  PULL_ALL_BY == type ) &&
                 Array != ele.type () )
       {
-         PD_LOG_MSG ( PDERROR, "$push_all/pull_all field must be array, %s",
-                      ele.toString().c_str() ) ;
+         PD_LOG_MSG ( PDERROR, "$push_all/pull_all/pull_all_by field must "
+                      "be array, %s", ele.toString().c_str() ) ;
          goto error ;
       }
       else if ( POP == type && !ele.isNumber() )
@@ -186,7 +188,6 @@ namespace engine
          goto error ;
       }
 
-      /// then check the field name valid
       rc = mthCheckFieldName ( ele.fieldName(), dollarNum ) ;
       if ( rc )
       {
@@ -200,7 +201,6 @@ namespace engine
          _isReplaceID = TRUE ;
       }
 
-      /// add to vector
       if ( KEEP == type )
       {
          _keepKeys.insert( ele.fieldName() ) ;
@@ -226,13 +226,51 @@ namespace engine
                                            ModifierElement &me )
    {
       PD_TRACE_ENTRY ( SDB__MTHMDF__APPINCMDF );
+      INT32 rc        = SDB_OK ;
       BSONElement elt = me._toModify ;
-      BSONType a = in.type() ;
-      BSONType b = elt.type() ;
+      BSONType a      = in.type() ;
+      BSONType b      = elt.type() ;
 
-      if ( ( NumberLong == a && 0 != elt.numberLong() ) ||
-           ( NumberInt == a && 0 != elt.numberInt() ) ||
-           ( NumberDouble == a && 0 != elt.numberDouble() ) )
+      if ( NumberDecimal == a || NumberDecimal == b )
+      {
+         bsonDecimal inc ;
+         bsonDecimal decimal ;
+
+         decimal = in.numberDecimal() ;
+         inc     = elt.numberDecimal() ;
+         if ( inc.isZero() )
+         {
+            bb.append ( in ) ;
+         }
+         else
+         {
+            bsonDecimal result ;
+
+            rc = decimal.add( inc, result ) ;
+            if ( SDB_OK != rc )
+            {
+               PD_LOG_MSG( PDERROR, "decimal add failed:v1=%s,v2=%s,rc=%d", 
+                           decimal.toString().c_str(),
+                           inc.toString().c_str(), rc ) ;
+               goto error ;
+            }
+
+            rc = result.updateTypemod( decimal.getTypemod() ) ;
+            if ( SDB_OK != rc )
+            {
+               PD_LOG_MSG( PDERROR, "result is out of precision:result=%s,"
+                           "precision=%d,scale=%d,rc=%d",
+                           result.toString().c_str(),
+                           decimal.getPrecision(), decimal.getScale(), rc ) ;
+               goto error ;
+            }
+
+            bb.append ( in.fieldName(), result ) ;
+            ADD_CHG_ELEMENT_AS ( _srcChgBuilder, in, pRoot, "$set" ) ;
+            ADD_CHG_NUMBER ( _dstChgBuilder, pRoot, result, "$set" ) ;
+         }
+      }
+      else if ( in.isNumber() && 0 != elt.numberDouble() )
       {
          ADD_CHG_ELEMENT_AS ( _srcChgBuilder, in, pRoot, "$set" ) ;
 
@@ -244,35 +282,78 @@ namespace engine
          }
          else if ( NumberLong == a || NumberLong == b )
          {
-            bb.append ( in.fieldName(), in.numberLong() + elt.numberLong()) ;
-            ADD_CHG_NUMBER ( _dstChgBuilder, pRoot,
-                             in.numberLong() + elt.numberLong(), "$set" ) ;
-         }
-         else
-         {
-            INT32 result = in.numberInt() + elt.numberInt() ;
-            INT64 result64 = (INT64)in.numberInt() + (INT64)elt.numberInt() ;
-            if ( result64 != (INT64)result )
+            INT64 arg1 = in.numberLong() ;
+            INT64 arg2 = elt.numberLong() ;
+            INT64 result = arg1 + arg2 ;
+            if ( !utilAddIsOverflow( arg1, arg2, result) )
             {
-               //32 bit overflow or underflow happened
-               bb.append ( in.fieldName(), in.numberLong() + elt.numberLong()) ;
-               ADD_CHG_NUMBER ( _dstChgBuilder, pRoot,
-                                in.numberLong() + elt.numberLong(), "$set" ) ;
+               bb.append ( in.fieldName(), result) ;
+               ADD_CHG_NUMBER ( _dstChgBuilder, pRoot, result, "$set" ) ;
+            }
+            else if ( !_strictDataMode )
+            {
+               bsonDecimal decimalE ;
+               bsonDecimal decimalArg ;
+               bsonDecimal decimalResult ;
+
+               decimalE   = in.numberDecimal() ;
+               decimalArg = elt.numberDecimal() ;
+               rc = decimalE.add( decimalArg, decimalResult ) ;
+               if ( SDB_OK != rc )
+               {
+                  PD_LOG( PDERROR, "failed to add decimal:%s+%s,rc=%d",
+                          decimalE.toString().c_str(),
+                          decimalArg.toString().c_str(), rc ) ;
+                  goto error ;
+               }
+               bb.append( in.fieldName(), decimalResult ) ;
+               ADD_CHG_NUMBER ( _dstChgBuilder, pRoot, decimalResult, "$set" ) ;
             }
             else
             {
+               rc = SDB_VALUE_OVERFLOW ;
+               PD_LOG( PDERROR, "overflow happened, field: %s(%lld, inc: %lld), rc = %d",
+                       in.fieldName(), arg1, arg2, rc ) ;
+               goto error ;
+
+            }
+         }
+         else
+         {
+            INT32 arg1 = in.numberInt();
+            INT32 arg2 = elt.numberInt() ;
+
+            INT32 result = arg1 + arg2 ;
+            INT64 result64 = (INT64)arg1 + (INT64)arg2 ;
+            if ( result64 == (INT64)result )
+            {
                bb.append ( in.fieldName(), result ) ;
                ADD_CHG_NUMBER ( _dstChgBuilder, pRoot, result, "$set" ) ;
+            }
+            else if ( !_strictDataMode )
+            {
+               bb.append ( in.fieldName(), result64) ;
+               ADD_CHG_NUMBER ( _dstChgBuilder, pRoot, result64, "$set" ) ;
+            }
+            else 
+            {
+               rc = SDB_VALUE_OVERFLOW ;
+               PD_LOG( PDERROR, "overflow happened, field: %s(%d, inc: %d), rc = %d",
+                       in.fieldName(), arg1, arg2, rc ) ;
+               goto error ;
             }
          }
       }
       else
       {
-         //not change, add the old element
          bb.append ( in ) ;
       }
+
+   done:
       PD_TRACE_EXIT ( SDB__MTHMDF__APPINCMDF ) ;
-      return SDB_OK ;
+      return rc ;
+   error:
+      goto done ;
    }
 
    // PD_TRACE_DECLARE_FUNCTION ( SDB__MTHMDF__APPSETMDF, "_mthModifier::_applySetModifier" )
@@ -288,10 +369,8 @@ namespace engine
       {
          ADD_CHG_ELEMENT_AS ( _srcChgBuilder, in, pRoot, "$set" ) ;
          ADD_CHG_ELEMENT_AS ( _dstChgBuilder, me._toModify, pRoot, "$set" ) ;
-         // set new element
          bb.appendAs ( me._toModify, in.fieldName() ) ;
       }
-      // not change
       else
       {
          bb.append ( in ) ;
@@ -309,7 +388,6 @@ namespace engine
    {
       PD_TRACE_ENTRY ( SDB__MTHMDF__APPPSHMDF );
       INT32 rc= SDB_OK ;
-      // make sure the original type is array
       if ( Array != in.type() )
       {
          PD_LOG_MSG ( ( _ignoreTypeError ? PDDEBUG : PDERROR ),
@@ -327,7 +405,6 @@ namespace engine
       }
 
       {
-         // create bson builder for the array
          BSONObjBuilder sub ( bb.subarrayStart ( in.fieldName() ) ) ;
          BSONObjIterator i ( in.embeddedObject() ) ;
          INT32 n = 0 ;
@@ -339,8 +416,8 @@ namespace engine
          sub.appendAs ( me._toModify, sub.numStr(n) ) ;
          BSONObj newObj = sub.done() ;
 
-         ADD_CHG_ARRAY_OBJ ( _dstChgBuilder, newObj, pRoot, "$set" ) ;
-         ADD_CHG_ELEMENT_AS ( _srcChgBuilder, in, pRoot, "$set" ) ;
+         _buildSetArray( _dstChgBuilder, pRoot, n, me._toModify ) ;
+         _buildSetArray( _srcChgBuilder, pRoot, n, BSONArrayBuilder().arr() ) ;
       }
 
    done :
@@ -356,7 +433,6 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__MTHMDF__APPPSHALLMDF );
-      // make sure the original type is array
       if ( in.type() != Array )
       {
          PD_LOG_MSG ( ( _ignoreTypeError ? PDDEBUG : PDERROR ),
@@ -372,7 +448,6 @@ namespace engine
          }
          goto done ;
       }
-      // make sure the new type is array too
       if ( me._toModify.type() != Array )
       {
          PD_LOG_MSG ( PDERROR, "pushed data type is not array: %s",
@@ -381,7 +456,6 @@ namespace engine
          goto done ;
       }
       {
-         // create bson builder for the array
          BSONObjBuilder sub ( bb.subarrayStart ( in.fieldName() ) ) ;
          BSONObjIterator i ( in.embeddedObject()) ;
          INT32 n = 0 ;
@@ -391,6 +465,8 @@ namespace engine
             sub.append( i.next() ) ;
             n++ ;
          }
+
+         INT32 beginPos = n ;
 
          i = BSONObjIterator ( me._toModify.embeddedObject()) ;
          while( i.more() )
@@ -402,8 +478,10 @@ namespace engine
 
          if ( 0 != pushNum )
          {
-            ADD_CHG_ARRAY_OBJ ( _dstChgBuilder, newObj, pRoot, "$set" ) ;
-            ADD_CHG_ELEMENT_AS ( _srcChgBuilder, in, pRoot, "$set" ) ;
+            _buildSetArray( _dstChgBuilder, pRoot, beginPos,
+                            me._toModify.embeddedObject() ) ;
+            _buildSetArray( _srcChgBuilder, pRoot, beginPos,
+                            BSONArrayBuilder().arr() ) ;
          }
       }
 
@@ -420,7 +498,6 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__MTHMDF__APPPLLMDF );
-      // make sure the original type is array
       if ( in.type() != Array )
       {
          PD_LOG_MSG ( ( _ignoreTypeError ? PDDEBUG : PDERROR ),
@@ -437,28 +514,30 @@ namespace engine
          goto done ;
       }
       {
-         // need to create a builder regardless if pull success or not
-         // even if all elements matches, we still need this empty array
          BSONObjBuilder sub ( bb.subarrayStart ( in.fieldName() ) ) ;
          INT32 n = 0 ;
          BOOLEAN changed = FALSE ;
-         // for each element in the original data
+         INT32 changedPos = 0 ;
          BSONObjIterator i ( in.embeddedObject() ) ;
          while ( i.more() )
          {
             BSONElement ele = i.next() ;
             BOOLEAN allowed = TRUE ;
-            if ( PULL == me._modType )
+            if ( PULL == me._modType || PULL_BY == me._modType )
             {
-               allowed = ! _pullElementMatch ( ele, me._toModify ) ;
+               allowed = ! _pullElementMatch ( ele, me._toModify,
+                                               ( PULL == me._modType ?
+                                                 TRUE : FALSE ) ) ;
             }
             else
             {
                BSONObjIterator j ( me._toModify.embeddedObject() ) ;
                while ( j.more() )
                {
-                  BSONElement arrJ = j.next() ;
-                  if ( ele.woCompare(arrJ, FALSE) == 0 )
+                  BSONElement eleM = j.next() ;
+                  if ( _pullElementMatch( ele, eleM,
+                                          ( PULL_ALL == me._modType ?
+                                            TRUE : FALSE ) ) )
                   {
                      allowed = FALSE ;
                      break ;
@@ -472,6 +551,10 @@ namespace engine
             }
             else
             {
+               if ( !changed )
+               {
+                  changedPos = n ;
+               }
                changed = TRUE ;
             }
          }
@@ -479,8 +562,8 @@ namespace engine
 
          if ( changed )
          {
-            ADD_CHG_ARRAY_OBJ ( _dstChgBuilder, newObj, pRoot, "$set" ) ;
-            ADD_CHG_ELEMENT_AS ( _srcChgBuilder, in, pRoot, "$set" ) ;
+            _buildSetArray( _dstChgBuilder, pRoot, changedPos, -1, newObj ) ;
+            _buildSetArray( _srcChgBuilder, pRoot, changedPos, -1, in.embeddedObject() ) ;
          }
       }
 
@@ -497,10 +580,6 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__MTHMDF__APPPOPMDF );
-      // remove the n'th element from array's front or end
-      // if input number is 0, then it doesn't do anything
-      // input number < 0 means remove from front
-      // input number > 0 means remove from end
       if ( Array != in.type() )
       {
          PD_LOG_MSG ( ( _ignoreTypeError ? PDDEBUG : PDERROR ),
@@ -525,7 +604,6 @@ namespace engine
          goto done ;
       }
 
-      // if specify 0, which means don't pop anything
       if ( me._toModify.number() == 0 )
       {
          bb.append ( in ) ;
@@ -534,28 +612,24 @@ namespace engine
       {
          BSONObjBuilder sub ( bb.subarrayStart ( in.fieldName() ) ) ;
          INT32 n = 0 ;
-         // if specify < 0, which means pop the n'th element from front
+         INT32 changedPos = 0 ;
          if ( me._toModify.number() < 0 )
          {
+            changedPos = 0 ;
             INT32 m = (INT32)me._toModify.number() ;
             BSONObjIterator i ( in.embeddedObject() ) ;
             while ( i.more() )
             {
                m++ ;
+               BSONElement be = i.next() ;
                if ( m > 0 )
                {
-                  sub.appendAs( i.next(), sub.numStr(n++) ) ;
-               }
-               else
-               {
-                  i.next() ;
+                  sub.appendAs( be, sub.numStr(n++) ) ;
                }
             }
          }
          else
          {
-            // if specify > 0, we need to pop the n'th element from end
-            // first we need to know how many elements in total
             INT32 count = 0 ;
             INT32 m = (INT32)me._toModify.number() ;
             BSONObjIterator i ( in.embeddedObject() ) ;
@@ -565,6 +639,7 @@ namespace engine
                count++ ;
             }
             count = count - m ;
+            changedPos = count > 0 ? count : 0 ;
             i = BSONObjIterator ( in.embeddedObject() ) ;
             while ( i.more() )
             {
@@ -582,8 +657,8 @@ namespace engine
          }
          BSONObj newObj = sub.done() ;
 
-         ADD_CHG_ARRAY_OBJ ( _dstChgBuilder, newObj, pRoot, "$set" ) ;
-         ADD_CHG_ELEMENT_AS ( _srcChgBuilder, in, pRoot, "$set" ) ;
+         _buildSetArray( _dstChgBuilder, pRoot, changedPos, -1, newObj ) ;
+         _buildSetArray( _srcChgBuilder, pRoot, changedPos, -1, in.embeddedObject() ) ;
       }
 
    done :
@@ -639,7 +714,6 @@ namespace engine
       }
       else
       {
-         //not change, should add the org element
          bb.append ( in ) ;
       }
       PD_TRACE_EXITRC ( SDB__MTHMDF__APPBITMDF, rc );
@@ -654,7 +728,8 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
 
-      //if org is not int or long, not change
+      PD_TRACE_ENTRY( SDB__MTHMDF__APPBITMDF2 ) ;
+
       if ( NumberInt != in.type() && NumberLong != in.type() )
       {
          bb.append ( in ) ;
@@ -726,9 +801,6 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__MTHMDF__APPADD2SETMDF ) ;
-      // add each element in array into existing array
-      // don't want to add duplicates in addtoset
-      // make sure original data is array
       if ( Array != in.type() )
       {
          PD_LOG_MSG ( ( _ignoreTypeError ? PDDEBUG : PDERROR ),
@@ -744,7 +816,6 @@ namespace engine
          }
          goto done ;
       }
-      // make sure added value is array
       if ( Array != me._toModify.type() )
       {
         PD_LOG_MSG ( PDERROR, "added data type is not array: %s",
@@ -757,7 +828,6 @@ namespace engine
          BSONObjIterator i ( in.embeddedObject() ) ;
          BSONObjIterator j ( me._toModify.embeddedObject() ) ;
          INT32 n = 0 ;
-         // make bsonelementset for everything we want to add
          BSONElementSet eleset ;
          while ( j.more() )
          {
@@ -778,11 +848,10 @@ namespace engine
          }
          BSONObj newObj = sub.done() ;
 
-         //add new element
          if ( orgNum != n )
          {
-            ADD_CHG_ARRAY_OBJ ( _dstChgBuilder, newObj, pRoot, "$set" ) ;
-            ADD_CHG_ELEMENT_AS ( _srcChgBuilder, in, pRoot, "$set" ) ;
+            _buildSetArray( _dstChgBuilder, pRoot, orgNum, -1, newObj ) ;
+            _buildSetArray( _srcChgBuilder, pRoot, orgNum, -1, in.embeddedObject() ) ;
          }
       }
    done :
@@ -923,21 +992,471 @@ namespace engine
       return rc ;
    }
 
-   BOOLEAN _mthModifier::_pullElementMatch( BSONElement& org,
-                                            BSONElement& toMatch )
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__MTHMDF__APPSETARRMDF1, "_mthModifier::_applySetArrayModifier" )
+   template<class Builder>
+   INT32 _mthModifier::_applySetArrayModifier ( const CHAR *pRoot, Builder &bb,
+                                                const BSONElement &in,
+                                                ModifierElement &me )
    {
-      // if the one we are trying to match is not object, then we call woCompare
+      INT32 rc = SDB_OK ;
+
+      PD_TRACE_ENTRY( SDB__MTHMDF__APPSETARRMDF1 ) ;
+
+      BSONElement beModify = me._toModify ;
+      const CHAR *pShort = in.fieldName() ;
+      INT32 beginPos = 0, endPos = 0 ;
+      BSONObj arr ;
+
+      if ( Array != in.type() )
+      {
+         PD_LOG_MSG ( ( _ignoreTypeError ? PDDEBUG : PDERROR ),
+                      "Original data type is not array: %s",
+                      in.toString().c_str() ) ;
+         if ( _ignoreTypeError )
+         {
+            rc = _appendSetArrayModifier( pRoot, pShort, bb, me ) ;
+            if ( SDB_OK == rc )
+            {
+               ADD_CHG_ELEMENT_AS ( _srcChgBuilder, in, pRoot, "$set" ) ;
+            }
+            else
+            {
+               PD_LOG_MSG ( PDERROR,
+                            "Failed to apply $setarray [%s], rc: %d",
+                            beModify.toString( TRUE, TRUE ).c_str(),
+                            rc ) ;
+            }
+         }
+         else
+         {
+            rc = SDB_INVALIDARG ;
+         }
+         goto done ;
+      }
+
+      rc = _parseSetArray( beModify, beginPos, endPos, arr ) ;
+      if ( SDB_OK != rc )
+      {
+         PD_LOG_MSG ( PDERROR,
+                      "Failed to parse $setarray [%s], rc: %d",
+                      beModify.toString( TRUE, TRUE ).c_str(),
+                      rc ) ;
+         goto done ;
+      }
+
+      {
+         BSONArrayBuilder newbb( bb.subarrayStart ( pShort ) ) ;
+
+         INT32 idx = 0 ;
+         BSONObjIterator iter ( in.embeddedObject()) ;
+         while ( iter.more() && idx < beginPos )
+         {
+            newbb << iter.next() ;
+            idx++ ;
+         }
+
+         if ( idx < beginPos )
+         {
+            INT32 tmpBeginPos = beginPos ;
+
+            beginPos = idx ;
+            endPos = -1 ;
+
+            while ( idx < tmpBeginPos )
+            {
+               newbb.appendNull() ;
+               idx ++ ;
+            }
+
+            BSONObjIterator iterNew ( arr ) ;
+            while ( iterNew.more() )
+            {
+               newbb << iterNew.next() ;
+            }
+         }
+         else
+         {
+            INT32 addedCnt = 0, deletedCnt = 0 ;
+
+            BSONObjIterator iterNew ( arr ) ;
+            while ( iterNew.more() )
+            {
+               newbb << iterNew.next() ;
+               addedCnt ++ ;
+            }
+
+            if ( beginPos <= endPos )
+            {
+               while ( iter.more() && idx <= endPos )
+               {
+                  iter.next() ;
+                  idx ++ ;
+                  deletedCnt ++ ;
+               }
+
+               if ( addedCnt != deletedCnt || !iter.more() )
+               {
+                  endPos = -1 ;
+               }
+
+               while ( iter.more() )
+               {
+                  newbb << iter.next() ;
+                  idx ++ ;
+               }
+            }
+         }
+
+         BSONObj newObj = newbb.done() ;
+         _buildSetArray( _dstChgBuilder, pRoot, beginPos, endPos, newObj ) ;
+         _buildSetArray( _srcChgBuilder, pRoot, beginPos, endPos, in.embeddedObject() ) ;
+      }
+
+   done :
+      PD_TRACE_EXITRC( SDB__MTHMDF__APPSETARRMDF1, rc ) ;
+      return rc ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__MTHMDF__APPSETARRMDF2, "_mthModifier::_appendSetArrayModifier" )
+   template<class Builder>
+   INT32 _mthModifier::_appendSetArrayModifier ( const CHAR *pRoot,
+                                                 const CHAR *pShort,
+                                                 Builder &bb,
+                                                 ModifierElement &me )
+   {
+      INT32 rc = SDB_OK ;
+
+      PD_TRACE_ENTRY( SDB__MTHMDF__APPSETARRMDF2 ) ;
+
+      BSONElement beModify = me._toModify ;
+      INT32 beginPos = 0, endPos = 0 ;
+      BSONObj arr ;
+
+      rc = _parseSetArray( beModify, beginPos, endPos, arr ) ;
+      if ( SDB_OK != rc )
+      {
+         PD_LOG_MSG ( PDERROR,
+                      "Failed to parse $setarray [%s], rc: %d",
+                      beModify.toString( TRUE, TRUE ).c_str(), rc ) ;
+         goto done ;
+      }
+
+      {
+         BSONArrayBuilder tmpbb ( bb.subarrayStart( pShort ) ) ;
+
+         INT32 idx = 0 ;
+         for ( idx = 0 ; idx < beginPos ; idx ++ )
+         {
+            tmpbb.appendNull() ;
+         }
+
+         BSONObjIterator iter( arr ) ;
+         while ( iter.more() )
+         {
+            tmpbb << iter.next() ;
+            idx ++ ;
+         }
+         BSONObj newObj = tmpbb.done() ;
+
+         ADD_CHG_ARRAY_OBJ ( _dstChgBuilder, newObj, pRoot, "$set" ) ;
+      }
+
+   done :
+      PD_TRACE_EXITRC( SDB__MTHMDF__APPSETARRMDF2, rc ) ;
+      return rc ;
+   }
+
+   INT32 _mthModifier::_parseSetArray( const BSONElement &toModify,
+                                       INT32 &beginPos, INT32 &endPos,
+                                       BSONObj &arr )
+   {
+      INT32 rc = SDB_OK ;
+      BSONObj boModify ;
+      BSONElement bePos ;
+
+      if ( Object != toModify.type() )
+      {
+         PD_LOG_MSG( PDERROR,
+                     "$setarray input must be an object: %s",
+                     toModify.toString( TRUE, TRUE ).c_str() ) ;
+         rc = SDB_INVALIDARG ;
+         goto error ;
+      }
+
+      boModify = toModify.embeddedObject() ;
+
+      if ( !boModify.hasField( SET_ARRAY_POS_NAME ) )
+      {
+         PD_LOG_MSG( PDERROR,
+                     "$setarray must have the %s field",
+                     SET_ARRAY_POS_NAME ) ;
+         rc = SDB_INVALIDARG ;
+         goto error ;
+      }
+      bePos = boModify.getField( SET_ARRAY_POS_NAME ) ;
+      if ( NumberInt == bePos.type() )
+      {
+         beginPos = bePos.numberInt() ;
+         if ( beginPos < 0 )
+         {
+            PD_LOG_MSG( PDERROR,
+                        "The %s field in $setarray must be a positive integer",
+                        SET_ARRAY_POS_NAME ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+         endPos = -1 ;
+      }
+      else if ( Array == bePos.type() )
+      {
+         INT32 idx = 0 ;
+         BSONObjIterator i( bePos.embeddedObject() ) ;
+         while ( i.more() && idx < 2 )
+         {
+            BSONElement beTmp = i.next() ;
+            if ( NumberInt == beTmp.type() )
+            {
+               if ( 0 == idx )
+               {
+                  beginPos = beTmp.numberInt() ;
+               }
+               else if ( 1 == idx )
+               {
+                  endPos = beTmp.numberInt() ;
+               }
+            }
+            else
+            {
+               PD_LOG_MSG( PDERROR,
+                           "The %s field in $setarray must be an array with 2 integers",
+                           SET_ARRAY_POS_NAME ) ;
+               rc = SDB_INVALIDARG ;
+               goto error ;
+            }
+            idx ++ ;
+         }
+         if ( 2 != idx || i.more() )
+         {
+            PD_LOG_MSG( PDERROR,
+                        "The %s field in $setarray must be an array with 2 "
+                        "integers", SET_ARRAY_POS_NAME ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+         if ( beginPos < 0 )
+         {
+            PD_LOG_MSG( PDERROR,
+                        "The beginPos [%d] of %s field in $setarray must be a "
+                        "positive integer", beginPos, SET_ARRAY_POS_NAME ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+         if ( endPos < 0 )
+         {
+            PD_LOG_MSG( PDERROR,
+                        "The endPos [%d] of %s field in $setarray must be a "
+                        "positive integer", endPos, SET_ARRAY_POS_NAME ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+         if ( beginPos > endPos )
+         {
+            PD_LOG_MSG( PDERROR,
+                        "The beginPos [%d] of %s field in $setarray must be <= the "
+                        "endPos [%d]", beginPos, SET_ARRAY_POS_NAME, endPos ) ;
+            rc = SDB_INVALIDARG ;
+            goto error ;
+         }
+      }
+      else
+      {
+         PD_LOG_MSG( PDERROR,
+                     "The %s field in $setarray must be an integer or an array",
+                     SET_ARRAY_POS_NAME ) ;
+         rc = SDB_INVALIDARG ;
+         goto error ;
+      }
+
+      if ( !boModify.hasField( SET_ARRAY_OBJS_NAME ) )
+      {
+         PD_LOG_MSG( PDERROR,
+                     "$setarray input %s must have %s field",
+                     toModify.toString( TRUE, TRUE ).c_str(),
+                     SET_ARRAY_OBJS_NAME ) ;
+         rc = SDB_INVALIDARG ;
+         goto error ;
+      }
+      if ( Array != boModify.getField( SET_ARRAY_OBJS_NAME ).type() )
+      {
+         PD_LOG_MSG( PDERROR,
+                     "%s field in $setarray input %s must be an array",
+                     SET_ARRAY_OBJS_NAME,
+                     toModify.toString( TRUE, TRUE ).c_str() ) ;
+         rc = SDB_INVALIDARG ;
+         goto error ;
+      }
+      arr = boModify.getObjectField( SET_ARRAY_OBJS_NAME ) ;
+
+   done :
+      return rc ;
+   error :
+      goto done ;
+   }
+
+   template<class Builder>
+   void _mthModifier::_buildSetArray ( Builder *builder, const CHAR *pRoot,
+                                       INT32 beginPos, INT32 endPos,
+                                       const BSONObj &arr )
+   {
+      if ( !builder )
+      {
+         return ;
+      }
+
+      SDB_ASSERT( beginPos >= 0, "beginPos must >= 0" ) ;
+
+      if ( beginPos <= 10 && endPos < 0 )
+      {
+         ADD_CHG_ARRAY_OBJ( builder, arr, pRoot, "$set" ) ;
+      }
+      else
+      {
+         BSONObjBuilder subBuilder( builder->subobjStart( "$setarray" ) ) ;
+         BSONObjBuilder sub2Builder( subBuilder.subobjStart( pRoot ) ) ;
+
+         if ( beginPos <= endPos )
+         {
+            BSONObjBuilder posBuilder( sub2Builder.subarrayStart( SET_ARRAY_POS_NAME ) ) ;
+            posBuilder.append( posBuilder.numStr( 0 ), beginPos ) ;
+            posBuilder.append( posBuilder.numStr( 1 ), endPos ) ;
+            posBuilder.done() ;
+
+            BSONArrayBuilder arrBuilder( sub2Builder.subarrayStart( SET_ARRAY_OBJS_NAME ) ) ;
+            BSONObjIterator iter( arr ) ;
+            INT32 pos = 0 ;
+            while ( iter.more() && pos < beginPos )
+            {
+               iter.next() ;
+               pos ++ ;
+            }
+            while ( iter.more() && pos <= endPos )
+            {
+               arrBuilder << iter.next() ;
+               pos ++ ;
+            }
+            arrBuilder.done() ;
+         }
+         else
+         {
+            sub2Builder.append( SET_ARRAY_POS_NAME, beginPos ) ;
+
+            BSONArrayBuilder arrBuilder( sub2Builder.subarrayStart( SET_ARRAY_OBJS_NAME ) ) ;
+            BSONObjIterator iter( arr ) ;
+            INT32 pos = 0 ;
+            while ( iter.more() && pos < beginPos )
+            {
+               iter.next() ;
+               pos ++ ;
+            }
+            while ( iter.more() )
+            {
+               arrBuilder << iter.next() ;
+            }
+            arrBuilder.done() ;
+         }
+
+         sub2Builder.done() ;
+         subBuilder.done() ;
+      }
+   }
+
+   template<class Builder>
+   void _mthModifier::_buildSetArray ( Builder *builder, const CHAR *pRoot,
+                                       INT32 beginPos, const BSONObj &arr )
+   {
+      if ( !builder )
+      {
+         return ;
+      }
+
+      SDB_ASSERT( beginPos >= 0, "beginPos must >= 0" ) ;
+
+      if ( beginPos == 0 )
+      {
+         ADD_CHG_ARRAY_OBJ( builder, arr, pRoot, "$set" ) ;
+      }
+      else
+      {
+         BSONObjBuilder subBuilder( builder->subobjStart( "$setarray" ) ) ;
+         BSONObjBuilder sub2Builder( subBuilder.subobjStart( pRoot ) ) ;
+         sub2Builder.append( SET_ARRAY_POS_NAME, beginPos ) ;
+         sub2Builder.appendArray( SET_ARRAY_OBJS_NAME, arr ) ;
+         sub2Builder.done() ;
+         subBuilder.done() ;
+      }
+   }
+
+   template<class Builder>
+   void _mthModifier::_buildSetArray ( Builder *builder, const CHAR *pRoot,
+                                       INT32 beginPos, const BSONElement &ele )
+   {
+      if ( !builder )
+      {
+         return ;
+      }
+
+      SDB_ASSERT( beginPos >= 0, "beginPos must >= 0" ) ;
+
+      if ( beginPos == 0 )
+      {
+         BSONObjBuilder subBuilder( builder->subobjStart ( "$set" ) ) ;
+         BSONArrayBuilder arrBuilder( subBuilder.subarrayStart( pRoot ) ) ;
+         arrBuilder << ele ;
+         arrBuilder.done() ;
+         subBuilder.done() ;
+      }
+      else
+      {
+         BSONObjBuilder subBuilder( builder->subobjStart( "$setarray" ) ) ;
+         BSONObjBuilder sub2Builder( subBuilder.subobjStart( pRoot ) ) ;
+         sub2Builder.append( SET_ARRAY_POS_NAME, beginPos ) ;
+         BSONArrayBuilder arrBuilder( sub2Builder.subarrayStart( SET_ARRAY_OBJS_NAME ) ) ;
+         arrBuilder << ele ;
+         arrBuilder.done() ;
+         sub2Builder.done() ;
+         subBuilder.done() ;
+      }
+   }
+
+   BOOLEAN _mthModifier::_pullElementMatch( BSONElement& org,
+                                            BSONElement& toMatch,
+                                            BOOLEAN fullMatch )
+   {
       if ( toMatch.type() != Object )
       {
          return org.valuesEqual(toMatch) ;
       }
-      // if we want to match an object but original data is not object, then
-      // it's not possible to have a match
       if ( org.type() != Object )
       {
          return FALSE ;
       }
-      // otherwise let's do full compare if both sides are object
+
+      if ( !fullMatch )
+      {
+         BSONObj objOrg = org.embeddedObject() ;
+         BSONObjIterator itr( toMatch.embeddedObject() ) ;
+         while( itr.more() )
+         {
+            BSONElement e = itr.next() ;
+            BSONElement o = objOrg.getField( e.fieldName() ) ;
+
+            if ( o.eoo() || 0 != e.woCompare( o, false ) )
+            {
+               return FALSE ;
+            }
+         }
+         return TRUE ;
+      }
       return org.woCompare(toMatch, FALSE) == 0 ;
    }
 
@@ -1022,11 +1541,21 @@ namespace engine
                   {
                      return PULL ;
                   }
+                  else if ( field[5]=='_'&&field[6]=='b'&&
+                            field[7]=='y'&&field[8]=='\0' )
+                  {
+                     return PULL_BY ;
+                  }
                   else if ( field[5]=='_'&&field[6]=='a'&&
                             field[7]=='l'&&field[8]=='l'&&
                             field[9]==0 )
                   {
                      return PULL_ALL ;
+                  }
+                  else if ( field[9]=='_'&&field[10]=='b'&&
+                            field[11]=='y'&&field[12]=='\0' )
+                  {
+                     return PULL_ALL_BY ;
                   }
                }
                else if ( field[3]=='s' && field[4] == 'h' )
@@ -1068,10 +1597,18 @@ namespace engine
          } // r
          else if ( field[1] == 's' )
          {
-            if ( field[2] == 'e' && field[3] == 't' &&
-                 field[4] == 0 )
+            if ( field[2] == 'e' && field[3] == 't' )
             {
-               return SET ;
+               if ( field[4] == 0 )
+               {
+                  return SET ;
+               }
+               else if ( field[4] == 'a' && field[5] == 'r' &&
+                         field[6] == 'r' && field[7] == 'a' &&
+                         field[8] == 'y' && field[9] == 0 )
+               {
+                  return SETARRAY ;
+               }
             }
          }
          else if ( field[1] == 'u' )
@@ -1102,7 +1639,6 @@ namespace engine
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__MTHMDF_PASELE );
       SDB_ASSERT ( ele.type() != Undefined, "Undefined element type" ) ;
-      // get field name first
       ModType type = _parseModType( ele.fieldName () ) ;
       if ( UNKNOW == type )
       {
@@ -1135,15 +1671,11 @@ namespace engine
          _modifierBits |= MTH_MODIFIER_FIELD_OPR_BIT ;
       }
 
-      // then check element type
       switch ( ele.type() )
       {
       case Object:
       {
-         // for {$inc, $pull, etc...} cases
          BSONObjIterator j( ele.embeddedObject() ) ;
-         // even thou this is a loop, we always exist after parsing the first
-         // element
          while ( j.more () )
          {
             rc = _addModifier ( j.next(), type ) ;
@@ -1156,11 +1688,8 @@ namespace engine
       }
       default:
       {
-         // each element must be an object, the field name is operator and
-         // object contains field name and value
-         // for example
-         // $inc : { votes: 1 }    # for increment votes by 1
-         PD_LOG ( PDERROR, "each element in modifier pattern must be object" ) ;
+         PD_LOG_MSG ( PDERROR, "each element in modifier pattern must "
+                      "be object" ) ;
          rc = SDB_INVALIDARG ;
          goto error ;
       }
@@ -1303,7 +1832,6 @@ namespace engine
 
          if ( n1 && n2 )
          {
-            // get rid of leading 0s
             while ( *s1 == '0' )
             {
                ++s1 ;
@@ -1315,8 +1843,6 @@ namespace engine
 
             e1 = (CHAR *)s1 ;
             e2 = (CHAR *)s2 ;
-            // find length
-            // if end of string, will break immediately ('\0')
             while ( _isNumber ( *e1 ) )
             {
                ++e1 ;
@@ -1329,7 +1855,6 @@ namespace engine
             len1 = (INT32)( e1 - s1 ) ;
             len2 = (INT32)( e2 - s2 ) ;
 
-            // if one is longer than the other, return
             if ( len1 > len2 )
             {
                return 1 ;
@@ -1338,12 +1863,10 @@ namespace engine
             {
                return -1 ;
             }
-            // if the lengths are equal, just strcmp
             else if ( ( result = ossStrncmp ( s1, s2, len1 ) ) != 0 )
             {
                return result ;
             }
-            // otherwise, the numbers are equal
             s1 = e1 ;
             s2 = e2 ;
             continue ;
@@ -1418,7 +1941,6 @@ namespace engine
             *(CHAR*)pRDot = 0 ;
          }
          result = _lexNumCmp( pLTmp, pRTmp ) ;
-         // Restore
          if ( pLDot )
          {
             *(CHAR*)pLDot = '.' ;
@@ -1437,7 +1959,6 @@ namespace engine
             return RIGHT_BEFORE ;
          }
 
-         // SAME
          pLTmp = pLDot ? pLDot + 1 : NULL ;
          pRTmp = pRDot ? pRDot + 1 : NULL ;
 
@@ -1472,7 +1993,9 @@ namespace engine
    // PD_TRACE_DECLARE_FUNCTION ( SDB__MTHMDF_LDPTN, "_mthModifier::loadPattern" )
    INT32 _mthModifier::loadPattern ( const BSONObj &modifierPattern,
                                      vector<INT64> *dollarList,
-                                     BOOLEAN ignoreTypeError )
+                                     BOOLEAN ignoreTypeError,
+                                     const BSONObj* shardingKey,
+                                     BOOLEAN strictDataMode )
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__MTHMDF_LDPTN );
@@ -1488,15 +2011,15 @@ namespace engine
          rc = _parseElement(i.next() ) ;
          if ( rc )
          {
-            PD_LOG ( PDERROR, "Failed to parse match pattern[%s, pos: %d], "
-                     "rc: %d", modifierPattern.toString().c_str(), eleNum,
-                     rc ) ;
+            PD_LOG_MSG ( PDERROR, "Failed to parse match "
+                         "pattern[%s, pos: %d], rc: %d",
+                         modifierPattern.toString().c_str(), eleNum,
+                         rc ) ;
             goto error ;
          }
          eleNum ++ ;
       }
 
-      /// if has $keep, but not $replace, report error
       if ( !_isReplace && _keepKeys.size() > 0 )
       {
          PD_LOG_MSG( PDERROR, "Operator $keep can only be used with "
@@ -1504,14 +2027,28 @@ namespace engine
          rc = SDB_INVALIDARG ;
          goto error ;
       }
-      /// when not replace _id, keep the _id
       else if ( _isReplace && !_isReplaceID )
       {
          _keepKeys.insert( DMS_ID_KEY_NAME ) ;
       }
 
       modifierSort() ;
+
+      if ( NULL != shardingKey && !shardingKey->isEmpty() )
+      {
+         _shardingKeyGen = SDB_OSS_NEW _ixmIndexKeyGen(
+                              *shardingKey, GEN_OBJ_KEEP_FIELD_NAME ) ;
+         if ( NULL == _shardingKeyGen )
+         {
+            rc = SDB_OOM ;
+            PD_LOG_MSG( PDERROR,
+                        "Failed to create new sharding key gen, rc=%d", rc ) ;
+            goto error ;
+         }
+      }
+
       _initialized = TRUE ;
+      _strictDataMode = strictDataMode ;
 
    done :
       PD_TRACE_EXITRC ( SDB__MTHMDF_LDPTN, rc );
@@ -1527,8 +2064,6 @@ namespace engine
         ossStrncmp(l.fieldName(),r.fieldName(),ossStrlen(r.fieldName()))==0 ;
    }
 
-   // when requested update want to change something that not exist in original
-   // object, we need to append the original object in those cases
    // PD_TRACE_DECLARE_FUNCTION ( SDB__MTHMDF__APPNEW, "_mthModifier::_appendNew" )
    template<class Builder>
    INT32 _mthModifier::_appendNew ( const CHAR *pRoot, const CHAR *pShort,
@@ -1549,9 +2084,9 @@ namespace engine
          }
          catch( std::exception &e )
          {
-            PD_LOG ( ( _ignoreTypeError ? PDINFO : PDERROR ),
-                     "Failed to append for %s: %s",
-                     me->_toModify.toString().c_str(), e.what() ) ;
+            PD_LOG_MSG ( ( _ignoreTypeError ? PDINFO : PDERROR ),
+                         "Failed to append for %s: %s",
+                         me->_toModify.toString().c_str(), e.what() ) ;
             if ( !_ignoreTypeError )
             {
                rc = SDB_INVALIDARG ;
@@ -1561,10 +2096,11 @@ namespace engine
          ADD_CHG_ELEMENT_AS ( _dstChgBuilder, me->_toModify, pRoot, "$set" ) ;
          break ;
       }
-      // this codepath should never been hit
       case UNSET:
       case PULL:
+      case PULL_BY:
       case PULL_ALL:
+      case PULL_ALL_BY:
       case POP:
       case RENAME:
       {
@@ -1572,10 +2108,8 @@ namespace engine
          rc = SDB_SYS ;
          goto done ;
       }
-      // need to do something, but not implemented yet
       case PUSH:
       {
-         // create bson builder for the array
          BSONObjBuilder bb ( b.subarrayStart( pShort ) ) ;
          bb.appendAs ( me->_toModify, bb.numStr(0) ) ;
          BSONObj newObj = bb.done() ;
@@ -1585,7 +2119,6 @@ namespace engine
       }
       case PUSH_ALL:
       {
-         // make sure the new type is array too
          if ( me->_toModify.type() != Array )
          {
             PD_LOG_MSG ( PDERROR, "pushed data type is not array: %s",
@@ -1600,7 +2133,6 @@ namespace engine
       }
       case ADDTOSET:
       {
-         // make sure added value is array
          if ( Array != me->_toModify.type() )
          {
            PD_LOG_MSG ( PDERROR, "added data type is not array: %s",
@@ -1611,9 +2143,7 @@ namespace engine
          BSONObjBuilder bb (b.subarrayStart( pShort ) ) ;
          BSONObjIterator j ( me->_toModify.embeddedObject() ) ;
          INT32 n = 0 ;
-         // make bsonelementset for everything we want to add
          BSONElementSet eleset ;
-         // insert into set to deduplicate
          while ( j.more() )
          {
             eleset.insert( j.next() ) ;
@@ -1625,7 +2155,6 @@ namespace engine
          }
          BSONObj newObj = bb.done() ;
 
-         //add new element
          if ( n != 0 )
          {
             ADD_CHG_ARRAY_OBJ ( _dstChgBuilder, newObj, pRoot, "$set" ) ;
@@ -1641,13 +2170,15 @@ namespace engine
       case BIT:
          rc = _appendBitModifier2 ( pRoot, pShort, b, 0, *me ) ;
          break ;
+      case SETARRAY :
+         rc = _appendSetArrayModifier( pRoot, pShort, b, *me ) ;
+         break ;
       default:
          PD_LOG_MSG ( PDERROR, "unknow modifier type[%d]", me->_modType ) ;
          rc = SDB_INVALIDARG ;
          goto done ;
       }
 
-      // here we actually consume modifier, then we add index
       if ( SDB_OK == rc )
       {
          _incModifierIndex( modifierIndex ) ;
@@ -1658,12 +2189,6 @@ namespace engine
       return rc ;
    }
 
-   // Builder could be BSONObjBuilder or BSONArrayBuilder
-   // _appendNewFromMods appends the current builder with the new field
-   // root represent the current fieldName, me is the current modifier element
-   // b is the builder, onedownseen represent the all subobjects have been
-   // processed in the current object, and modifierIndex is the pointer for
-   // current modifier
    // PD_TRACE_DECLARE_FUNCTION ( SDB__MTHMDF__APPNEWFRMMODS, "_mthModifier::_appendNewFromMods" )
    template<class Builder>
    INT32 _mthModifier::_appendNewFromMods ( CHAR **ppRoot,
@@ -1681,29 +2206,20 @@ namespace engine
       const CHAR *pDollar = NULL ;
       INT32 newRootLen = rootLen ;
 
-      // if the modified request does not exist in original one
-      // first let's see if there's nested object in the request
-      // ex. current root is user.name
-      // however request is user.name.first.origin
-      // in this case we'll have to create sub object 'first'
 
-      // note fieldName is the FULL path "user.name.first.origin"
-      // root is user.name.
       const CHAR *fieldName = me->_toModify.fieldName() ;
-      // now temp is "first.origin"
       const CHAR *temp = fieldName + modifierRootLen ;
-      // find the "." starting from root length
       const CHAR *dot = ossStrchr ( temp, '.' ) ;
 
       if ( UNSET == me->_modType ||
            PULL == me->_modType ||
+           PULL_BY == me->_modType ||
            PULL_ALL == me->_modType ||
+           PULL_ALL_BY == me->_modType ||
            POP == me->_modType ||
            RENAME == me->_modType ||
            NULLOPR == me->_modType )
       {
-         // we don't continue for those types since they are not going to append
-         // new records
          _incModifierIndex( modifierIndex ) ;
          goto done ;
       }
@@ -1716,7 +2232,6 @@ namespace engine
       temp = *ppRoot + newRootLen ;
       rc = mthAppendString( ppRoot, rootBufLen, newRootLen, pDollar, -1,
                             &newRootLen ) ;
-      // Restore
       if ( dot )
       {
          *(CHAR*)dot = '.' ;
@@ -1724,7 +2239,7 @@ namespace engine
 
       if ( rc )
       {
-         PD_LOG( PDERROR, "Failed to append string, rc: %d", rc ) ;
+         PD_LOG_MSG( PDERROR, "Failed to append string, rc: %d", rc ) ;
          goto error ;
       }
       else if ( hasUnknowDollar )
@@ -1739,66 +2254,47 @@ namespace engine
          hasCreateNewRoot = TRUE ;
       }
 
-      // given example
-      // user.name.first.origin
-      // |         ^    #
-      // | represent fieldName
-      // ^ represent temp
-      // # represent dot
-      // if there is sub object
       if ( dot )
       {
-         // create object builder for nf ("first" field)
          BSONObjBuilder bb ( b.subobjStart( temp ) ) ;
-         // create a es for empty object
          const BSONObj obj ;
          BSONObjIteratorSorted es( obj ) ;
-         // append '.'
          rc = mthAppendString ( ppRoot, rootBufLen, newRootLen, ".", 1,
                                 &newRootLen ) ;
          if ( rc )
          {
-            PD_LOG ( PDERROR, "Failed to append string, rc: %d", rc ) ;
+            PD_LOG_MSG ( PDERROR, "Failed to append string, rc: %d", rc ) ;
             goto error ;
          }
 
-         // create an object for path "user.name.first."
-         // bb is the new builder, es is iterator
-         // modifierIndex is the index
          rc = _buildNewObj ( ppRoot, rootBufLen, newRootLen,
                              bb, es, modifierIndex, hasCreateNewRoot ) ;
          if ( rc )
          {
-            PD_LOG ( PDERROR, "Failed to build new object for %s, rc: %d",
-                     me->_toModify.toString().c_str(), rc ) ;
+            PD_LOG_MSG ( PDERROR, "Failed to build new object for %s, rc: %d",
+                         me->_toModify.toString().c_str(), rc ) ;
             goto error ;
          }
          bb.done() ;
       }
-      // if we can't find ".", then we are not embedded BSON, let's just
-      // create whatever object we asked
-      // for example current root is "user.name."
-      // and we want {$set: {user.name.firstname, "tao wang"}}
-      // here temp will be firstname, and dot will be NULL
       else
       {
-         // call _appendNew to append modified element into the current builder
          try
          {
             rc = _appendNew ( *ppRoot, temp, b, modifierIndex ) ;
          }
          catch( std::exception &e )
          {
-            PD_LOG ( PDERROR, "Failed to append for %s: %s",
-                     me->_toModify.toString().c_str(), e.what() );
+            PD_LOG_MSG ( PDERROR, "Failed to append for %s: %s",
+                         me->_toModify.toString().c_str(), e.what() );
             rc = SDB_INVALIDARG ;
             goto error ;
          }
 
          if ( rc )
          {
-            PD_LOG ( PDERROR, "Failed to append for %s, rc: %d",
-                     me->_toModify.toString().c_str(), rc ) ;
+            PD_LOG_MSG ( PDERROR, "Failed to append for %s, rc: %d",
+                         me->_toModify.toString().c_str(), rc ) ;
             goto error ;
          }
       }
@@ -1809,8 +2305,6 @@ namespace engine
    error :
       goto done ;
    }
-   // if the original object has the element we asked to modify, then e is the
-   // original element, b is the builder, me is the info that we want to modify
    // PD_TRACE_DECLARE_FUNCTION ( SDB__MTHMDF__ALYCHG, "_mthModifier::_applyChange" )
    template<class Builder>
    INT32 _mthModifier::_applyChange ( CHAR **ppRoot,
@@ -1824,8 +2318,6 @@ namespace engine
       PD_TRACE_ENTRY ( SDB__MTHMDF__ALYCHG ) ;
       ModifierElement *me = &_modifierElements[(*modifierIndex)] ;
 
-      // basically we need to take the original data from e, and use modifier
-      // element me to make some change, and add into builder b
       switch ( me->_modType )
       {
       case INC:
@@ -1848,12 +2340,10 @@ namespace engine
       case PUSH_ALL:
          rc = _applyPushAllModifier ( *ppRoot, b, e, *me ) ;
          break ;
-      // given an input, remove all matching items when they match any of the
-      // input
       case PULL:
-      // given an input, remove all matching items when they match the whole
-      // input
+      case PULL_BY:
       case PULL_ALL:
+      case PULL_ALL_BY:
          rc = _applyPullModifier ( *ppRoot, b, e, *me ) ;
          break ;
       case POP:
@@ -1881,7 +2371,6 @@ namespace engine
          ADD_CHG_ELEMENT_AS ( _srcChgBuilder, e, *ppRoot, "$set" ) ;
          ADD_CHG_UNSET_FIELD ( _srcChgBuilder, newNameStr ) ;
 
-         //for the new obj,should unset the old, and set the new
          ADD_CHG_UNSET_FIELD ( _dstChgBuilder, *ppRoot ) ;
          ADD_CHG_ELEMENT_AS ( _dstChgBuilder, e, newNameStr, "$set" ) ;
 
@@ -1889,6 +2378,9 @@ namespace engine
          break ;
       }
       case NULLOPR:
+         break ;
+      case SETARRAY :
+         rc = _applySetArrayModifier( *ppRoot, b, e, *me ) ;
          break ;
       default :
          PD_LOG_MSG ( PDERROR, "unknow modifier type[%d]", me->_modType ) ;
@@ -1934,7 +2426,6 @@ namespace engine
       set<string>::iterator it = _keepKeys.begin() ;
       while ( it != _keepKeys.end() )
       {
-         // make sure $keep is after $replace
          ADD_CHG_FIELD_VALUE ( _dstChgBuilder, *it, 1, "$keep" ) ;
          ++it ;
       }
@@ -1942,10 +2433,6 @@ namespace engine
       return SDB_OK  ;
    }
 
-   // Builder could be BSONObjBuilder or BSONArrayBuilder
-   // This function is recursively called to build new object
-   // The prerequisit is that _modifierElement is sorted, which supposed to
-   // happen at end of loadPattern
    // PD_TRACE_DECLARE_FUNCTION ( SDB__MTHMDF__BLDNEWOBJ, "_mthModifier::_buildNewObj" )
    template<class Builder>
    INT32 _mthModifier::_buildNewObj ( CHAR **ppRoot,
@@ -1959,25 +2446,21 @@ namespace engine
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__MTHMDF__BLDNEWOBJ ) ;
 
-      // get the next element in the object
       BSONElement e ;
-      // previous element is set to empty
       BSONElement prevE ;
       UINT32 compareLeftPos = 0 ;
       INT32 newRootLen = rootLen ;
 
       if ( _isReplace )
       {
-         return _buildNewObjReplace( b, es ) ;
+         rc = _buildNewObjReplace( b, es ) ;
+         goto done ;
       }
 
       e = es.next() ;
 
-      // loop until we hit end of original object, or end of modifier list
       while( !e.eoo() && (*modifierIndex)<(SINT32)_modifierElements.size() )
       {
-         // if we get two elements with same field name, we don't need to
-         // continue checking, simply append it to the builder
          if ( _dupFieldName(prevE, e))
          {
             b.append( e ) ;
@@ -1987,19 +2470,13 @@ namespace engine
          }
          prevE = e ;
 
-         // every time we build the current field, let's set root to original
          (*ppRoot)[rootLen] = '\0' ;
          newRootLen = rootLen ;
 
-         // construct the full path of the current field name
-         // say current root is "user.employee.", and this object contains
-         // "name, age" fields, then first loop we get user.employee.name
-         // second round get user.employee.age
          rc = mthAppendString ( ppRoot, rootBufLen, newRootLen,
                                 e.fieldName(), -1, &newRootLen ) ;
          PD_RC_CHECK ( rc, PDERROR, "Failed to append string, rc: %d", rc ) ;
 
-         // compare the full field name with requested update field
          /*FieldCompareResult cmp = compareDottedFieldNames (
                _modifierElements[(*modifierIndex)]._toModify.fieldName(),
                *ppRoot ) ;*/
@@ -2007,41 +2484,13 @@ namespace engine
                _modifierElements[(*modifierIndex)]._toModify.fieldName(),
                *ppRoot, &compareLeftPos, NULL ) ;
 
-         // compare the full path
-         // we have few situations need to handle
-         // 1) current field is a parent of requested field
-         // for example, currentfield = user, requested field = user.name.test
-         // this situation called LEFT_SUBFIELD
 
-         // 2) current field is same as requested field
-         // for example both current field and requests are user.name.test
-         // this situation called SAME
 
-         // 3) current field is not same as requested field, and alphabatically
-         // current field is greater than requested field
-         // for example current field is user.myname, requested fialed is
-         // user.abc
-         // this situation called LEFT_BEFORE
 
-         // 4) current field is not same as requested field, and alphabatically
-         // current field is smaller than requested field
-         // for example current field is user.myname, requested field is
-         // user.name
-         // this situation called RIGHT_BEFORE
 
-         // 5) requested field is a parent of current field
-         // for example current field is user.name.test, requested field is user
-         // howwever since we are doing merge, this situation should NEVER
-         // HAPPEN!!
          switch ( cmp )
          {
          case LEFT_SUBFIELD:
-            // ex, modify request $set:{user.name,"taoewang"}
-            // field: user
-            // make sure the BSONElement is object or array
-            // if the requested field already exist but it's not object nor
-            // array, we should report error since we can't create sub field in
-            // other type of element
             if ( e.type() != Object && e.type() != Array )
             {
                PD_LOG_MSG ( ( _ignoreTypeError ? PDDEBUG : PDERROR ),
@@ -2058,83 +2507,47 @@ namespace engine
                }
             }
 
-            // add "." at end
             rc = mthAppendString ( ppRoot, rootBufLen, newRootLen, ".", 1,
                                    &newRootLen ) ;
             PD_RC_CHECK ( rc, PDERROR, "Failed to append string, rc: %d", rc ) ;
 
-            // if we are dealing with object, then let's create a new object
-            // builder starting from our current fieldName
             if ( e.type() == Object )
             {
                BSONObjBuilder bb(b.subobjStart(e.fieldName()));
-               // get the object for the current element, and create sorted
-               // iterator on it
                BSONObjIteratorSorted bis(e.Obj());
 
-               // add fieldname into path and recursively call _buildNewObj
-               // to create embedded object
-               // root is original root + current field + .
-               // bb is new object builder
-               // bis is the sorted iterator
-               // modifierIndex is the current modifier we are working on
                rc = _buildNewObj ( ppRoot, rootBufLen, newRootLen,
                                    bb, bis, modifierIndex,
                                    hasCreateNewRoot ) ;
                if ( rc )
                {
-                  PD_LOG ( PDERROR, "Failed to build object: %s, rc: %d",
-                           e.toString().c_str(), rc ) ;
-                  rc = SDB_INVALIDARG ;
+                  PD_LOG_MSG ( PDERROR, "Failed to build object: %s, rc: %d",
+                               e.toString().c_str(), rc ) ;
                   goto error ;
                }
-               // call bb.done() to close the builder
                bb.done() ;
             }
             else
             {
-               // if it's not object, then we must have array
-               // now let's create BSONArrayBuilder
                BSONArrayBuilder ba( b.subarrayStart( e.fieldName() ) ) ;
-               //BSONArrayIteratorSorted bis(BSONArray(e.embeddedObject()));
                BSONObjIteratorSorted bis(e.embeddedObject());
-               // add fieldname into path and recursively call _buildNewObj
-               // to create embedded object
-               // root is original root + current field + .
-               // ba is new array builder
-               // bis is the sorted iterator
-               // modifierIndex is the current modifier we are working on
                rc = _buildNewObj ( ppRoot, rootBufLen, newRootLen,
                                    ba, bis, modifierIndex,
                                    hasCreateNewRoot ) ;
                if ( rc )
                {
-                  PD_LOG ( PDERROR, "Failed to build array: %s, rc: %d",
-                           e.toString().c_str(), rc ) ;
-                  rc = SDB_INVALIDARG ;
+                  PD_LOG_MSG ( PDERROR, "Failed to build array: %s, rc: %d",
+                               e.toString().c_str(), rc ) ;
                   goto error ;
                }
                ba.done() ;
             }
-            // process to the next element
             e = es.next() ;
-            // note we shouldn't touch modifierIndex here, we should only
-            // change it at the place actually consuming it
             break ;
 
          case LEFT_BEFORE:
-            // if the modified request does not exist in original one
-            // first let's see if there's nested object in the request
-            // ex. current root is user. and our first element is "name"
-            // however request is user.address
-            // in this case we'll have to create sub object 'address' first
 
-            // _appendNewFromMods appends the current builder with the new field
-            // _modifierElement[modifierIndex] represents the current
-            // ModifyElement, b is the builder, root is the string of current
-            // root field, onedownseen is the set for all subobjects
 
-            // first let's revert root to original
             (*ppRoot)[rootLen] = '\0' ;
             newRootLen = rootLen ;
             rc = _appendNewFromMods ( ppRoot, rootBufLen, newRootLen,
@@ -2143,20 +2556,10 @@ namespace engine
             PD_RC_CHECK ( rc, PDERROR, "Failed to append for %s, rc: %d",
                           _modifierElements[(*modifierIndex)
                           ]._toModify.toString().c_str(), rc ) ;
-            // note we don't change e here because we just add the field
-            // requested by modifier into new object, the original e shoudln't
-            // be changed.
 
-            // we also don't change modifierIndex here since it should be
-            // changed by the actual consumer function, not in this loop
             break ;
 
          case SAME:
-            // in this situation, the requested field is the one we are
-            // processing, so that we don't need to change object metadata,
-            // let's just apply the change
-            // e is the current element, b is the current builder, modifierIndex
-            // is the current modifier
             try
             {
                rc = _applyChange ( ppRoot, rootBufLen, newRootLen, e, b,
@@ -2164,58 +2567,40 @@ namespace engine
             }
             catch( std::exception &e )
             {
-               PD_LOG ( PDERROR, "Failed to apply changes for %s: %s",
-                        _modifierElements[(*modifierIndex)
-                        ]._toModify.toString().c_str(),
-                        e.what() ) ;
+               PD_LOG_MSG ( PDERROR, "Failed to apply changes for %s: %s",
+                            _modifierElements[(*modifierIndex)
+                            ]._toModify.toString().c_str(),
+                            e.what() ) ;
                rc = SDB_INVALIDARG ;
                goto error ;
             }
             if ( rc )
             {
-               PD_LOG ( PDERROR, "Failed to apply change for %s, rc: %d",
-                        _modifierElements[(*modifierIndex)
-                        ]._toModify.toString().c_str(), rc ) ;
+               PD_LOG_MSG ( PDERROR, "Failed to apply change for %s, rc: %d",
+                            _modifierElements[(*modifierIndex)
+                            ]._toModify.toString().c_str(), rc ) ;
                goto error ;
             }
-            // since we have processed the original data, we increase element
             e=es.next();
-            // again, don't change modifierIndex in loop
             break ;
 
          case RIGHT_BEFORE:
-            // in this situation, the original field is alphabetically ahead of
-            // requested field.
-            // for example current field is user.name but requested field is
-            // user.plan, then we simply add the field into new object
-            // original object doesn't need to change
 
-            // In the situation we are processing different object, for example
-            // requested update field is user.newfield.test
-            // current processing e is mydata.test
-            // in this case, we still keep appending mydata.test until hitting
-            // end of the object and return, without touching user.newfield.test
-            // so we should be safe here
             b.append(e) ;
-            // and increase element
             e=es.next() ;
             break ;
 
          case RIGHT_SUBFIELD:
          default :
-            //we should never reach this codepath
-            PD_LOG ( PDERROR, "Reaching unexpected codepath, cmp( %s, %s, "
-                     "res: %d )", _modifierElements[(*modifierIndex)
-                     ]._toModify.toString().c_str(),
-                     *ppRoot, cmp ) ;
+            PD_LOG_MSG ( PDERROR, "Reaching unexpected codepath, cmp( %s, %s, "
+                         "res: %d )", _modifierElements[(*modifierIndex)
+                         ]._toModify.toString().c_str(),
+                         *ppRoot, cmp ) ;
             rc = SDB_SYS ;
             goto error ;
          }
       }
-      // we break out the loop either hitting end of original object, or end of
-      // the modifier list
 
-      // if there's still any leftover in original object, let's append them
       while ( !e.eoo() )
       {
          b.append(e) ;
@@ -2227,7 +2612,6 @@ namespace engine
          (*ppRoot)[rootLen] = '\0' ;
          newRootLen = rootLen ;
 
-         // compare the full field name with requested update field
          /*FieldCompareResult cmp = compareDottedFieldNames (
                _modifierElements[(*modifierIndex)]._toModify.fieldName(),
                *ppRoot ) ;*/
@@ -2241,9 +2625,9 @@ namespace engine
                                       modifierIndex, hasCreateNewRoot ) ;
             if ( rc )
             {
-               PD_LOG ( PDERROR, "Failed to append for %s, rc: %d",
-                        _modifierElements[(*modifierIndex)
-                                         ]._toModify.toString().c_str(), rc );
+               PD_LOG_MSG ( PDERROR, "Failed to append for %s, rc: %d",
+                            _modifierElements[(*modifierIndex)
+                            ]._toModify.toString().c_str(), rc );
                goto error ;
             }
          }
@@ -2259,15 +2643,13 @@ namespace engine
    error :
       goto done ;
    }
-   // given a source BSON object and empty target, the returned target will
-   // contains modified data
 
-   // since we are dealing with tons of BSON object conversion, this part should
-   // ALWAYS protected by try{} catch{}
    // PD_TRACE_DECLARE_FUNCTION ( SDB__MTHMDF_MODIFY, "_mthModifier::modify" )
    INT32 _mthModifier::modify ( const BSONObj &source, BSONObj &target,
                                 BSONObj *srcID, BSONObj *srcChange,
-                                BSONObj *dstID, BSONObj *dstChange )
+                                BSONObj *dstID, BSONObj *dstChange,
+                                BSONObj *srcShardingKey,
+                                BSONObj *dstShardingKey )
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__MTHMDF_MODIFY );
@@ -2283,16 +2665,9 @@ namespace engine
          modifierSort() ;
       }
 
-      // create a builder with 10% extra space for buffer
       BSONObjBuilder builder ( (int)(source.objsize()*1.1));
-      // create sorted iterator
       BSONObjIteratorSorted es(source) ;
 
-      // index for modifier, should be less than _modifierElements.size()
-      // say if we have
-      // {$inc: {employee.salary, 100}, $set: {employee.status, "promoted"}},
-      // then we have 2 modifier ($inc and $set), so modifierIndex start from 0
-      // and should end at 1
 
       SINT32 modifierIndex = -1 ;
       _incModifierIndex( &modifierIndex ) ;
@@ -2300,7 +2675,7 @@ namespace engine
       pBuffer = (CHAR*)SDB_OSS_MALLOC ( SDB_PAGE_SIZE ) ;
       if ( !pBuffer )
       {
-         PD_LOG ( PDERROR, "Failed to allocate buffer for select" ) ;
+         PD_LOG_MSG ( PDERROR, "Failed to allocate buffer for select" ) ;
          rc = SDB_OOM ;
          goto error ;
       }
@@ -2328,21 +2703,13 @@ namespace engine
          }
       }
 
-      // create a new object based on the source
-      // "" is empty root, builder is BSONObjBuilder
-      // es is our iterator, and modifierIndex is the current modifier we are
-      // going to apply
-      // when this call returns SDB_OK, we should call builder.obj() to create
-      // BSONObject from the builder.
       rc = _buildNewObj ( &pBuffer, bufferSize, 0, builder, es,
                           &modifierIndex, FALSE ) ;
       if ( rc )
       {
-         PD_LOG ( PDERROR, "Failed to modify target, rc: %d", rc ) ;
+         PD_LOG_MSG ( PDERROR, "Failed to modify target, rc: %d", rc ) ;
          goto error ;
       }
-      // now target owns the builder buffer, since obj() will decouple() the
-      // buffer from builder, and assign holder to the new BSONObj
       target=builder.obj();
 
       if ( srcID )
@@ -2380,6 +2747,43 @@ namespace engine
       if ( dstChange )
       {
          *dstChange = _dstChgBuilder->obj () ;
+      }
+
+      if ( NULL != _shardingKeyGen )
+      {
+         if ( NULL != srcShardingKey )
+         {
+            BSONObjSet keySet ;
+            rc = _shardingKeyGen->getKeys( source, keySet, NULL, TRUE, TRUE, TRUE ) ;
+            if ( SDB_OK != rc )
+            {
+               PD_LOG ( PDERROR, "Failed to get sharding key from obj: %s, rc=%d",
+                        source.toString().c_str(), rc ) ;
+               goto error ;
+            }
+
+            if ( keySet.size() == 1 )
+            {
+               *srcShardingKey = *keySet.begin() ;
+            }
+         }
+
+         if ( NULL != dstShardingKey )
+         {
+            BSONObjSet keySet ;
+            rc = _shardingKeyGen->getKeys( target, keySet, NULL, TRUE, TRUE, TRUE ) ;
+            if ( SDB_OK != rc )
+            {
+               PD_LOG ( PDERROR, "Failed to get sharding key from obj: %s, rc=%d",
+                        target.toString().c_str(), rc ) ;
+               goto error ;
+            }
+
+            if ( keySet.size() == 1 )
+            {
+               *dstShardingKey = *keySet.begin() ;
+            }
+         }
       }
 
    done :

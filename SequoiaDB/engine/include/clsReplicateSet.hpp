@@ -90,7 +90,6 @@ namespace engine
          OSS_INLINE void setLocalID( const MsgRouteID &id )
          {
             _info.local = id ;
-            /// _agent was set by clsMgr.
          }
 
          OSS_INLINE const UINT32 ailves()
@@ -121,7 +120,6 @@ namespace engine
             return ;
          }
 
-         // timeout: ms
          OSS_INLINE UINT32 getAlivesByTimeout( UINT32 timeout =
                                                CLS_NODE_KEEPALIVE_TIMEOUT )
          {
@@ -209,6 +207,24 @@ namespace engine
             return sync( cb->getEndLsn(), cb, w ) ;
          }
 
+         virtual void  onSwitchLogFile( UINT32 preLogicalFileId,
+                                        UINT32 preFileId,
+                                        UINT32 curLogicalFileId,
+                                        UINT32 curFileId )
+         {
+            return ;
+         }
+
+         virtual void  onMoveLog( DPS_LSN_OFFSET moveToOffset,
+                                  DPS_LSN_VER moveToVersion,
+                                  DPS_LSN_OFFSET expectOffset,
+                                  DPS_LSN_VER expectVersion,
+                                  DPS_MOMENT moment,
+                                  INT32 errcode )
+         {
+            return ;
+         }
+
       public:
          void  regSession ( _clsDataSrcBaseSession *pSession ) ;
          void  unregSession ( _clsDataSrcBaseSession *pSession ) ;
@@ -230,6 +246,8 @@ namespace engine
 
          INT32 callCatalog( MsgHeader *header, UINT32 times = 1 ) ;
 
+         BOOLEAN getPrimaryInfo( _clsSharingStatus &primaryInfo ) ;
+
          void getGroupInfo( _MsgRouteID &primary,
                             vector<_netRouteNode > &group ) ;
 
@@ -237,10 +255,10 @@ namespace engine
          BOOLEAN        isSendNormal( UINT64 nodeID ) ;
 
          ossEvent*      getFaultEvent() ;
+         ossEvent*      getSyncEmptyEvent() ;
 
          INT64 netIn() ;
          INT64 netOut() ;
-         void resetMon() ;
 
          INT32 reelect( CLS_REELECTION_LEVEL lvl,
                         UINT32 seconds,
@@ -248,7 +266,6 @@ namespace engine
 
          void reelectionDone() ;
 
-         /// this func is used to support command "forceStepUp".
          INT32 stepUp( UINT32 seconds,
                        pmdEDUCB *cb ) ;
 
@@ -258,11 +275,12 @@ namespace engine
 
       private:
          INT32 _setGroupSet( const CLS_GROUP_VERSION &version,
-                             map<UINT64, _netRouteNode> &nodes ) ;
+                             map<UINT64, _netRouteNode> &nodes,
+                             BOOLEAN &changeStatus ) ;
 
          INT32 _alive( const _MsgRouteID &id ) ;
 
-         INT32 _handleSharingBeat( const _MsgClsBeat *msg ) ;
+         INT32 _handleSharingBeat( NET_HANDLE handle, const _MsgClsBeat *msg ) ;
 
          INT32 _handleSharingBeatRes( const _MsgClsBeatRes *msg ) ;
 
@@ -297,18 +315,17 @@ namespace engine
          ossRWMutex              _vecLatch ;
          std::vector<_clsDataSrcBaseSession*> _vecSrcSessions ;
 
-         // notify queue
          ossQueue< clsLSNNtyInfo >  _ntyQue ;
          DPS_LSN_OFFSET             _ntyLastOffset ;
          DPS_LSN_OFFSET             _ntyProcessedOffset ;
 
-         // sync control param
          UINT64                  _totalLogSize ;
          UINT64                  _sizethreshold[ CLS_SYNCCTRL_THRESHOLD_SIZE ] ;
          UINT32                  _timeThreshold[ CLS_SYNCCTRL_THRESHOLD_SIZE ] ;
          BOOLEAN                 _inSyncCtrl ;
 
          ossEvent                _faultEvent ;
+         ossEvent                _syncEmptyEvent ;
    } ;
 
    typedef class _clsReplicateSet clsReplicateSet ;

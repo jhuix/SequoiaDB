@@ -94,7 +94,6 @@ accesses) is the same as if
 
     template< class Allocator >
     class _BufBuilder {
-        // non-copyable, non-assignable
         _BufBuilder( const _BufBuilder& );
         _BufBuilder& operator=( const _BufBuilder& );
         Allocator al;
@@ -108,6 +107,7 @@ accesses) is the same as if
             else {
                 data = 0;
             }
+            reservedBytes = 0;
             l = 0;
         }
         ~_BufBuilder() { kill(); }
@@ -121,9 +121,11 @@ accesses) is the same as if
 
         void reset() {
             l = 0;
+            reservedBytes = 0;
         }
         void reset( int maxSize ) {
             l = 0;
+            reservedBytes = 0;
             if ( maxSize && size > maxSize ) {
                 al.Free(data);
                 data = (char*)al.Malloc(maxSize);
@@ -198,21 +200,44 @@ accesses) is the same as if
         /* returns the pre-grow write position */
         inline char* grow(int by) {
             int oldlen = l;
-            l += by;
-            if ( l > size ) {
-                grow_reallocate();
+            int newLen = l + by;
+            int minSize = newLen + reservedBytes;
+            if ( minSize > size ) {
+                grow_reallocate(minSize);
             }
+            l = newLen;
             return data + oldlen;
         }
 
+        /**
+         * Reserve room for some number of bytes to be claimed at a later time.
+         */
+        void reserveBytes(int bytes) {
+            int minSize = l + reservedBytes + bytes;
+            if (minSize > size)
+                grow_reallocate(minSize);
+
+            reservedBytes += bytes;
+        }
+
+        /**
+         * Claim an earlier reservation of some number of bytes. These bytes
+         * must already have been reserved. Appends of up to this many bytes
+         * immediately following a claim are guaranteed to succeed without a
+         * need to reallocate.
+         */
+        void claimReservedBytes(int bytes) {
+            assert(reservedBytes >= bytes);
+            reservedBytes -= bytes;
+        }
     private:
         /* "slow" portion of 'grow()'  */
-        void NOINLINE_DECL grow_reallocate() {
+        void NOINLINE_DECL grow_reallocate(int minSize) {
             int a = size * 2;
             if ( a == 0 )
                 a = 512;
-            if ( l > a )
-                a = l + 16 * 1024;
+            if ( minSize > a )
+                a = minSize + 16 * 1024;
             if ( a > BufferMaxSize )
                 msgasserted(13548, "BufBuilder grow() > 64MB");
             data = (char *) al.Realloc(data, a);
@@ -222,6 +247,7 @@ accesses) is the same as if
         char *data;
         int l;
         int size;
+        int reservedBytes;
 
         friend class StringBuilder;
     };
@@ -243,7 +269,6 @@ accesses) is the same as if
 
 #if defined(_WIN32)
 #pragma warning( push )
-// warning C4996: 'sprintf': This function or variable may be unsafe. Consider using sprintf_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS.
 #pragma warning( disable : 4996 )
 #endif
 
@@ -330,7 +355,6 @@ accesses) is the same as if
     private:
         BufBuilder _buf;
 
-        // non-copyable, non-assignable
         StringBuilder( const StringBuilder& );
         StringBuilder& operator=( const StringBuilder& );
 

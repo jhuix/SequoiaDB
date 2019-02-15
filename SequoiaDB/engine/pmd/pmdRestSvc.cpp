@@ -56,6 +56,7 @@ namespace engine
    {
       INT32 rc                = SDB_OK ;
       pmdKRCB *krcb           = pmdGetKRCB() ;
+      pmdOptionsCB *optionCB  = krcb->getOptionCB() ;
       monDBCB *mondbcb        = krcb->getMonDBCB () ;
       pmdEDUMgr *eduMgr       = cb->getEDUMgr() ;
       ossSocket *pListerner   = ( ossSocket* )pData ;
@@ -66,17 +67,42 @@ namespace engine
          goto error ;
       }
 
-      while ( !cb->isDisconnected() )
+      while ( !cb->isDisconnected() && !pListerner->isClosed() )
       {
          SOCKET s ;
          rc = pListerner->accept ( &s, NULL, NULL ) ;
-         // if we don't get anything for a period of time, let's loop
-         if ( SDB_TIMEOUT == rc || SDB_TOO_MANY_OPEN_FD == rc  )
+         if ( SDB_TIMEOUT == rc )
          {
             rc = SDB_OK ;
             continue ;
          }
-         // if we receive error due to database down, we finish
+         else if ( SDB_TOO_MANY_OPEN_FD == rc )
+         {
+            pListerner->close() ;
+            PD_LOG( PDERROR, "Can not accept more connections because of "
+                    "open files upto limits, restart listening" ) ;
+            pmdIncErrNum( rc ) ;
+
+            while( !cb->isDisconnected() )
+            {
+               pListerner->close() ;
+               ossSleep( 2 * OSS_ONE_SEC ) ;
+               rc = pListerner->initSocket() ;
+               if ( rc )
+               {
+                  continue ;
+               }
+               rc = pListerner->bind_listen() ;
+               if ( rc )
+               {
+                  continue ;
+               }
+               PD_LOG( PDEVENT, "Restart listening on port[%d] succeed",
+                       pListerner->getLocalPort() ) ;
+               break ;
+            }
+            continue ;
+         }
          if ( rc && PMD_IS_DB_DOWN() )
          {
             rc = SDB_OK ;
@@ -97,9 +123,7 @@ namespace engine
          }
 
          cb->incEventCount() ;
-         ++mondbcb->numConnects ;
 
-         // assign the socket to the arg
          void *pData = NULL ;
          *((SOCKET *) &pData) = s ;
 
@@ -110,8 +134,15 @@ namespace engine
             continue ;
          }
 
-         // now we have a tcp socket for a new connection, let's get an agent
-         // Note the new new socket sent passing to startEDU
+         mondbcb->connInc();
+         if ( mondbcb->isConnLimited( optionCB->getMaxConn() ) )
+         {
+            ossSocket newsock ( &s ) ;
+            newsock.close () ;
+            mondbcb->connDec();
+            continue ;
+         }
+
          rc = eduMgr->startEDU ( EDU_TYPE_RESTAGENT, pData, &agentEDU ) ;
 
          if ( rc )
@@ -119,9 +150,9 @@ namespace engine
             PD_LOG( ( rc == SDB_QUIESCED ? PDWARNING : PDERROR ),
                     "Failed to start edu, rc: %d", rc ) ;
 
-            // close remote connection if we can't create new thread
             ossSocket newsock ( &s ) ;
             newsock.close () ;
+            mondbcb->connDec();
             continue ;
          }
       } //while ( ! cb->isDisconnected() )
@@ -131,6 +162,10 @@ namespace engine
    error :
       goto done ;
    }
+
+   PMD_DEFINE_ENTRYPOINT( EDU_TYPE_RESTLISTENER, TRUE,
+                          pmdRestSvcEntryPoint,
+                          "RestListener" ) ;
 
    /*
       rest agent entry point
@@ -175,9 +210,15 @@ namespace engine
          restSession.detachProcessor() ;
          restSession.detach() ;
       }
+      
+      pmdGetKRCB()->getMonDBCB ()->connDec();
 
       return rc ;
    }
+
+   PMD_DEFINE_ENTRYPOINT( EDU_TYPE_RESTAGENT, FALSE,
+                          pmdRestAgentEntryPoint,
+                          "RestAgent" ) ;
 
 }
 

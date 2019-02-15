@@ -37,8 +37,9 @@
 
 #ifndef NETTIMER_HPP_
 #define NETTIMER_HPP_
+
 #include "core.hpp"
-#include <boost/date_time/posix_time/posix_time.hpp>
+#include <boost/asio/steady_timer.hpp>
 #include <boost/enable_shared_from_this.hpp>
 #include <boost/bind.hpp>
 #include <boost/asio.hpp>
@@ -47,6 +48,9 @@
 
 namespace engine
 {
+   /*
+      _netTimeoutHandler define
+   */
    class _netTimeoutHandler : public SDBObject
    {
       public:
@@ -54,57 +58,63 @@ namespace engine
       public:
          virtual void handleTimeout( const UINT32 &millisec,
                                      const UINT32 &id ) = 0;
-   };
+   } ;
+   typedef _netTimeoutHandler netTimeoutHandler ;
 
-   class _netTimer :
-         public boost::enable_shared_from_this<_netTimer>,
-         public SDBObject
+   /*
+      _netTimer define
+   */
+   class _netTimer : public boost::enable_shared_from_this<_netTimer>,
+                     public SDBObject
    {
       public:
-         _netTimer( UINT32 millisec, UINT32 id, boost::asio::io_service &io,
-                    _netTimeoutHandler *handler ):
-                  _timer( io, boost::posix_time::milliseconds(millisec)),
-                  _handler(handler),
-                  _id(id),
-                  _millisec(millisec),
-                  _actived(TRUE)
+         _netTimer( UINT32 millisec,
+                    UINT32 id,
+                    boost::asio::io_service &io,
+                    _netTimeoutHandler *handler )
+         :_timer( io ),
+          _handler(handler),
+          _id(id),
+          _millisec(millisec),
+          _actived( TRUE )
          {
-
          }
 
          ~_netTimer()
          {
          }
+
       public:
-         OSS_INLINE void timeoutCallback( const boost::system::error_code &
-                                      error )
+         OSS_INLINE void timeoutCallback( const boost::system::error_code &error )
          {
             if ( !error )
             {
                _handler->handleTimeout( _millisec, _id ) ;
             }
             asyncWait() ;
-            return ;
          }
+
          OSS_INLINE UINT32 id()
          {
             return _id ;
          }
+
          OSS_INLINE UINT32 timeout()
          {
             return _millisec ;
          }
+
          OSS_INLINE void asyncWait()
          {
-            if ( !_actived )
+            if ( _actived )
             {
-               return ;
+               _timer.expires_from_now( boost::chrono::milliseconds(_millisec) ) ;
+               _timer.async_wait( boost::bind( &_netTimer::timeoutCallback,
+                                               shared_from_this(),
+                                               boost::asio::placeholders::error ) ) ;
             }
-            _timer.expires_from_now(boost::posix_time::milliseconds(_millisec));
-            _timer.async_wait(boost::bind(&_netTimer::timeoutCallback,
-                                          shared_from_this(),
-                                          boost::asio::placeholders::error));
          }
+
          OSS_INLINE void cancel()
          {
             _actived = FALSE ;
@@ -112,15 +122,16 @@ namespace engine
          }
 
       private:
-         boost::asio::deadline_timer _timer;
-         _netTimeoutHandler *_handler ;
-         UINT32 _id ;
-         UINT32 _millisec ;
-         BOOLEAN _actived ;
-   };
+         boost::asio::steady_timer  _timer;
+         _netTimeoutHandler         *_handler ;
+         UINT32                     _id ;
+         UINT32                     _millisec ;
+         BOOLEAN                    _actived ;
+   } ;
+   typedef _netTimer netTimer ;
 
-   typedef boost::shared_ptr<_netTimer> NET_TH ;
+   typedef boost::shared_ptr<_netTimer>         NET_TH ;
 }
 
-#endif
+#endif // NETTIMER_HPP_
 

@@ -3,7 +3,6 @@
 
 #include "util.hpp"
 
-///< sdb client
 __METHOD_DECLARE(sdb_create_client) ;
 __METHOD_DECLARE(sdb_release_client) ;
 __METHOD_DECLARE(sdb_connect) ;
@@ -42,12 +41,18 @@ __METHOD_DECLARE(sdb_list_tasks) ;
 __METHOD_DECLARE(sdb_wait_task) ;
 __METHOD_DECLARE(sdb_cancel_task) ;
 __METHOD_DECLARE(sdb_set_session_attri) ;
+__METHOD_DECLARE(sdb_get_session_attri) ;
 __METHOD_DECLARE(sdb_close_all_cursors) ;
 __METHOD_DECLARE(sdb_is_valid) ;
 __METHOD_DECLARE(sdb_get_version) ;
+__METHOD_DECLARE(sdb_init_client) ;
+__METHOD_DECLARE(sdb_create_domain) ;
+__METHOD_DECLARE(sdb_drop_domain) ;
+__METHOD_DECLARE(sdb_get_domain) ;
+__METHOD_DECLARE(sdb_sync) ;
 __METHOD_DECLARE(sdb_get_datacenter) ;
+__METHOD_DECLARE(sdb_analyze) ;
 
-///< collection space
 __METHOD_DECLARE(create_cs) ;
 __METHOD_DECLARE(release_cs) ;
 __METHOD_DECLARE(cs_get_collection) ;
@@ -56,7 +61,6 @@ __METHOD_DECLARE(cs_create_collection_use_opt) ;
 __METHOD_DECLARE(cs_drop_collection) ;
 __METHOD_DECLARE(cs_get_collection_space_name) ;
 
-///< collection
 __METHOD_DECLARE(create_cl) ;
 __METHOD_DECLARE(release_cl) ;
 __METHOD_DECLARE(cl_get_count) ;
@@ -83,21 +87,26 @@ __METHOD_DECLARE(cl_get_query_meta) ;
 __METHOD_DECLARE(cl_attach_collection) ;
 __METHOD_DECLARE(cl_detach_collection) ;
 __METHOD_DECLARE(cl_create_lob) ;
-__METHOD_DECLARE(cl_get_lob) ;
+__METHOD_DECLARE(cl_open_lob) ;
 __METHOD_DECLARE(cl_remove_lob) ;
+__METHOD_DECLARE(cl_truncate_lob);
 __METHOD_DECLARE(cl_list_lobs) ;
 __METHOD_DECLARE(cl_truncate) ;
 __METHOD_DECLARE(cl_create_id_index) ;
 __METHOD_DECLARE(cl_drop_id_index) ;
 
-///< cursor
+__METHOD_DECLARE(create_domain) ;
+__METHOD_DECLARE(release_domain) ;
+__METHOD_DECLARE(domain_alter) ;
+__METHOD_DECLARE(domain_list_cs) ;
+__METHOD_DECLARE(domain_list_cl) ;
+
 __METHOD_DECLARE(create_cursor) ;
 __METHOD_DECLARE(release_cursor) ;
 __METHOD_DECLARE(cr_next) ;
 __METHOD_DECLARE(cr_current) ;
 __METHOD_DECLARE(cr_close) ;
 
-///< group
 __METHOD_DECLARE(create_group) ;
 __METHOD_DECLARE(release_group) ;
 __METHOD_DECLARE(gp_get_nodenum) ;
@@ -114,7 +123,6 @@ __METHOD_DECLARE(gp_start) ;
 __METHOD_DECLARE(gp_stop) ;
 __METHOD_DECLARE(gp_is_catalog) ;
 
-///< node
 __METHOD_DECLARE(create_node) ;
 __METHOD_DECLARE(release_node) ;
 __METHOD_DECLARE(nd_connect) ;
@@ -125,18 +133,19 @@ __METHOD_DECLARE(nd_get_nodename) ;
 __METHOD_DECLARE(nd_stop) ;
 __METHOD_DECLARE(nd_start) ;
 
-///< lob
 __METHOD_DECLARE(create_lob) ;
 __METHOD_DECLARE(release_lob) ;
 __METHOD_DECLARE(lob_close) ;
 __METHOD_DECLARE(lob_read) ;
 __METHOD_DECLARE(lob_write) ;
 __METHOD_DECLARE(lob_seek) ;
+__METHOD_DECLARE(lob_lock) ;
+__METHOD_DECLARE(lob_lock_and_seek) ;
 __METHOD_DECLARE(lob_get_create_time) ;
+__METHOD_DECLARE(lob_get_modification_time) ;
 __METHOD_DECLARE(lob_get_size) ;
 __METHOD_DECLARE(lob_get_oid) ;
 
-///< data center
 __METHOD_DECLARE(create_dc) ;
 __METHOD_DECLARE(release_dc) ;
 __METHOD_DECLARE(dc_get_name) ;

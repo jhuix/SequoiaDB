@@ -123,7 +123,6 @@
 #include "utilTrace.hpp"
 
 
-
 #ifdef _WIN32
 #include <windows.h>
 #include <io.h>
@@ -250,28 +249,27 @@ static int win32read(char *c)
             e = b.Event.KeyEvent;
             *c = b.Event.KeyEvent.uChar.AsciiChar;
 
-            //if (e.dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED))
-            //{
                 /* Alt+key ignored */
-            //} else
             if (e.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))
             {
                 /* Ctrl+Key */
                 switch (*c)
                 {
-                    case 1: // ctrl+a, move to beginning of line
-                    case 2: // ctrl+b, left_arrow
-                    case 3: // ctrl+c, cancel or quit
-                    case 4: // ctrl+d, remove char at right of cursor
-                    case 5: // ctrl+e, move to end of line
-                    case 6: // ctrl+f, right_arrow
-                    case 8: // ctrl+h, backspace
-                    case 11: // ctrl+k, delete from current to the end of line
-                    case 12: // ctrl+l, clear the screen
-                    case 14: // ctrl+n, down_arrow
-                    case 16: // ctrl+p, up_arrow
-                    case 20: // ctrl+t, swap the char at the cursor and the one before
-                    case 21: // ctrl+u, delete the whole line
+                    case CTRL_A: // ctrl+a, move to beginning of line
+                    case CTRL_B: // ctrl+b, left_arrow
+                    case CTRL_C: // ctrl+c, cancel or quit
+                    case CTRL_D: // ctrl+d, remove char at right of cursor
+                    case CTRL_E: // ctrl+e, move to end of line
+                    case CTRL_F: // ctrl+f, right_arrow
+                    case CTRL_H: // ctrl+h, backspace
+                    case CTRL_K: // ctrl+k, delete from current to the end of line
+                    case CTRL_L: // ctrl+l, clear the screen
+                    case CTRL_M:
+                    case CTRL_N: // ctrl+n, down_arrow
+                    case CTRL_P: // ctrl+p, up_arrow
+                    case CTRL_T: // ctrl+t, swap the char at the cursor and the one before
+                    case CTRL_U: // ctrl+u, delete the whole line
+                    case CTRL_W:
                         ret = 1;
                         goto done;
                     default:
@@ -437,7 +435,7 @@ static int enableRawMode(int fd)
     raw.c_cc[VMIN] = 1; raw.c_cc[VTIME] = 0; /* 1 byte, no timer */
 
     /* put terminal in raw mode after flushing */
-    if (tcsetattr(fd,TCSAFLUSH,&raw) < 0) goto error;
+    if (tcsetattr(fd,TCSADRAIN,&raw) < 0) goto error;
     rawmode = 1;
 #else
     REDIS_NOTUSED(fd);
@@ -490,7 +488,7 @@ static void disableRawMode(int fd)
     rawmode = 0;
 #else
     /* Don't even check the return value as it's too late. */
-    if (rawmode && tcsetattr(fd,TCSAFLUSH,&orig_termios) != -1)
+    if (rawmode && tcsetattr(fd,TCSADRAIN,&orig_termios) != -1)
         rawmode = 0;
 #endif
     PD_TRACE_EXIT ( SDB_DISABLERAWMODE );
@@ -826,6 +824,7 @@ static void abAppend(struct abuf *ab, const char *s, int len)
     char *newone = (char *)realloc(ab->b,ab->len+len);
 
     if (newone == NULL) return;
+
     memcpy(newone+ab->len,s,len);
     ab->b = newone;
     ab->len += len;
@@ -849,7 +848,6 @@ static int calcHighLightPos( struct linenoiseState *l )
     char *buffer = l->buf ;
     int highlight_pos = -1 ;
 
-    // find out the place to high light
     if ( ( !l->remove_col ) && ( pos < len ) )
     {
        int direction = 0 ;
@@ -907,7 +905,6 @@ static int setDisplayAttribute( bool enhancedDisplay,
         switch ( oldLowByte )
         {
         case 0x07:
-            // most similar to xterm appearance
             newLowByte = FOREGROUND_BLUE | FOREGROUND_GREEN ;
             break;
         case 0x70:
@@ -1220,17 +1217,25 @@ static void refreshMultiLine(struct linenoiseState *l)
 
     /* Clear the contents from the last line up to the top */
     coord.X = 0 ;
-    y = b.dwCursorPosition.Y - rpos + 1 ;
 
+    if( b.dwCursorPosition.Y )
+    {
+      y = b.dwCursorPosition.Y - rpos + 1 ;
+    }
+    else
+    {
+      /* If the screen has been cleaned up,
+       *  need to refresh the content from the first line.
+       */
+      y = 0 ;
+    }
     for ( int i = 0 ; i < old_rows - 1 ; ++i )
     {
-        // in windows, we need to minus 1, because (X, Y) start from (0, 0)
         coord.Y = y + old_rows - 1 - i ;
         setDisplayAttribute( false, coord, b.dwSize.X ) ;
         FillConsoleOutputCharacterA( hOut, ' ', b.dwSize.X, coord, &w ) ;
     }
 
-    // clear the top line
     coord.Y = y ;
     setDisplayAttribute( false, coord, b.dwSize.X ) ;
     FillConsoleOutputCharacterA( hOut, ' ', b.dwSize.X, coord, &w ) ;
@@ -1239,7 +1244,6 @@ static void refreshMultiLine(struct linenoiseState *l)
          ( plen + (int)l->pos ) % (int)l->cols == 0 ||
          moveLeft )
     {
-        // Move cursor to the left edge
         SetConsoleCursorPosition( hOut, coord ) ;
     }
     int beginY = coord.Y ;
@@ -1336,8 +1340,6 @@ static void refreshMultiLine(struct linenoiseState *l)
     if ( !moveLeft )
     {
         coord.Y = y + rpos2 - 1 ;
-        // In windows, (X, Y) coordinate start from top left corner (0, 0)
-        // X = 0 is the first column
         coord.X = ( plen + (int)l->pos ) % (int)l->cols ;
     }
     else
@@ -1348,7 +1350,6 @@ static void refreshMultiLine(struct linenoiseState *l)
 
     /* record the position for next refresh */
     l->oldpos = l->pos ;
-
 #endif
 done:
     PD_TRACE_EXIT ( SDB_REFRESHMULTILINE );
@@ -1374,7 +1375,7 @@ static void refreshLine(struct linenoiseState *l)
  *
  * On error writing to the terminal -1 is returned, otherwise 0. */
 PD_TRACE_DECLARE_FUNCTION ( SDB_LNEDITINSERT, "linenoiseEditInsert" )
-int linenoiseEditInsert(struct linenoiseState *l, char c) 
+int linenoiseEditInsert(struct linenoiseState *l, char c)
 {
     PD_TRACE_ENTRY ( SDB_LNEDITINSERT );
     int ret = 0;
@@ -1642,6 +1643,10 @@ static int linenoiseEdit( int stdin_fd, int stdout_fd, char *buf,
          * character that should be handled next. */
         if (c == 9 && completionCallback != NULL)
         {
+            if( !linenoiseIsStdinEmpty() )
+            {
+               continue ;
+            }
             c = completeLine(&l);
             /* Return on errors */
             if (c < 0)
@@ -1656,7 +1661,6 @@ static int linenoiseEdit( int stdin_fd, int stdout_fd, char *buf,
         switch(c)
         {
         case ENTER:    /* enter */
-            // remove colour
             l.remove_col = true ;
             refreshLine( &l ) ;
             history_len--;
@@ -1664,14 +1668,13 @@ static int linenoiseEdit( int stdin_fd, int stdout_fd, char *buf,
             ret = (int)l.len;
             goto done;
         case CTRL_C:  /* ctrl-c */
-            // remove colour
             l.remove_col = true ;
             refreshLine( &l ) ;
             errno = (l.len == 0 && 0 == strncmp(l.prompt, "> ", strlen("> ")))
                      ? EAGAIN : ECANCELED ;
             ret = -1;
             goto done;
-            case 127: /* backspace in linux and delete in windows */
+        case 127: /* backspace in linux and delete in windows */
 #ifdef _WIN32
             /* delete in _WIN32*/
             /* win32read() will send 127 for DEL and 8 for BS and Ctrl-H */
@@ -2195,7 +2198,7 @@ int linenoiseHistoryLoad(const char *filename)
     }
     fclose(fp);
 done:
-    PD_TRACE_EXIT ( SDB_LNHISTORYSAVE );
+    PD_TRACE_EXIT ( SDB_LNHISTORYLOAD );
     return ret;
 error:
     goto done;
@@ -2215,8 +2218,6 @@ static void setDisplayAttribute( bool enhancedDisplay, struct abuf *ab )
         BYTE newLowByte;
         switch ( oldLowByte ) {
         case 0x07:
-            //newLowByte = FOREGROUND_BLUE | FOREGROUND_INTENSITY;  // too dim
-            //newLowByte = FOREGROUND_BLUE;                         // even dimmer
             newLowByte = FOREGROUND_BLUE | FOREGROUND_GREEN;        // most similar to xterm appearance
             break;
         case 0x70:
@@ -2244,4 +2245,59 @@ static void setDisplayAttribute( bool enhancedDisplay, struct abuf *ab )
     }
 #endif
    PD_TRACE_EXIT ( SDB_SETDISPLAYATTRIBUTE );
+}
+
+void linenoiseClearInputBuffer( void )
+{
+#ifdef _WIN32
+   FlushConsoleInputBuffer( hIn ) ;
+#else
+   tcflush( STDIN_FILENO, TCIOFLUSH ) ;
+#endif
+}
+
+int linenoiseIsStdinEmpty()
+{
+   int ret = 1 ;
+#ifdef _WIN32
+   DWORD len = 0 ;
+   if( GetNumberOfConsoleInputEvents( hIn, &len ) )
+   {
+      if( len > 0 )
+      {
+         ret = 0 ;
+      }
+   }
+   else
+   {
+      goto error ;
+   }
+#else
+   int len = 0 ;
+   int hasEnableRawMode = rawmode ;
+
+   if( !hasEnableRawMode )
+   {
+      if( 0 != enableRawMode( STDIN_FILENO ) )
+      {
+         goto error ;
+      }
+   }
+   if( !ioctl( STDIN_FILENO, FIONREAD, &len ) )
+   {
+      if( len > 0 )
+      {
+         ret = 0 ;
+      }
+   }
+   if( !hasEnableRawMode )
+   {
+      disableRawMode( STDIN_FILENO ) ;
+   }
+#endif
+done:
+   return ret ;
+error:
+   ret = 1 ;
+   goto done ;
 }

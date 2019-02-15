@@ -47,27 +47,26 @@ using namespace bson;
 
 namespace engine
 {
-   // Before using ixmIndexCB, after create the object user must check
-   // isInitialized ()
-   // create index details from existing extent
-   PD_TRACE_DECLARE_FUNCTION ( SDB__IXMINXCB1, "_ixmIndexCB::_ixmIndexCB" )
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__IXMINXCB1, "_ixmIndexCB::_ixmIndexCB" )
    _ixmIndexCB::_ixmIndexCB ( dmsExtentID extentID,
                               _dmsStorageIndex *pIndexSu,
                               _dmsContext *context )
+   :_extent( NULL )
    {
       SDB_ASSERT ( pIndexSu, "index su can't be NULL" ) ;
       PD_TRACE_ENTRY ( SDB__IXMINXCB1 );
       _isInitialized = FALSE ;
-      _extent = (ixmIndexCBExtent*)(pIndexSu->extentAddr ( extentID )) ;
       _pIndexSu = pIndexSu ;
       _pContext = context ;
       _extentID = extentID ;
       _pageSize = _pIndexSu->pageSize () ;
+      _extent = (const ixmIndexCBExtent*)pIndexSu->beginFixedAddr( extentID,
+                                                                   1 ) ;
       _init() ;
       PD_TRACE_EXIT( SDB__IXMINXCB1 );
    }
 
-   PD_TRACE_DECLARE_FUNCTION ( SDB__IXMINXCB2, "_ixmIndexCB::_ixmIndexCB" )
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__IXMINXCB2, "_ixmIndexCB::_ixmIndexCB" )
    _ixmIndexCB::_ixmIndexCB ( dmsExtentID extentID,
                               const BSONObj &infoObj,
                               UINT16 mbID ,
@@ -77,15 +76,19 @@ namespace engine
       SDB_ASSERT ( pIndexSu, "index su can't be NULL" ) ;
       PD_TRACE_ENTRY ( SDB__IXMINXCB2 );
 
+      ixmIndexCBExtent *pExtent = NULL ;
       _isInitialized = FALSE ;
-      _extent = (ixmIndexCBExtent*)(pIndexSu->extentAddr ( extentID )) ;
-      _extent->_type = IXM_EXTENT_TYPE_NONE ;
+      dmsExtRW extRW ;
       _pIndexSu = pIndexSu ;
       _pContext = context ;
       _extentID = extentID ;
-      _pageSize = _pIndexSu->pageSize () ;
+      _pageSize = _pIndexSu->pageSize() ;
 
-      // make sure the index object is not too big
+      _extent = (const ixmIndexCBExtent*)pIndexSu->beginFixedAddr ( extentID,
+                                                                    1 ) ;
+      extRW = pIndexSu->extent2RW( extentID, context->mbID() ) ;
+      pExtent = extRW.writePtr<ixmIndexCBExtent>( 0, _pageSize ) ;
+
       if ( infoObj.objsize() + IXM_INDEX_CB_EXTENT_METADATA_SIZE >=
            (UINT32)_pageSize )
       {
@@ -94,42 +97,35 @@ namespace engine
          goto error ;
       }
 
-      _extent->_type = IXM_EXTENT_TYPE_NONE ;
-      if ( !generateIndexType( infoObj, _extent->_type ) )
+      pExtent->_type = IXM_EXTENT_TYPE_NONE ;
+      if ( !generateIndexType( infoObj, pExtent->_type ) )
       {
          goto error ;
       }
 
-      // Caller must make sure the given extentID is free and can be used
-      // In ixmIndexDetails we don't bother to check whether the extent is
-      // freed or not
 
-      // write stuff into extent
-      _extent->_flag           = DMS_EXTENT_FLAG_INUSE ;
-      _extent->_eyeCatcher [0] = IXM_EXTENT_CB_EYECATCHER0 ;
-      _extent->_eyeCatcher [1] = IXM_EXTENT_CB_EYECATCHER1 ;
-      _extent->_indexFlag      = IXM_INDEX_FLAG_INVALID ;
-      _extent->_mbID           = mbID ;
-      _extent->_version        = DMS_EXTENT_CURRENT_V ;
-      _extent->_logicID        = DMS_INVALID_EXTENT ;
-      _extent->_scanExtLID     = DMS_INVALID_EXTENT ;
-      // not creating index root page yet
-      _extent->_rootExtentID   = DMS_INVALID_EXTENT ;
-      ossMemset( _extent->_reserved, 0, sizeof( _extent->_reserved ) ) ;
-      // copy index def into extent. when it is replay op(has oid already),
-      // no need to add oid.
+      pExtent->_flag           = DMS_EXTENT_FLAG_INUSE ;
+      pExtent->_eyeCatcher [0] = IXM_EXTENT_CB_EYECATCHER0 ;
+      pExtent->_eyeCatcher [1] = IXM_EXTENT_CB_EYECATCHER1 ;
+      pExtent->_indexFlag      = IXM_INDEX_FLAG_INVALID ;
+      pExtent->_mbID           = mbID ;
+      pExtent->_version        = DMS_EXTENT_CURRENT_V ;
+      pExtent->_logicID        = DMS_INVALID_EXTENT ;
+      pExtent->_scanExtLID     = DMS_INVALID_EXTENT ;
+      pExtent->_rootExtentID   = DMS_INVALID_EXTENT ;
+      ossMemset( pExtent->_reserved, 0, sizeof( pExtent->_reserved ) ) ;
       if ( !infoObj.hasField (DMS_ID_KEY_NAME) )
       {
          _IDToInsert oid ;
          oid._oid.init() ;
-         *(INT32*)(((CHAR*)_extent) +IXM_INDEX_CB_EXTENT_METADATA_SIZE) =
+         *(INT32*)(((CHAR*)pExtent) +IXM_INDEX_CB_EXTENT_METADATA_SIZE) =
                infoObj.objsize() + sizeof(_IDToInsert) ;
-         ossMemcpy ( ((CHAR*)_extent) +
+         ossMemcpy ( ((CHAR*)pExtent) +
                      IXM_INDEX_CB_EXTENT_METADATA_SIZE +
                      sizeof(INT32),
                      (CHAR*)(&oid),
                      sizeof(_IDToInsert)) ;
-         ossMemcpy ( ((CHAR*)_extent) +
+         ossMemcpy ( ((CHAR*)pExtent) +
                      IXM_INDEX_CB_EXTENT_METADATA_SIZE +
                      sizeof(INT32) +
                      sizeof(_IDToInsert),
@@ -138,12 +134,11 @@ namespace engine
       }
       else
       {
-         ossMemcpy ( ((CHAR*)_extent) +
+         ossMemcpy ( ((CHAR*)pExtent) +
                      IXM_INDEX_CB_EXTENT_METADATA_SIZE,
                      infoObj.objdata(),
                      infoObj.objsize() ) ;
       }
-      // call _init() to load things back from page
       _init() ;
 
    done :
@@ -153,7 +148,67 @@ namespace engine
       goto done ;
    }
 
-   PD_TRACE_DECLARE_FUNCTION ( SDB__IXMINXCB_GETKEY, "_ixmIndexCB::getKeysFromObject" )
+   _ixmIndexCB::~_ixmIndexCB()
+   {
+      if ( _extent )
+      {
+         _pIndexSu->endFixedAddr( (const ossValuePtr)_extent ) ;
+      }
+      _pIndexSu = NULL ;
+      _pContext = NULL ;
+   }
+
+   void _ixmIndexCB::setFlag( UINT16 flag )
+   {
+      SDB_ASSERT ( _isInitialized,
+                   "index details must be initialized first" ) ;
+      dmsExtRW extRW = _pIndexSu->extent2RW( _extentID,
+                                             _pContext->mbID() ) ;
+      ixmIndexCBExtent *pExtent = extRW.writePtr<ixmIndexCBExtent>() ;
+      pExtent->_indexFlag = flag ;
+   }
+
+   void _ixmIndexCB::setLogicalID( dmsExtentID logicalID )
+   {
+      SDB_ASSERT ( _isInitialized,
+                   "index details must be initialized first" ) ;
+      dmsExtRW extRW = _pIndexSu->extent2RW( _extentID,
+                                             _pContext->mbID() ) ;
+      ixmIndexCBExtent *pExtent = extRW.writePtr<ixmIndexCBExtent>() ;
+      pExtent->_logicID = logicalID ;
+   }
+
+   void _ixmIndexCB::clearLogicID()
+   {
+      SDB_ASSERT ( _isInitialized,
+                   "index details must be initialized first" ) ;
+      dmsExtRW extRW = _pIndexSu->extent2RW( _extentID,
+                                             _pContext->mbID() ) ;
+      ixmIndexCBExtent *pExtent = extRW.writePtr<ixmIndexCBExtent>() ;
+      pExtent->_logicID = DMS_INVALID_EXTENT ;
+   }
+
+   void _ixmIndexCB::scanExtLID ( UINT32 extLID )
+   {
+      SDB_ASSERT ( _isInitialized,
+                   "index details must be initialized first" ) ;
+      dmsExtRW extRW = _pIndexSu->extent2RW( _extentID,
+                                             _pContext->mbID() ) ;
+      ixmIndexCBExtent *pExtent = extRW.writePtr<ixmIndexCBExtent>() ;
+      pExtent->_scanExtLID = extLID ;
+   }
+
+   void _ixmIndexCB::setRoot ( dmsExtentID rootExtentID )
+   {
+      SDB_ASSERT ( _isInitialized,
+                   "index details must be initialized first" ) ;
+      dmsExtRW extRW = _pIndexSu->extent2RW( _extentID,
+                                             _pContext->mbID() ) ;
+      ixmIndexCBExtent *pExtent = extRW.writePtr<ixmIndexCBExtent>() ;
+      pExtent->_rootExtentID = rootExtentID ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__IXMINXCB_GETKEY, "_ixmIndexCB::getKeysFromObject" )
    INT32 _ixmIndexCB::getKeysFromObject ( const BSONObj &obj,
                                           BSONObjSet &keys ) const
    {
@@ -176,7 +231,6 @@ namespace engine
       goto done ;
    }
 
-   // if the field exist in the index object, returns the ith position
    INT32 _ixmIndexCB::keyPatternOffset( const CHAR *key ) const
    {
       SDB_ASSERT ( _isInitialized,
@@ -193,7 +247,6 @@ namespace engine
       return -1 ;
    }
 
-   // allocate an extent for the index
    INT32 _ixmIndexCB::allocExtent ( dmsExtentID &extentID )
    {
       SDB_ASSERT ( _isInitialized,
@@ -205,8 +258,8 @@ namespace engine
    {
       return _pIndexSu->releaseExtent ( extentID ) ;
    }
-   
-   PD_TRACE_DECLARE_FUNCTION ( SDB__IXMINXCB_TRUNC, "_ixmIndexCB::truncate" )
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__IXMINXCB_TRUNC, "_ixmIndexCB::truncate" )
    INT32 _ixmIndexCB::truncate ( BOOLEAN removeRoot )
    {
       INT32 rc = SDB_OK ;
@@ -216,16 +269,20 @@ namespace engine
       dmsExtentID root = getRoot() ;
       if ( DMS_INVALID_EXTENT != root )
       {
+         BOOLEAN valid = TRUE ;
          ixmExtent rootExtent ( root, _pIndexSu ) ;
-         rootExtent.truncate ( this ) ;
-         if ( removeRoot )
+         rootExtent.truncate ( this, DMS_INVALID_EXTENT, valid ) ;
+         if ( valid && removeRoot )
          {
+            UINT16 mbID = rootExtent.getMBID() ;
+            UINT16 freeSize = rootExtent.getFreeSize() ;
             rc = freeExtent ( root ) ;
             if ( rc )
             {
                PD_LOG ( PDERROR, "Failed to free extent %d", root ) ;
                goto error ;
             }
+            _pIndexSu->decStatFreeSpace( mbID, freeSize ) ;
          }
       }
       setFlag ( IXM_INDEX_FLAG_NORMAL ) ;
@@ -239,11 +296,10 @@ namespace engine
       goto done ;
    }
 
-   //PD_TRACE_DECLARE_FUNCTION ( SDB__IXMINXCB_ISSAMEDEF, "_ixmIndexCB::isSameDef" )
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__IXMINXCB_ISSAMEDEF, "_ixmIndexCB::isSameDef" )
    BOOLEAN _ixmIndexCB::isSameDef( const BSONObj &defObj,
-                                   BOOLEAN strict )
+                                   BOOLEAN strict ) const
    {
-      //PD_TRACE_ENTRY ( SDB__IXMINXCB_ISSAMEDEF );
       BOOLEAN rs = TRUE;
       SDB_ASSERT( TRUE == _isInitialized, "indexCB must be intialized!" );
       try
@@ -273,10 +329,8 @@ namespace engine
          {
             if ( lIsUnique )
             {
-               /// it is useless to create any same defined index
-               /// when an unique index exists.
                rs = TRUE ;
-               goto done ;         
+               goto done ;
             }
             else if ( lIsUnique != rIsUnique )
             {
@@ -285,7 +339,6 @@ namespace engine
             }
             else
             {
-               /// do nothing.
             }
          }
          else
@@ -323,7 +376,6 @@ namespace engine
       }
 
    done:
-      //PD_TRACE_EXIT( SDB__IXMINXCB_ISSAMEDEF );
       return rs;
    }
 

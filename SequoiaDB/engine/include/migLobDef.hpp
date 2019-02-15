@@ -113,7 +113,6 @@ enum MIG_OP_TYPE
       }
    } ;
 
-   /// 64KB
    struct migFileHeader 
    {
       CHAR eyeCatcher[8] ;
@@ -127,7 +126,7 @@ enum MIG_OP_TYPE
       {
          SDB_ASSERT( 65536 == sizeof( migFileHeader ), "must be 64KB" ) ;
          ossMemset( this, 0, sizeof( migFileHeader ) ) ;
-         ossMemcpy( this, MIG_FILE_EYE, ossStrlen( MIG_FILE_EYE ) + 1 ) ;
+         ossMemcpy( eyeCatcher, MIG_FILE_EYE, sizeof( MIG_FILE_EYE ) ) ;
          version = MIG_LOB_TOOL_VERSION ;
       }
 

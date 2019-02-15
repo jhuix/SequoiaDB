@@ -68,10 +68,41 @@ namespace engine
       _lock.release() ;
    }
 
+   void omHostVersion::setPrivilege( string clusterName, BOOLEAN privilege )
+   {
+      _lock.get() ;
+      _mapClusterPrivilege[clusterName] = privilege ;
+      _lock.release() ;
+   }
+
+   BOOLEAN omHostVersion::getPrivilege( string clusterName )
+   {
+      BOOLEAN privilege = TRUE ;
+
+      _lock.get() ;
+      {
+         map<string, BOOLEAN>::iterator iter ;
+
+         iter = _mapClusterPrivilege.find( clusterName ) ;
+         if ( iter == _mapClusterPrivilege.end() )
+         {
+            privilege = TRUE ;
+         }
+         else
+         {
+            privilege = _mapClusterPrivilege[clusterName] ;
+         }
+      }
+      _lock.release() ;
+
+      return privilege ;
+   }
+
    void omHostVersion::removeVersion( string clusterName )
    {
       _lock.get() ;
       _mapClusterVersion.erase( clusterName ) ;
+      _mapClusterPrivilege.erase( clusterName ) ;
       _lock.release() ;
    }
 
@@ -125,8 +156,6 @@ namespace engine
               newVersion, _clusterName.c_str() ) ;
       if ( _version != newVersion )
       {
-         // if version changed, generate the hosttable in _vHostTable
-         // and record which host need to update in _mapTargetAgents
          rc = _updateNotifier() ;
          if ( SDB_OK != rc )
          {
@@ -317,8 +346,8 @@ namespace engine
       pmdRemoteSession *remoteSession = NULL ;
 
       VEC_SUB_SESSIONPTR subSessionVec ;
+      CHAR localHostName[ OSS_MAX_HOSTNAME + 1 ] ;
 
-      // if all agent have update hosttable, do nothing
       if ( _mapTargetAgents.size() == 0 )
       {
          goto done ;
@@ -334,7 +363,8 @@ namespace engine
          goto error ;
       }
 
-      rc = _addUpdateHostReq( remoteSession ) ;
+      ossGetHostName( localHostName, OSS_MAX_HOSTNAME ) ;
+      rc = _addUpdateHostReq( remoteSession, localHostName ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "_addUpdateHostReq failed:rc=%d", rc ) ;
@@ -342,6 +372,12 @@ namespace engine
       }
 
       remoteSession->sendMsg( &sucNum, &totalNum ) ;
+      if ( totalNum != sucNum )
+      {
+         PD_LOG( PDERROR, "error happend when notify to agent:totalNum=%d,"
+                 "sucNum=%d", totalNum, sucNum ) ;
+      }
+
       rc = remoteSession->waitReply( TRUE, &subSessionVec ) ;
       if ( SDB_OK != rc )
       {
@@ -401,13 +437,20 @@ namespace engine
             continue ;
          }
 
-         // this agent add hostname success, no need to send request anymore
          {
             string host ;
             string service ;
             _om->getHostInfoByID( subSession->getNodeID(), host, service ) ;
             PD_LOG( PDDEBUG, "remove target:host=%s", host.c_str() ) ;
             _mapTargetAgents.erase( host ) ;
+            if ( ossStrcmp( OM_DEFAULT_LOCAL_HOST, host.c_str() ) == 0 )
+            {
+               /* we have replace localHostName to OM_DEFAULT_LOCAL_HOST 
+                  in _addUpdateHostReq. so we must remove localHostName here
+                  when host == OM_DEFAULT_LOCAL_HOST
+               */
+               _mapTargetAgents.erase( localHostName ) ;
+            }
          }
       }
 
@@ -418,7 +461,8 @@ namespace engine
       goto done ;
    }
 
-   INT32 omClusterNotifier::_addUpdateHostReq( pmdRemoteSession *remoteSession )
+   INT32 omClusterNotifier::_addUpdateHostReq( pmdRemoteSession *remoteSession,
+                                               const CHAR *localHostName )
    {
       INT32 rc    = SDB_OK ;
       BSONArrayBuilder arrayBuilder ;
@@ -446,8 +490,18 @@ namespace engine
          CHAR *pContent            = NULL ;
          INT32 contentSize         = 0 ;
          omHostContent &agentInfo  = iter->second ;
-         routeID   = _om->updateAgentInfo( agentInfo.hostName, 
-                                           agentInfo.serviceName ) ;
+
+         if ( 0 == ossStrcmp( localHostName, agentInfo.hostName.c_str() ) )
+         {
+            routeID   = _om->updateAgentInfo( OM_DEFAULT_LOCAL_HOST, 
+                                              agentInfo.serviceName ) ;
+         }
+         else
+         {
+            routeID   = _om->updateAgentInfo( agentInfo.hostName, 
+                                              agentInfo.serviceName ) ;
+         }
+
          subSession = remoteSession->addSubSession( routeID.value ) ;
          if ( NULL == subSession )
          {
@@ -534,23 +588,35 @@ namespace engine
                                         map<string, UINT32> &mapClusterVersion )
    {
       map<string, UINT32>::iterator iter = mapClusterVersion.begin() ;
+
       while ( iter != mapClusterVersion.end() )
       {
-         string clusterName = iter->first ;
+         omClusterNotifier *pNotifier = NULL ;
          UINT32 version     = iter->second ;
+         string clusterName = iter->first ;
          _MAP_CLUSTER_ITER clusterIter = _mapClusters.find( clusterName ) ;
+
          if ( clusterIter == _mapClusters.end() )
          {
-            omClusterNotifier *notifier = NULL ;
-            notifier = SDB_OSS_NEW omClusterNotifier( eduCB(), _om, 
-                                                      clusterName ) ;
+            pNotifier = SDB_OSS_NEW omClusterNotifier( eduCB(), _om, 
+                                                       clusterName ) ;
+            if ( NULL == pNotifier )
+            {
+               SDB_ASSERT( FALSE, "failed to alloc memory" ) ;
+            }
+
             _mapClusters.insert( _MAP_CLUSTER_VALUE( clusterName, 
-                                                     notifier ) ) ;
-            clusterIter = _mapClusters.find( clusterName ) ;
+                                                     pNotifier ) ) ;
+         }
+         else
+         {
+            pNotifier = clusterIter->second ;
          }
 
-         omClusterNotifier *pNotifier = clusterIter->second ;
-         pNotifier->notify( version ) ;
+         if ( _shareVersion->getPrivilege( clusterName ) && pNotifier )
+         {
+            pNotifier->notify( version ) ;
+         }
 
          iter++ ;
       }
@@ -570,7 +636,11 @@ namespace engine
          if ( iter == mapClusterVersion.end() )
          {
             _mapClusters.erase( clusterIter++ ) ;
-            SDB_OSS_DEL notifier ;
+            if ( notifier )
+            {
+               SDB_OSS_DEL notifier ;
+               notifier = NULL ;
+            }
             continue ;
          }
 
@@ -595,13 +665,10 @@ namespace engine
          if ( count % 5 == 0 )
          {
             map< string, UINT32 > mapClusterVersion ;
-            // get all cluster's hostname version
             _shareVersion->getVersionMap( mapClusterVersion );
 
-            // notify agent to update /etc/hosts if cluster's version changed
             _checkUpdateCluster( mapClusterVersion ) ;
 
-            // delete if cluster is not exist
             _checkDeleteCluster( mapClusterVersion ) ;
          }
 

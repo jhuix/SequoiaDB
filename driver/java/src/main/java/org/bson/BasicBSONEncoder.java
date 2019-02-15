@@ -1,4 +1,3 @@
-// BSONEncoder.java
 
 /**
  *      Copyright (C) 2008 10gen Inc.
@@ -41,10 +40,13 @@ import static org.bson.BSON.STRING;
 import static org.bson.BSON.SYMBOL;
 import static org.bson.BSON.TIMESTAMP;
 import static org.bson.BSON.UNDEFINED;
+import static org.bson.BSON.NUMBER_DECIMAL;
 import static org.bson.BSON.regexFlags;
 
 import java.lang.reflect.Array;
+import java.math.BigDecimal;
 import java.nio.Buffer;
+import java.sql.Timestamp;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -57,6 +59,7 @@ import java.util.regex.Pattern;
 
 import org.bson.io.BasicOutputBuffer;
 import org.bson.io.OutputBuffer;
+import org.bson.types.BSONDecimal;
 import org.bson.types.BSONTimestamp;
 import org.bson.types.Binary;
 import org.bson.types.Code;
@@ -74,12 +77,11 @@ import org.bson.types.Symbol;
 public class BasicBSONEncoder implements BSONEncoder {
 
 	static final boolean DEBUG = false;
-
+	
 	public BasicBSONEncoder() {
 
 	}
 
-	//@Override
 	public byte[] encode(BSONObject o) {
 		BasicOutputBuffer buf = new BasicOutputBuffer();
 		set(buf);
@@ -88,14 +90,12 @@ public class BasicBSONEncoder implements BSONEncoder {
 		return buf.toByteArray();
 	}
 
-	//@Override
 	public void set(OutputBuffer out) {
 		if (_buf != null) throw new IllegalStateException("in the middle of something");
 
 		_buf = out;
 	}
 
-	//@Override
 	public void done() {
 		_buf = null;
 	}
@@ -118,7 +118,6 @@ public class BasicBSONEncoder implements BSONEncoder {
 	 *            the object to encode
 	 * @return the number of characters in the encoding
 	 */
-	//@Override
 	public int putObject(BSONObject o) {
 		return putObject(null, o);
 	}
@@ -158,7 +157,6 @@ public class BasicBSONEncoder implements BSONEncoder {
 			}
 		}
 
-		// TODO: reduce repeated code below.
 		if (o instanceof Map) {
 			for (Entry<String, Object> e : ((Map<String, Object>) o).entrySet()) {
 
@@ -204,6 +202,8 @@ public class BasicBSONEncoder implements BSONEncoder {
 
 		if (val == null)
 			putNull(name);
+		else if (val instanceof Timestamp)
+			putTimestamp(name, new BSONTimestamp((Timestamp) val));
 		else if (val instanceof Date)
 			putDate(name, (Date) val);
 		else if (val instanceof Number)
@@ -232,21 +232,21 @@ public class BasicBSONEncoder implements BSONEncoder {
 			putUUID(name, (UUID) val);
 		else if (val.getClass().isArray())
 			putArray(name, val);
-
 		else if (val instanceof Symbol) {
 			putSymbol(name, (Symbol) val);
 		} else if (val instanceof BSONTimestamp) {
 			putTimestamp(name, (BSONTimestamp) val);
+		} else if (val instanceof BSONDecimal) {
+			putDecimal(name, (BSONDecimal)val);
 		} else if (val instanceof CodeWScope) {
 			putCodeWScope(name, (CodeWScope) val);
 		} else if (val instanceof Code) {
 			putCode(name, (Code) val);
-		} else if (val instanceof MinKey)
+		} else if (val instanceof MinKey) {
 			putMinKey(name);
-		else if (val instanceof MaxKey)
+		} else if (val instanceof MaxKey) {
 			putMaxKey(name);
-		else if (putSpecial(name, val)) {
-			// no-op
+		} else if (putSpecial(name, val)) {
 		} else {
 			throw new IllegalArgumentException("can't serialize " + val.getClass());
 		}
@@ -305,8 +305,27 @@ public class BasicBSONEncoder implements BSONEncoder {
 		_put(TIMESTAMP, name);
 		_buf.writeInt(ts.getInc());
 		_buf.writeInt(ts.getTime());
-	}
+	} 
+	
+	protected void putDecimal(String name, BSONDecimal decimal) {
+		int size = decimal.getSize();
+		int typemod = decimal.getTypemod();
+		short signscale = decimal.getSignScale();
+		short weight = decimal.getWeight();
+		short[] digits = decimal.getDigits();
 
+		
+		_put(NUMBER_DECIMAL, name);
+		
+		_buf.writeInt(size);
+		_buf.writeInt(typemod);
+		_buf.writeShort(signscale);
+		_buf.writeShort(weight);
+		for (int i = 0; i < digits.length; i++) {
+			_buf.writeShort(digits[i]);
+		}
+	}
+	
 	protected void putCodeWScope(String name, CodeWScope code) {
 		_put(CODE_W_SCOPE, name);
 		int temp = _buf.getPosition();
@@ -342,6 +361,8 @@ public class BasicBSONEncoder implements BSONEncoder {
 		} else if (n instanceof Float || n instanceof Double) {
 			_put(NUMBER, name);
 			_buf.writeDouble(n.doubleValue());
+		} else if (n instanceof BigDecimal) {
+			putDecimal(name, new BSONDecimal((BigDecimal)n));
 		} else {
 			throw new IllegalArgumentException("can't serialize " + n.getClass());
 		}
@@ -367,8 +388,6 @@ public class BasicBSONEncoder implements BSONEncoder {
 		int before = _buf.getPosition();
 		_buf.write(data);
 		int after = _buf.getPosition();
-		// com.mongodb.util.MyAsserts.assertEquals( after - before , data.length
-		// );
 	}
 
 	protected void putUUID(String name, UUID val) {
@@ -394,7 +413,6 @@ public class BasicBSONEncoder implements BSONEncoder {
 
 	protected void putObjectId(String name, ObjectId oid) {
 		_put(OID, name);
-		// according to spec, values should be stored big endian
 		_buf.writeIntBE(oid._time());
 		_buf.writeIntBE(oid._machine());
 		_buf.writeIntBE(oid._inc());
@@ -414,7 +432,6 @@ public class BasicBSONEncoder implements BSONEncoder {
 		_put(MAXKEY, name);
 	}
 
-	// ----------------------------------------------
 
 	/**
 	 * Encodes the type and key.

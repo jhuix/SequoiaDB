@@ -68,10 +68,10 @@ namespace engine
       {
          std::cerr << "Failed to open config file: "
                    <<( std::string ) file << std::endl ;
-         rc = ossAccess( file ) ;
+         rc = ossAccess( file, OSS_MODE_READ ) ;
          if ( SDB_OK == rc )
          {
-            rc = SDB_PERM ;
+            rc = SDB_TOO_MANY_OPEN_FD ;
          }
          goto error ;
       }
@@ -164,7 +164,6 @@ namespace engine
          ossDelete( tmpFile.c_str() ) ;
       }
 
-      // 1. first back up the file
       if ( SDB_OK == ossAccess( pFile ) )
       {
          if ( createOnly )
@@ -178,7 +177,6 @@ namespace engine
          }
       }
 
-      // 2. Create the file
       rc = ossOpen ( pFile, OSS_READWRITE|OSS_SHAREWRITE|OSS_REPLACE,
                      OSS_RWXU, file ) ;
       if ( rc )
@@ -187,7 +185,6 @@ namespace engine
       }
       isOpen = TRUE ;
 
-      // 3. write data
       {
          SINT64 written = 0 ;
          SINT64 len = ossStrlen( pData ) ;
@@ -206,7 +203,6 @@ namespace engine
          }
       }
 
-      // 4. remove tmp
       if ( SDB_OK == ossAccess( tmpFile.c_str() ) )
       {
          ossDelete( tmpFile.c_str() ) ;
@@ -487,6 +483,109 @@ namespace engine
       goto done ;
    }
 
+   INT32 utilSetAndCheckUlimit()
+   {
+      INT32 rc = SDB_OK ;
+      CHAR rootPath[ OSS_MAX_PATHSIZE + 1 ] = { 0 } ;
+      CHAR confFileName[ OSS_MAX_PATHSIZE + 1 ] = { 0 } ;
+      CHAR *relativePath = NULL ;
+      po::options_description limitDesc ;
+      po::variables_map limitVarmap ;
+      ossProcLimits procLim ;
+      vector<pair<string, string> > vec ;
+      vector<pair<string, string> >::iterator it ;
+
+      rc = ossGetEWD( rootPath, OSS_MAX_PATHSIZE ) ;
+      if ( rc )
+      {
+         ossPrintf( "Error: Failed to get module self path: %d"OSS_NEWLINE,
+                    rc ) ;
+         goto error ;
+      }
+      relativePath = ".." OSS_FILE_SEP "conf" OSS_FILE_SEP "limits.conf" ;
+      rc = utilBuildFullPath( rootPath, relativePath, OSS_MAX_PATHSIZE,
+                              confFileName ) ;
+      if ( rc )
+      {
+         ossPrintf( "Error: Failed to build limits.conf path name: %d"
+                    OSS_NEWLINE, rc ) ;
+         goto error ;
+      }
+
+      limitDesc.add_options()
+      ( PMD_OPTION_LIMIT_CORE,      po::value<INT64>(), "" )
+      ( PMD_OPTION_LIMIT_DATA,      po::value<INT64>(), "" )
+      ( PMD_OPTION_LIMIT_FILESIZE,  po::value<INT64>(), "" )
+      ( PMD_OPTION_LIMIT_VM,        po::value<INT64>(), "" )
+      ( PMD_OPTION_LIMIT_FD,        po::value<INT64>(), "" ) ;
+      rc = utilReadConfigureFile( confFileName, limitDesc, limitVarmap ) ;
+      if ( rc )
+      {
+         if ( SDB_FNE == rc )
+         {
+            PD_LOG( PDWARNING, "Config[%s] not exist, use default config",
+                    confFileName ) ;
+            rc = SDB_OK ;
+            goto done ;
+         }
+         ossPrintf( "Error: Failed to read config from file[%s]: %d"OSS_NEWLINE,
+                    confFileName, rc ) ;
+         goto error ;
+      }
+
+      vec.push_back( make_pair<string,string>( PMD_OPTION_LIMIT_CORE,
+                                               OSS_LIMIT_CORE_SZ ) ) ;
+      vec.push_back( make_pair<string,string>( PMD_OPTION_LIMIT_DATA,
+                                               OSS_LIMIT_DATA_SEG_SZ ) ) ;
+      vec.push_back( make_pair<string,string>( PMD_OPTION_LIMIT_FILESIZE,
+                                               OSS_LIMIT_FILE_SZ ) ) ;
+      vec.push_back( make_pair<string,string>( PMD_OPTION_LIMIT_VM,
+                                               OSS_LIMIT_VIRTUAL_MEM ) ) ;
+      vec.push_back( make_pair<string,string>( PMD_OPTION_LIMIT_FD,
+                                               OSS_LIMIT_OPEN_FILE ) ) ;
+      for( it = vec.begin() ; it != vec.end() ; it++ )
+      {
+         string option = it->first ;
+         string limStr = it->second ;
+
+         if ( !limitVarmap.count( option ) )
+         {
+            continue ;
+         }
+         INT64 limVal = limitVarmap[ option ].as<INT64>() ;
+
+         INT64 curSoft = 0, curHard = 0 ;
+         BOOLEAN hasGot = FALSE ;
+
+         hasGot = procLim.getLimit( limStr.c_str(), curSoft, curHard ) ;
+         if ( !hasGot ||  curSoft != limVal )
+         {
+            procLim.setLimit( limStr.c_str(), limVal, limVal ) ;
+         }
+
+         hasGot = procLim.getLimit( limStr.c_str(), curSoft, curHard ) ;
+         if ( !hasGot )
+         {
+            rc = SDB_SYS ;
+            ossPrintf( "Error: Failed to get ulimit[%s]"OSS_NEWLINE,
+                       limStr.c_str() ) ;
+            goto error ;
+         }
+         if ( curSoft < limVal && curSoft != -1 )
+         {
+            rc = SDB_SYS ;
+            ossPrintf( "Error: Failed to set ulimit[%s] to [%lld]"
+                       OSS_NEWLINE, limStr.c_str(), limVal ) ;
+            goto error ;
+         }
+      }
+
+   done :
+      return rc ;
+   error :
+      goto done ;
+   }
+
    INT32 utilCheckAndChangeUserInfo( const CHAR * curFileName )
    {
       INT32 rc = SDB_OK ;
@@ -496,7 +595,6 @@ namespace engine
       OSSUID curUID  = OSS_INVALID_UID ;
       OSSGID curGID  = OSS_INVALID_GID ;
 
-      // first compare file:cur uid/gid
       ossGetFileUserInfo( curFileName, fileUID, fileGID ) ;
       curUID = ossGetCurrentProcessUID() ;
       curGID = ossGetCurrentProcessGID() ;
@@ -504,19 +602,15 @@ namespace engine
       if ( OSS_INVALID_UID == fileUID || 0 == fileUID ||
            OSS_INVALID_GID == fileGID || 0 == fileGID )
       {
-         // get install user info
          rc = utilGetInstallInfo( info ) ;
          if ( rc )
          {
-            // no install info, not change
             rc = SDB_OK ;
             goto done ;
          }
-         // get install user uid and gid
          rc = ossGetUserInfo( info._user.c_str(), fileUID, fileGID ) ;
          if ( rc )
          {
-            // no install user, not change
             rc = SDB_OK ;
             goto done ;
          }

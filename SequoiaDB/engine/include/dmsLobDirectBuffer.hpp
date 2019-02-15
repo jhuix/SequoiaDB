@@ -36,43 +36,65 @@
 
 #include "oss.hpp"
 #include "core.hpp"
+#include "sdbInterface.hpp"
 
 namespace engine
 {
-   class _pmdEDUCB ;
 
+   /*
+      _dmsLobDirectBuffer define
+   */
    class _dmsLobDirectBuffer : public SDBObject
    {
    public:
-      _dmsLobDirectBuffer( _pmdEDUCB *cb ) ;
-      virtual ~_dmsLobDirectBuffer() ;
-   public:
-       struct tuple
+       typedef struct _tuple
        {
-         void *buf ;
-         UINT32 size ;
-         UINT32 offset ;
-         tuple()
-         :buf( NULL ),
-          size( 0 ),
-          offset( 0 )
-         {
+         CHAR    *buf ;
+         UINT32   size ;
+         UINT32   offset ;
 
+         _tuple()
+         {
+            buf      = NULL ;
+            size     = 0 ;
+            offset   = 0 ;
          }
-       } ;
+       } tuple ;
+
    public:
-      virtual INT32 getAlignedTuple( tuple &t ) = 0 ;
+      _dmsLobDirectBuffer( CHAR *usrBuf,
+                           UINT32 size,
+                           UINT32 offset,
+                           BOOLEAN needAligned,
+                           IExecutor *cb ) ;
+
+      virtual ~_dmsLobDirectBuffer() ;
+
+      BOOLEAN  isAligned() const { return _aligned ; }
+
+      INT32    prepare() ;
+
+   public:
+      virtual  INT32 doit( const tuple **pTuple ) = 0 ;
+      virtual  void  done() = 0 ;
 
    protected:
       INT32 _extendBuf( UINT32 size ) ;
 
    protected:
-      _pmdEDUCB *_cb ;
-      void *_buf ;
-      UINT32 _bufSize ;
+      tuple       _t ;
+      BOOLEAN     _aligned ;
+
+      IExecutor   *_cb ;
+      CHAR        *_buf ;
+      UINT32      _bufSize ;
+
+      CHAR        *_usrBuf ;
+      UINT32      _usrSize ;
+      UINT32      _usrOffset ;
    } ;
    typedef class _dmsLobDirectBuffer dmsLobDirectBuffer ;
 }
 
-#endif
+#endif //DMS_LOBDIRECTBUFFER_HPP_
 

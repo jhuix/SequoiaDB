@@ -48,7 +48,10 @@
 #if defined (_LINUX) || defined ( _AIX )
 #include <locale.h>
 #endif
-// All strings represent "true"
+
+#define OSS_TIMESTAMP_MIN (-2147483648LL)
+#define OSS_TIMESTAMP_MAX (2147483647LL)
+
 const char *OSSTRUELIST[]={
    "YES",
    "yes",
@@ -59,6 +62,17 @@ const char *OSSTRUELIST[]={
    "T",
    "t",
    "1"};
+
+const char *OSSFALSELIST[]={
+   "NO",
+   "no",
+   "N",
+   "n",
+   "FALSE",
+   "false",
+   "F",
+   "f",
+   "0"};
 
 CHAR *ossStrdup ( const CHAR * str )
 {
@@ -124,11 +138,27 @@ size_t ossSnprintf(char* pBuffer, size_t iLength, const char* pFormat, ...)
    n=vsnprintf(pBuffer, iLength, pFormat, ap);
 #endif
    va_end(ap);
-   // Set terminate if the length is greater than buffer size
    if((n<0) || (size_t)n>=iLength)
       n=iLength-1;
    pBuffer[n]='\0';
    return n;
+}
+
+BOOLEAN ossIsInteger( const CHAR *pStr )
+{
+   UINT32 i = 0 ;
+   while( pStr[i] )
+   {
+      if ( pStr[i] < '0' || pStr[i] > '9' )
+      {
+         if ( 0 != i || ( '-' != pStr[i] && '+' != pStr[i] ) )
+         {
+            return FALSE ;
+         }
+      }
+      ++i ;
+   }
+   return TRUE ;
 }
 
 BOOLEAN ossIsUTF8 ( CHAR *pzInfo )
@@ -165,7 +195,6 @@ INT32 ossWC2ANSI ( LPCWSTR lpcszWCString,
    INT32 requiredSize = 0 ;
    requiredSize       = WideCharToMultiByte ( CP_ACP, 0, lpcszWCString,
                                               -1, NULL, 0, NULL, NULL ) ;
-   // caller is responsible to free memory
    *plppszString = (LPSTR)SDB_OSS_MALLOC ( requiredSize ) ;
    if ( !plppszString )
    {
@@ -201,7 +230,6 @@ INT32 ossANSI2WC ( LPCSTR lpcszString,
    INT32 requiredSize = 0 ;
    requiredSize       = MultiByteToWideChar ( CP_ACP,
                                               0, lpcszString, -1, NULL, 0 ) ;
-   // caller is responsible to free memory
    *plppszWCString = (LPWSTR)SDB_OSS_MALLOC ( requiredSize * sizeof(WCHAR) ) ;
    if ( !plppszWCString )
    {
@@ -230,7 +258,6 @@ void ossCloseAllOpenFileHandles ( BOOLEAN closeSTD )
 {
    INT32 i = 3 ;
    INT32 max = OSS_FD_SETSIZE ;
-   // if we want to close STDIN/STDOUT/STDERR, then we should start form 0
    if ( closeSTD )
    {
       i = 0 ;
@@ -243,10 +270,7 @@ void ossCloseAllOpenFileHandles ( BOOLEAN closeSTD )
    if ( closeSTD )
    {
       INT32 fd = 0 ;
-      // if we are told to close STD, we have to redirect STDIN/STDOUT/STDERR to
-      // /dev/null
       close ( STDIN_FILENO ) ;
-      // after close fd 0, next the fd should be using 0
       fd = open ( SDB_DEV_NULL, O_RDWR ) ;
       if ( -1 != fd )
       {
@@ -299,19 +323,43 @@ CHAR *ossStrnchr(const CHAR *pString, UINT32 c, UINT32 n)
    return NULL;
 }
 
-void ossStrToBoolean(const char* pString, BOOLEAN* pBoolean)
+INT32 ossStrToBoolean(const char* pString, BOOLEAN* pBoolean)
 {
-   UINT32 i = 0 ;
-   size_t len=ossStrlen(pString);
-   for(; i<sizeof(OSSTRUELIST)/sizeof(ossValuePtr); i++)
+   INT32  rc           = SDB_OK ;
+   UINT32 i            = 0 ;
+   size_t len          = ossStrlen(pString) ;
+
+   if (0 == len)
    {
-      if(ossStrncasecmp(pString, OSSTRUELIST[i], len)==0)
+      *pBoolean=FALSE ;
+      rc = SDB_INVALIDARG ;
+      goto error ;
+   }
+   for(; i < sizeof(OSSTRUELIST)/sizeof(ossValuePtr); i++)
+   {
+      if(ossStrncasecmp(pString, OSSTRUELIST[i], len) == 0)
       {
-         *pBoolean=TRUE;
-         return;
+         *pBoolean = TRUE ;
+         goto done ;
       }
    }
-   *pBoolean=FALSE;
+   for(i = 0; i < sizeof(OSSFALSELIST)/sizeof(ossValuePtr); i++)
+   {
+      if(ossStrncasecmp(pString, OSSFALSELIST[i], len) == 0)
+      {
+         *pBoolean = FALSE ;
+         goto done ;
+      }
+   }
+
+   *pBoolean = FALSE ;
+   rc = SDB_INVALIDARG ;
+   goto error ;
+
+done :
+   return rc ;
+error :
+   goto done ;
 }
 
 size_t ossVsnprintf
@@ -328,7 +376,6 @@ size_t ossVsnprintf
    n = vsnprintf( buf, size, fmt, ap ) ;
 #endif
 
-   // Add the NULL terminator after the string
    if ( ( n >= 0 ) && ( n < size ) )
    {
       terminator = n ;
@@ -352,8 +399,6 @@ UINT32 ossHashFileName ( const CHAR *fileName )
       pFileName++ ;
    return ossHash ( pFileName, (INT32)ossStrlen ( pFileName ) ) ;
 }
-// blow hash function is coming from
-// http://www.azillionmonkeys.com/qed/hash.html
 #undef get16bits
 #if (defined(__GNUC__) && defined(__i386__)) || defined(__WATCOMC__) \
   || defined(_MSC_VER) || defined (__BORLANDC__) || defined (__TURBOC__)
@@ -422,4 +467,36 @@ INT32 ossDup2( int oldFd, int newFd )
 #endif // _WINDOWS
    return SDB_OK ;
 }
+
+INT32 ossResetTty()
+{
+   INT32 rc     = SDB_OK ;
+   FILE *stream = NULL ;
+#if defined(_WINDOWS)
+   stream = freopen( "CON", "w", stdout ) ;
+#else
+   stream = freopen( "/dev/tty", "w", stdout ) ;
+#endif
+   if ( NULL == stream )
+   {
+      rc = SDB_SYS ;
+      goto error ;
+   }
+done:
+   return rc ;
+error:
+   goto done ;
+}
+
+
+BOOLEAN ossIsTimestampValid( INT64 tm )
+{
+   if( tm > OSS_TIMESTAMP_MAX || tm < OSS_TIMESTAMP_MIN )
+   {
+      return FALSE ;
+   }
+
+   return TRUE ;
+}
+
 

@@ -119,8 +119,8 @@ namespace engine
          }
 
          BSONObj result( buffObj.data() ) ;
-         authUser   = result.getStringField( OM_BUSINESSAUTH_USER ) ;
-         authPasswd = result.getStringField( OM_BUSINESSAUTH_PASSWD ) ;
+         authUser   = result.getStringField( OM_AUTH_FIELD_USER ) ;
+         authPasswd = result.getStringField( OM_AUTH_FIELD_PASSWD ) ;
          break ;
       }
    done:
@@ -225,6 +225,64 @@ namespace engine
          businessInfo = result.copy() ;
          break ;
       }
+   done:
+      if ( -1 != contextID )
+      {
+         _pRTNCB->contextDelete ( contextID, _cb ) ;
+      }
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   INT32 omRestCommandBase::_getBusinessInfoOfCluster( const string &clusterName,
+                                                       BSONObj &clusterBusinessInfo )
+   {
+      BSONObjBuilder bsonBuilder ;
+      BSONArrayBuilder arrayBuilder ;
+      BSONObj selector ;
+      BSONObj matcher ;
+      BSONObj order ;
+      BSONObj hint ;
+      BSONObj result ;
+      SINT64 contextID = -1 ;
+      INT32 rc         = SDB_OK ;
+
+      matcher = BSON( OM_BUSINESS_FIELD_CLUSTERNAME << clusterName ) ;
+      rc = rtnQuery( OM_CS_DEPLOY_CL_BUSINESS, selector, matcher, order, hint, 
+                     0, _cb, 0, -1, _pDMSCB, _pRTNCB, contextID );
+      if ( rc )
+      {
+         PD_LOG_MSG( PDERROR, "fail to query table:%s,rc=%d",
+                     OM_CS_DEPLOY_CL_BUSINESS, rc ) ;
+         goto error ;
+      }
+
+      while ( TRUE )
+      {
+         rtnContextBuf buffObj ;
+         rc = rtnGetMore ( contextID, 1, buffObj, _cb, _pRTNCB ) ;
+         if ( rc )
+         {
+            if ( SDB_DMS_EOC == rc )
+            {
+               rc = SDB_OK ;
+               break ;
+            }
+
+            contextID = -1 ;
+            PD_LOG_MSG( PDERROR, "failed to get record from table:%s,rc=%d", 
+                        OM_CS_DEPLOY_CL_BUSINESS, rc ) ;
+            goto error ;
+         }
+
+         BSONObj result( buffObj.data() ) ;
+         arrayBuilder.append( result ) ;
+      }
+
+      bsonBuilder.append( OM_BSON_BUSINESS_INFO, arrayBuilder.arr() ) ;
+      clusterBusinessInfo = bsonBuilder.obj() ;
+
    done:
       if ( -1 != contextID )
       {
@@ -465,6 +523,7 @@ namespace engine
       if ( objVec.size() > 0 )
       {
          result = objVec[0] ;
+         result = result.getOwned() ;
       }
 
    done:
@@ -640,7 +699,6 @@ namespace engine
       goto done ;
    }
 
-   // if error happened when quering table, TRUE will be returned
    BOOLEAN omRestCommandBase::_isHostExistInTask( const string &hostName )
    {
       BSONObjBuilder bsonBuilder ;
@@ -653,8 +711,6 @@ namespace engine
       INT32 rc         = SDB_OK ;
       rtnContextBuf buffObj ;
 
-      // ResultInfo.$elemMatch.HostName == hostName 
-      // && Status not in( OM_TASK_STATUS_FINISH, OM_TASK_STATUS_CANCEL )
       BSONObj hostNameObj = BSON( OM_HOST_FIELD_NAME << hostName ) ;
       BSONObj elemMatch   = BSON( "$elemMatch" << hostNameObj ) ;
 
@@ -683,7 +739,6 @@ namespace engine
             goto done ;
          }
 
-         // notice: if rc != SDB_OK, contextID is deleted in rtnGetMore
          isExist = FALSE ;
          goto done ;
       }
@@ -713,7 +768,6 @@ namespace engine
       string businessKey ;
       rtnContextBuf buffObj ;
 
-      //Status not in( OM_TASK_STATUS_FINISH, OM_TASK_STATUS_CANCEL )
       BSONArrayBuilder arrBuilder ;
       arrBuilder.append( OM_TASK_STATUS_FINISH ) ;
       arrBuilder.append( OM_TASK_STATUS_CANCEL ) ;
@@ -740,7 +794,6 @@ namespace engine
             goto done ;
          }
 
-         // notice: if rc != SDB_OK, contextID is deleted in rtnGetMore
          isExist = FALSE ;
          goto done ;
       }
@@ -759,7 +812,8 @@ namespace engine
    }
 
    INT32 omRestCommandBase::_getBusinessType( const string &businessName,
-                                              string &businessType ) 
+                                              string &businessType,
+                                              string &deployMode ) 
    {
       INT32 rc = SDB_OK ;
       BSONObj selector ;
@@ -768,7 +822,8 @@ namespace engine
       BSONObj hint ;
       SINT64 contextID = -1 ;
 
-      selector = BSON( OM_BUSINESS_FIELD_TYPE << 1 ) ;
+      selector = BSON( OM_BUSINESS_FIELD_TYPE << 1 
+                    << OM_BUSINESS_FIELD_DEPLOYMOD << 1) ;
       matcher = BSON( OM_BUSINESS_FIELD_NAME << businessName ) ;
       rc = rtnQuery( OM_CS_DEPLOY_CL_BUSINESS, selector, matcher, order, hint, 
                      0, _cb, 0, -1, _pDMSCB, _pRTNCB, contextID );
@@ -793,6 +848,7 @@ namespace engine
 
          BSONObj record( buffObj.data() ) ;
          businessType = record.getStringField( OM_BUSINESS_FIELD_TYPE ) ;
+         deployMode = record.getStringField( OM_BUSINESS_FIELD_DEPLOYMOD ) ;
          break ;
       }
    done:
@@ -889,7 +945,6 @@ namespace engine
                                             std::set<std::string> &IPs )
    {
       INT32 rc = SDB_OK ;
-      INT32 len = 0 ;
       const CHAR *pCur = input ;
       const CHAR *pBegin = input ;
       while( TRUE )
@@ -938,5 +993,21 @@ namespace engine
       _response = response ;
    }
 
+   const CHAR *omGetMyEDUInfoSafe( EDU_INFO_TYPE type )
+   {
+      return omGetEDUInfoSafe( pmdGetThreadEDUCB(), type ) ;
+   }
+
+   const CHAR *omGetEDUInfoSafe( _pmdEDUCB *cb, EDU_INFO_TYPE type )
+   {
+      SDB_ASSERT( NULL != cb, "cb can't be null" ) ;
+      const CHAR *info = cb->getInfo( type ) ;
+      if ( NULL == info )
+      {
+         return "" ;
+      }
+
+      return info ;
+   }
 }
 

@@ -83,6 +83,13 @@ enum OSS_MATCH_TYPE
    OSS_MATCH_NULL
 } ;
 
+/*
+   Socket attribute define
+*/
+#define OSS_SOCKET_KEEP_IDLE              ( 240 )
+#define OSS_SOCKET_KEEP_INTERVAL          ( 10 )
+#define OSS_SOCKET_KEEP_CONTER            ( 5 )
+
 SDB_EXTERN_C_START
 #if defined (_WINDOWS)
    #if defined(_MSC_VER) || defined(_MSC_EXTENSIONS)
@@ -115,12 +122,8 @@ void ossPanic () ;
 #define ossMutexUnlock            LeaveCriticalSection
 #define ossMutexDestroy           DeleteCriticalSection
 
-typedef struct ossOnce
-{
-   long value;
-} ossOnce;
-
-#define OSS_ONCE_INIT {0}
+typedef long ossOnce ;
+#define OSS_ONCE_INIT 0
 
 #else /* Posix */
 #include <pthread.h>

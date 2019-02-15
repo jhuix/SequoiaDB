@@ -50,7 +50,6 @@
 namespace engine
 {
    BEGIN_OBJ_MSG_MAP( _clsReplicateSet, _pmdObjBase )
-      //ON_MSG ( )
       ON_MSG( MSG_CAT_GRP_RES, handleMsg )
       ON_MSG( MSG_CLS_BEAT, handleMsg )
       ON_MSG( MSG_CLS_BEAT_RES, handleMsg )
@@ -58,6 +57,7 @@ namespace engine
       ON_MSG( MSG_CLS_BALLOT_RES, handleMsg )
       ON_MSG( MSG_CAT_PAIMARY_CHANGE_RES, handleMsg )
       ON_MSG( MSG_CLS_GINFO_UPDATED, handleMsg )
+      ON_MSG( MSG_CLS_NODE_STATUS_NOTIFY, handleMsg )
       ON_EVENT( PMD_EDU_EVENT_STEP_DOWN, handleEvent )
       ON_EVENT( PMD_EDU_EVENT_STEP_UP, handleEvent )
    END_OBJ_MSG_MAP ()
@@ -103,6 +103,7 @@ namespace engine
       memset( _timeThreshold, 0, sizeof( _timeThreshold ) ) ;
 
       _faultEvent.reset() ;
+      _syncEmptyEvent.signal() ;
    }
 
    _clsReplicateSet::~_clsReplicateSet()
@@ -131,7 +132,6 @@ namespace engine
                                           const DPS_LSN_OFFSET & offset )
    {
       PD_TRACE_ENTRY ( SDB__CLSREPPSET_NOTIFY2SESSION );
-      // the src session is not empty, should notify every one
       if ( _srcSessionNum > 0 )
       {
          UINT32 index = 0 ;
@@ -196,14 +196,12 @@ namespace engine
          goto error ;
       }
 
-      // init start shift time
       g_startShiftTime = (INT32)pmdGetOptionCB()->startShiftTime() ;
 
       _logger = pmdGetKRCB()->getDPSCB() ;
       _clsCB = pmdGetKRCB()->getClsCB() ;
       SDB_ASSERT( NULL != _logger, "logger should not be NULL" ) ;
 
-      // register dps log event handler
       _logger->regEventHandler( this ) ;
 
       rc = _replBucket.init() ;
@@ -211,7 +209,6 @@ namespace engine
 
       _totalLogSize = (UINT64)pmdGetOptionCB()->getReplLogFileSz()*
                       (UINT64)pmdGetOptionCB()->getReplLogFileNum() ;
-      // init sync control param
       {
          UINT32 rate = 2 ;
          UINT32 timeBase = CLS_SYNCCTRL_BASE_TIME ;
@@ -235,9 +232,10 @@ namespace engine
    {
       SDB_ASSERT( PMD_IS_DB_DOWN(), "DB must be down" ) ;
 
+      _syncEmptyEvent.wait() ;
+
       if ( _replBucket.maxReplSync() > 0 )
       {
-         // wait all repl-sync log processed
          PD_LOG( PDEVENT, "Begin to wait repl bucket empty[bucket size: %d, "
                  "all size: %d, agent number: %d]", _replBucket.bucketSize(),
                  _replBucket.size(), _replBucket.curAgentNum() ) ;
@@ -264,7 +262,14 @@ namespace engine
    {
       if ( pmdGetOptionCB()->maxReplSync() != getBucket()->maxReplSync() )
       {
+         _sync.enableSync( FALSE ) ;
+         _syncEmptyEvent.wait() ;
          getBucket()->enforceMaxReplSync( pmdGetOptionCB()->maxReplSync() ) ;
+         _sync.enableSync( TRUE ) ;
+      }
+      if ( g_startShiftTime >= 0 )
+      {
+         g_startShiftTime = (INT32)pmdGetOptionCB()->startShiftTime() ;
       }
    }
 
@@ -277,8 +282,6 @@ namespace engine
       }
       else if ( !primary && SDB_EVT_OCCUR_AFTER == type )
       {
-         /// when we are not primary any more, we should clear
-         /// waiting list.
          _sync.cut( 0 ) ;
       }
    }
@@ -309,10 +312,16 @@ namespace engine
 
    // PD_TRACE_DECLARE_FUNCTION ( SDB__CLSREPSET__SETGPSET, "_clsReplicateSet::_setGroupSet" )
    INT32 _clsReplicateSet::_setGroupSet( const CLS_GROUP_VERSION &version,
-                                         map<UINT64, _netRouteNode> &nodes )
+                                         map<UINT64, _netRouteNode> &nodes,
+                                         BOOLEAN &changeStatus )
    {
       INT32 rc = SDB_OK ;
-      PD_TRACE_ENTRY( SDB__CLSREPSET__SETGPSET );
+      PD_TRACE_ENTRY( SDB__CLSREPSET__SETGPSET ) ;
+      BOOLEAN hasLocal = FALSE ;
+      std::map<UINT64, _netRouteNode>::iterator itr ;
+      std::map<UINT64, _clsSharingStatus>::iterator itr2 ;
+      changeStatus = FALSE ;
+
       if ( version <= _info.version )
       {
          rc = SDB_REPL_REMOTE_G_V_EXPIRED ;
@@ -329,23 +338,28 @@ namespace engine
 
       _info.version = version ;
 
-      {
-      /// update new nodes, include the node with
-      /// same id but different address
-      BOOLEAN hasLocal = FALSE ;
       if ( SPARE_GROUPID == _info.local.columns.groupID )
       {
          hasLocal = TRUE ;
          nodes.clear() ;
       }
 
-      map<UINT64, _netRouteNode>::iterator itr = nodes.begin() ;
+      itr = nodes.begin() ;
       for ( ; itr != nodes.end(); itr++ )
       {
         if ( itr->first == _info.local.value )
         {
            hasLocal = TRUE ;
            continue ;
+        }
+        else if ( !itr->second._isActive )
+        {
+           if ( g_startShiftTime < 0 )
+           {
+              continue ;
+           }
+           itr->second._isActive = TRUE ;
+           changeStatus = TRUE ;
         }
         if ( SDB_OK == _agent->updateRoute( itr->second._id,
                                             itr->second ) )
@@ -355,8 +369,6 @@ namespace engine
            _info.mtx.release_w() ;
            beat.identity = itr->second._id ;
            beat.beatID = 0 ;
-           /// we alive the changed node here. if it is unnormal,
-           /// break it out later.
            _alive( itr->second._id ) ;
            PD_LOG( PDEVENT, "add node [%s:%s]",
                    itr->second._host, itr->second._service[0].c_str() ) ;
@@ -369,16 +381,13 @@ namespace engine
          PMD_RESTART_DB( SDB_SYS ) ;
          goto done ;
       }
-      }
 
-      {
-      /// remove deleted nodes
-      map<UINT64, _clsSharingStatus>::iterator itr2 = _info.info.begin() ;
+      itr2 = _info.info.begin() ;
       for ( ; itr2 != _info.info.end(); )
       {
-         if ( nodes.end() == nodes.find( itr2->first ) )
+         itr = nodes.find( itr2->first ) ;
+         if ( nodes.end() == itr || FALSE == itr->second._isActive )
          {
-            /// if primary is deleted, set primary invalid
             if ( itr2->first == _info.primary.value )
             {
                _info.primary.value = 0 ;
@@ -397,9 +406,9 @@ namespace engine
             ++itr2 ;
          }
       } // for ( ; itr2 != _info.info.end(); itr2++ )
-      }
 
       _sync.updateNotifyList( TRUE ) ;
+
    done:
       PD_TRACE_EXITRC ( SDB__CLSREPSET__SETGPSET, rc );
       return rc ;
@@ -415,6 +424,11 @@ namespace engine
    ossEvent* _clsReplicateSet::getFaultEvent()
    {
       return &_faultEvent ;
+   }
+
+   ossEvent* _clsReplicateSet::getSyncEmptyEvent()
+   {
+      return &_syncEmptyEvent ;
    }
 
    // PD_TRACE_DECLARE_FUNCTION ( SDB__CLSREPSET_GETPRMY, "_clsReplicateSet::getPrimary" )
@@ -442,7 +456,28 @@ namespace engine
       return isNormal ;
    }
 
-   // The function is caller by any thread, so need to use lock
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__CLSREPSET_GETPRIMARYINFO, "_clsReplicateSet::getPrimaryInfo" )
+   BOOLEAN _clsReplicateSet::getPrimaryInfo( _clsSharingStatus &primaryInfo )
+   {
+      PD_TRACE_ENTRY ( SDB__CLSREPSET_GETPRIMARYINFO );
+      BOOLEAN isOk = FALSE ;
+      _MsgRouteID primary ;
+
+      ossScopedRWLock lock( &_info.mtx, SHARED ) ;
+
+      primary = _info.primary ;
+      map<UINT64, _clsSharingStatus>::iterator itr =
+                                             _info.info.find( primary.value ) ;
+      if ( itr != _info.info.end() )
+      {
+         primaryInfo = itr->second ;
+         isOk = TRUE ;
+      }
+
+      PD_TRACE_EXIT ( SDB__CLSREPSET_GETPRIMARYINFO );
+      return isOk ;
+   }
+
    // PD_TRACE_DECLARE_FUNCTION ( SDB__CLSREPSET_GETGPINFO, "_clsReplicateSet::getGroupInfo" )
    void _clsReplicateSet::getGroupInfo( _MsgRouteID &primary,
                                         vector<_netRouteNode> &group )
@@ -493,7 +528,6 @@ namespace engine
       if ( _timerID == timerID )
       {
          UINT64 timeSpan = pmdGetTickSpanTime( _lastTimerTick ) ;
-         /// avoid out-of-data's timeout event
          if ( timeSpan < interval / 2 )
          {
             goto done ;
@@ -505,7 +539,6 @@ namespace engine
                     "maybe blocked in some operations", interval,
                     timeSpan ) ;
          }
-         /// reset the timer tick
          _lastTimerTick = pmdGetDBTick() ;
 
          _cata.handleTimeout( interval ) ;
@@ -583,7 +616,7 @@ namespace engine
          case MSG_CLS_BEAT :
          {
             CLS_REPL_ACTIVE_CHECK( rc ) ;
-            rc = _handleSharingBeat( ( const _MsgClsBeat *)msg ) ;
+            rc = _handleSharingBeat( handle, ( const _MsgClsBeat *)msg ) ;
             break ;
          }
          case MSG_CAT_PAIMARY_CHANGE_RES:
@@ -629,6 +662,15 @@ namespace engine
             _cata.call( (MsgHeader *)(&msg) ) ;
             break ;
          }
+         case MSG_CLS_NODE_STATUS_NOTIFY :
+         {
+            MsgClsNodeStatusNotify *pNty = ( MsgClsNodeStatusNotify* )msg ;
+            if ( SDB_DB_FULLSYNC == pNty->status )
+            {
+               _sync.notifyFullSync( msg->routeID ) ;
+            }
+            break ;
+         }
          default :
          {
             PD_LOG( PDWARNING, "unknown msg: %s", msg2String( msg ).c_str() ) ;
@@ -654,6 +696,8 @@ namespace engine
       CLS_GROUP_VERSION version ;
       map<UINT64, _netRouteNode> group ;
       string groupName ;
+      BOOLEAN changeStatus = FALSE ;
+      UINT32 grpHashCode = 0 ;
 
       if ( SDB_OK != MSG_GET_INNER_REPLY_RC(pHeader) )
       {
@@ -673,14 +717,15 @@ namespace engine
          goto error ;
       }
 
-      rc = msgParseCatGroupRes( msg, version, groupName, group ) ;
+      rc = msgParseCatGroupRes( msg, version, groupName, group,
+                                NULL, &grpHashCode ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDWARNING, "parse MsgCatGroupRes err, rc = %d", rc ) ;
          goto error ;
       }
 
-      rc = _setGroupSet( version, group ) ;
+      rc = _setGroupSet( version, group, changeStatus ) ;
       if ( SDB_OK != rc )
       {
          if ( SDB_REPL_REMOTE_G_V_EXPIRED != rc )
@@ -690,15 +735,18 @@ namespace engine
          }
          rc = SDB_OK ;
       }
+      _info.setHashCode( grpHashCode ) ;
 
-      _cata.remove( &(msg->header), MSG_GET_INNER_REPLY_RC(pHeader) ) ;
+      if ( !changeStatus )
+      {
+         _cata.remove( &(msg->header), MSG_GET_INNER_REPLY_RC(pHeader) ) ;
+      }
 
       pmdGetKRCB()->setGroupName ( groupName.c_str() ) ;
       if ( !_active )
       {
          PD_LOG( PDEVENT, "download group info successfully" ) ;
 
-         //start repl sync session
          _clsCB->startInnerSession ( CLS_REPL, CLS_TID_REPL_SYC ) ;
 
          _active = TRUE ;
@@ -712,8 +760,6 @@ namespace engine
       goto done ;
    }
 
-   // The function is called by cls mgr thread with the same change thread,
-   // so don't need to use lock
    // PD_TRACE_DECLARE_FUNCTION ( SDB__CLSREPSET__SHRBEAT, "_clsReplicateSet::_sharingBeat" )
    void _clsReplicateSet::_sharingBeat()
    {
@@ -729,14 +775,17 @@ namespace engine
          DPS_LSN fBegin ;
          DPS_LSN mBegin ;
          DPS_LSN end ;
-         _logger->getLsnWindow( fBegin, mBegin, end, NULL, NULL ) ;
+         DPS_LSN expectLSN ;
+         _logger->getLsnWindow( fBegin, mBegin, end, &expectLSN, NULL ) ;
          _MsgClsBeat msg ;
          msg.beat.identity = _info.local ;
-         msg.beat.endLsn = end ;
+         msg.beat.endLsn = expectLSN ;
          msg.beat.version = _info.version ;
+         *(UINT32*)msg.beat.hashCode = _info.getHashCode() ;
          msg.beat.role = _vote.primaryIsMe() ?
                          CLS_GROUP_ROLE_PRIMARY : CLS_GROUP_ROLE_SECONDARY ;
          msg.beat.beatID = _info.nextBeatID() ;
+         msg.header.requestID = msg.beat.beatID ;
          msg.beat.serviceStatus = pmdGetStartup().isOK() ?
                                   SERVICE_NORMAL : SERVICE_ABNORMAL ;
          UINT8 weight = pmdGetOptionCB()->weight() ;
@@ -746,7 +795,6 @@ namespace engine
          map<UINT64, _clsSharingStatus>::iterator itr = _info.info.begin() ;
          for ( ; itr != _info.info.end(); itr++ )
          {
-            /// decrease dead time for heartbeat
             if ( itr->second.deadtime >= pmdGetOptionCB()->sharingBreakTime() &&
                  itr->second.deadtime >= _beatTime )
             {
@@ -754,7 +802,7 @@ namespace engine
                continue ;
             }
             msg.beat.syncStatus = clsSyncWindow( itr->second.beat.endLsn,
-                                                 fBegin, mBegin, end ) ;
+                                                 fBegin, mBegin, expectLSN ) ;
 
             rc = _agent->syncSend( itr->second.beat.identity, &msg ) ;
             if ( SDB_OK == rc )
@@ -770,8 +818,6 @@ namespace engine
                   ++( itr->second.sendFailedTimes ) ;
                }
 
-               /// if send heartbeat msg failed, and the node is not in active,
-               /// nead to reset dead time to decrease heartbeat msg
                if ( _info.alives.find( itr->first ) == _info.alives.end() )
                {
                   UINT32 resetTimeout = 0 ;
@@ -802,9 +848,6 @@ namespace engine
    // PD_TRACE_DECLARE_FUNCTION ( SDB__CLSREPSET__CHKBRK, "_clsReplicateSet::_checkBreak" )
    void _clsReplicateSet::_checkBreak( const UINT32 &millisec )
    {
-      /// avoid the use of w lock. only find item need to be
-      /// erase, we lock w. here we think that no need to lock
-      /// w when change value
       PD_TRACE_ENTRY ( SDB__CLSREPSET__CHKBRK );
 
       BOOLEAN needErase = FALSE ;
@@ -820,7 +863,6 @@ namespace engine
          }
       }
 
-      // increase break node's break time
       for ( itrInfo = _info.info.begin() ; itrInfo != _info.info.end() ;
             ++itrInfo )
       {
@@ -863,7 +905,6 @@ namespace engine
          }
       }
       _info.mtx.release_w() ;
-      /// cutting when down to secandary is in _clsVSPrimary.
       if ( _vote.primaryIsMe() )
       {
          _sync.cut( _info.alives.size() ) ;
@@ -875,7 +916,8 @@ namespace engine
    }
 
    // PD_TRACE_DECLARE_FUNCTION ( SDB__CLSREPSET__HNDSHRBEAT, "_clsReplicateSet::_handleSharingBeat" )
-   INT32 _clsReplicateSet::_handleSharingBeat( const _MsgClsBeat *msg )
+   INT32 _clsReplicateSet::_handleSharingBeat( NET_HANDLE handle,
+                                               const _MsgClsBeat *msg )
    {
       SDB_ASSERT( NULL != msg, "msg should not be NULL" ) ;
       INT32 rc = SDB_OK ;
@@ -883,8 +925,13 @@ namespace engine
       const _clsGroupBeat &beat = msg->beat ;
       map<UINT64, _clsSharingStatus>::iterator itr=
                      _info.info.find( beat.identity.value ) ;
-      if ( _info.info.end() == itr && beat.version <= _info.version )
+      if ( *(UINT32*)beat.hashCode != _info.getHashCode() ||
+          ( _info.info.end() == itr && beat.version <= _info.version ) )
       {
+         PD_LOG( PDINFO, "Beat hashCode[%u] is not the same with self[%u] or "
+                 "node[%s] is not found in group information",
+                 *(UINT32*)beat.hashCode, _info.getHashCode(),
+                 routeID2String( beat.identity ).c_str() ) ;
          rc = SDB_REPL_INVALID_GROUP_MEMBER ;
          goto error ;
       }
@@ -892,7 +939,6 @@ namespace engine
       if ( beat.version > _info.version )
       {
          rc = SDB_REPL_LOCAL_G_V_EXPIRED ;
-         //download ;
          _MsgCatGroupReq msg ;
          msg.id = _info.local ;
          _cata.call( (MsgHeader *)(&msg) ) ;
@@ -906,7 +952,7 @@ namespace engine
 
             if ( _vote.primaryIsMe() )
             {
-               DPS_LSN lsn  = _logger->getCurrentLsn() ;
+               DPS_LSN lsn  = _logger->expectLsn() ;
                if ( 0 >= lsn.compare( beat.endLsn ) )
                {
                   _info.mtx.lock_w() ;
@@ -931,7 +977,6 @@ namespace engine
                _info.mtx.release_w() ;
             }
 
-            // if find new primary node, should to wake up reelection
             if ( CLS_ELECTION_WEIGHT_USR_MIN != _vote.getShadowWeight() )
             {
                reelectionDone() ;
@@ -941,6 +986,8 @@ namespace engine
          {
             if ( _info.primary.value == beat.identity.value )
             {
+               PD_LOG( PDEVENT, "vote: primary node[%d] is down",
+                       beat.identity.columns.nodeID ) ;
                _cata.remove( MSG_CAT_PAIMARY_CHANGE_RES ) ;
                _info.mtx.lock_w() ;
                _info.primary.value = MSG_INVALID_ROUTEID ;
@@ -951,8 +998,9 @@ namespace engine
       {
          _alive( beat.identity ) ;
          _MsgClsBeatRes res ;
+         res.header.header.requestID = msg->header.requestID ;
          res.identity = _info.local ;
-         _agent->syncSend( msg->header.routeID, &res ) ;
+         _agent->syncSend( handle, &res ) ;
       }
    done:
       PD_TRACE_EXITRC ( SDB__CLSREPSET__HNDSHRBEAT, rc );
@@ -971,7 +1019,6 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
 
-      /// wait for 100 mili-secs
       rc = _info.mtx.lock_r( 100 ) ;
 
       if ( SDB_OK == rc )
@@ -1068,7 +1115,6 @@ namespace engine
          }
 
          expectLSN = _logger->expectLsn() ;
-         // when log file number == 1, make sure all other nodes has uped
          if ( offset >= expectLSN.offset )
          {
             goto done ;
@@ -1134,12 +1180,7 @@ namespace engine
       return _agent->netOut() ;
    }
 
-   void _clsReplicateSet::resetMon()
-   {
-      return _agent->resetMon() ;
-   }
-
-   // PD_TRACE_DECLARE_FUNCTION (SDB__CLSREPSET_REELECT, "_clsReplicateSet::reelect" ) 
+   // PD_TRACE_DECLARE_FUNCTION (SDB__CLSREPSET_REELECT, "_clsReplicateSet::reelect" )
    INT32 _clsReplicateSet::reelect( CLS_REELECTION_LEVEL lvl,
                                     UINT32 seconds,
                                     pmdEDUCB *cb )
@@ -1177,7 +1218,6 @@ namespace engine
       PD_TRACE_ENTRY( SDB__CLSREPSET__HANDLESTEPDOWN ) ;
       _vote.setShadowWeight( CLS_ELECTION_WEIGHT_MIN ) ;
       _vote.force( CLS_ELECTION_STATUS_SEC ) ;
-//      _reelection.signal( CLS_REELECTION_LEVEL_5 ) ;
       PD_TRACE_EXITRC( SDB__CLSREPSET__HANDLESTEPDOWN, rc ) ;
       return rc ;
    }
@@ -1209,6 +1249,12 @@ namespace engine
          PD_LOG( PDERROR, "can not step up when primary node"
                  " exists" ) ;
          rc = SDB_CLS_CAN_NOT_STEP_UP ;
+         goto error ;
+      }
+      else if ( !_active )
+      {
+         rc = SDB_CLS_NODE_INFO_EXPIRED ;
+         PD_LOG( PDERROR, "can not step up before local's node download group info" ) ;
          goto error ;
       }
 
@@ -1255,7 +1301,6 @@ namespace engine
       }
       else
       {
-         /// do nothing.
       }
    done:
       PD_TRACE_EXITRC( SDB__CLSREPSET_PRIMARYCHECK, rc ) ;

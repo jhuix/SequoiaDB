@@ -61,34 +61,45 @@ namespace engine
       _iCurGrpId           = CAT_DATA_GROUP_ID_BEGIN;
       _curSysNodeId        = SYS_NODE_ID_BEGIN;
       _primaryID.value     = MSG_INVALID_ROUTEID ;
+      _isActived           = FALSE ;
    }
 
    sdbCatalogueCB::~sdbCatalogueCB()
    {
    }
 
-   INT16 sdbCatalogueCB::majoritySize()
+   INT16 sdbCatalogueCB::majoritySize( BOOLEAN needWaitSync )
    {
-      return (INT16)( sdbGetReplCB()->groupSize() / 2 + 1 ) ;
+      INT16 w = (INT16)( sdbGetReplCB()->groupSize() / 2 + 1 ) ;
+      INT16 ret = 1 ;
+
+      if ( needWaitSync )
+      {
+         ret = w ;
+      }
+
+      return ret ;
    }
 
    INT32 sdbCatalogueCB::primaryCheck( _pmdEDUCB *cb, BOOLEAN canDelay,
                                        BOOLEAN &isDelay )
    {
-      replCB *pRepl = sdbGetReplCB() ;
+      pmdKRCB *pKRCB = pmdGetKRCB() ;
+      replCB *pRepl = pKRCB->getClsCB()->getReplCB() ;
       INT32 rc = SDB_OK ;
       isDelay = FALSE ;
 
-      if ( pRepl->primaryIsMe() )
+      if ( pRepl->primaryIsMe() &&
+           ( _isActived || pKRCB->isDBReadonly() ||
+             pKRCB->isDBDeactivated() ) )
       {
          goto done ;
       }
       rc = SDB_CLS_NOT_PRIMARY ;
 
-      // if know primary exist or no majority size, return at now,
-      // otherwise, need to wait some time
       if ( MSG_INVALID_ROUTEID !=
            ( _primaryID.value = pRepl->getPrimary().value ) &&
+           !pRepl->primaryIsMe() &&
            pRepl->isSendNormal( _primaryID.value ) )
       {
          goto error ;
@@ -134,27 +145,24 @@ namespace engine
       return _catMainCtrl.delayCurOperation() ;
    }
 
+   void sdbCatalogueCB::addContext( const UINT32 &handle, UINT32 tid,
+                                    INT64 contextID )
+   {
+      _catMainCtrl.addContext( handle, tid, contextID ) ;
+   }
+
    // PD_TRACE_DECLARE_FUNCTION ( SDB_CATALOGCB_INIT, "sdbCatalogueCB::init" )
    INT32 sdbCatalogueCB::init()
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB_CATALOGCB_INIT ) ;
 
-      // 1. init param
       _routeID.columns.serviceID = MSG_ROUTE_CAT_SERVICE ;
       _strHostName = pmdGetKRCB()->getHostName() ;
       _strCatServiceName = pmdGetOptionCB()->catService() ;
 
-      // register event handle
-      IControlBlock *pClsCB = pmdGetKRCB()->getCBByType( SDB_CB_CLS ) ;
-      IEventHolder *pHolder = NULL ;
-      if ( pClsCB && pClsCB->queryInterface( SDB_IF_EVT_HOLDER ) )
-      {
-         pHolder = (IEventHolder*)pClsCB->queryInterface( SDB_IF_EVT_HOLDER ) ;
-         pHolder->regEventHandler( this ) ;
-      }
+      pmdGetKRCB()->regEventHandler( this ) ;
 
-      // 2. create objs
       _pNetWork = SDB_OSS_NEW _netRouteAgent( &_catMainCtrl ) ;
       if ( !_pNetWork )
       {
@@ -163,7 +171,6 @@ namespace engine
          goto error ;
       }
 
-      // 3. member objs init
       rc = _catMainCtrl.init() ;
       PD_RC_CHECK( rc, PDERROR, "Init main controller failed, rc: %d", rc ) ;
 
@@ -176,7 +183,6 @@ namespace engine
       rc = _catDCMgr.init() ;
       PD_RC_CHECK( rc, PDERROR, "Init cat dc manager failed, rc: %d", rc ) ;
 
-      // 4. create listen
       PD_TRACE1 ( SDB_CATALOGCB_INIT,
                   PD_PACK_ULONG ( _routeID.value ) ) ;
       _pNetWork->setLocalID( _routeID );
@@ -215,23 +221,22 @@ namespace engine
       pmdEDUMgr *pEDUMgr = pmdGetKRCB()->getEDUMgr() ;
       EDUID eduID = PMD_INVALID_EDUID ;
 
-      // 1. start catMgr edu
       _catMainCtrl.getAttachEvent()->reset() ;
       rc = pEDUMgr->startEDU ( EDU_TYPE_CATMGR,
                                (_pmdObjBase*)getMainController(),
                                &eduID ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to start cat main controller edu, "
                    "rc: %d", rc ) ;
-      pEDUMgr->regSystemEDU( EDU_TYPE_CATMGR, eduID ) ;
       rc = _catMainCtrl.getAttachEvent()->wait( CAT_WAIT_EDU_ATTACH_TIMEOUT ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to wait cat manager edu "
                    "attach, rc: %d", rc ) ;
 
-      // 2. start net edu
-      pEDUMgr->startEDU ( EDU_TYPE_CATNETWORK, (netRouteAgent*)netWork(),
-                          &eduID ) ;
-      pEDUMgr->regSystemEDU ( EDU_TYPE_CATNETWORK, eduID ) ;
-      rc = pEDUMgr->waitUntil( EDU_TYPE_CATNETWORK, PMD_EDU_RUNNING ) ;
+      rc = pEDUMgr->startEDU ( EDU_TYPE_CATNETWORK,
+                               (netRouteAgent*)netWork(),
+                               &eduID ) ;
+      PD_RC_CHECK( rc, PDERROR, "Start CATNET failed, rc: %d", rc ) ;
+
+      rc = pEDUMgr->waitUntil( eduID, PMD_EDU_RUNNING ) ;
       PD_RC_CHECK( rc, PDERROR, "Wait CATNET active failed, rc: %d", rc ) ;
 
    done:
@@ -242,13 +247,11 @@ namespace engine
 
    INT32 sdbCatalogueCB::deactive ()
    {
-      // 1. stop listen
       if ( _pNetWork )
       {
          _pNetWork->closeListen() ;
       }
 
-      // 2. stop io
       if ( _pNetWork )
       {
          _pNetWork->stop() ;
@@ -259,14 +262,12 @@ namespace engine
 
    INT32 sdbCatalogueCB::fini ()
    {
-      // unregister event handle
-      IControlBlock *pClsCB = pmdGetKRCB()->getCBByType( SDB_CB_CLS ) ;
-      IEventHolder *pHolder = NULL ;
-      if ( pClsCB && pClsCB->queryInterface( SDB_IF_EVT_HOLDER ) )
-      {
-         pHolder = (IEventHolder*)pClsCB->queryInterface( SDB_IF_EVT_HOLDER ) ;
-         pHolder->unregEventHandler( this ) ;
-      }
+      _catDCMgr.fini() ;
+      _catNodeMgr.fini() ;
+      _catlogueMgr.fini() ;
+      _catMainCtrl.fini() ;
+
+      pmdGetKRCB()->unregEventHandler( this ) ;
 
       if ( _pNetWork != NULL )
       {
@@ -402,22 +403,57 @@ namespace engine
       return (INT32)vecNames.size() ;
    }
 
-   INT32 sdbCatalogueCB::getGroupsID( vector< UINT32 > &vecIDs )
+   INT32 sdbCatalogueCB::getGroupsID( vector< UINT32 > &vecIDs,
+                                      BOOLEAN isActiveOnly )
    {
+      GRP_ID_MAP::iterator it ;
+
       vecIDs.clear() ;
-      GRP_ID_MAP::iterator it = _grpIdMap.begin() ;
+
+      it = _grpIdMap.begin() ;
       while ( it != _grpIdMap.end() )
       {
          vecIDs.push_back( it->first ) ;
          ++it ;
       }
-      it = _deactiveGrpIdMap.begin() ;
-      while ( it != _deactiveGrpIdMap.end() )
+
+      if ( !isActiveOnly )
       {
-         vecIDs.push_back( it->first ) ;
-         ++it ;
+         it = _deactiveGrpIdMap.begin() ;
+         while ( it != _deactiveGrpIdMap.end() )
+         {
+            vecIDs.push_back( it->first ) ;
+            ++it ;
+         }
       }
       return (INT32)vecIDs.size() ;
+   }
+
+   INT32 sdbCatalogueCB::getGroupNameMap ( map<std::string, UINT32> & nameMap,
+                                           BOOLEAN isActiveOnly )
+   {
+      GRP_ID_MAP::iterator it ;
+
+      nameMap.clear() ;
+
+      it = _grpIdMap.begin() ;
+      while ( it != _grpIdMap.end() )
+      {
+         nameMap[ it->second ] = it->first ;
+         ++it ;
+      }
+
+      if ( !isActiveOnly )
+      {
+         it = _deactiveGrpIdMap.begin() ;
+         while ( it != _deactiveGrpIdMap.end() )
+         {
+            nameMap[ it->second ] = it->first ;
+            ++it ;
+         }
+      }
+
+      return (INT32)nameMap.size() ;
    }
 
    INT32 sdbCatalogueCB::makeGroupsObj( BSONObjBuilder &builder,
@@ -500,6 +536,20 @@ namespace engine
       }
       PD_TRACE_EXIT ( SDB_CATALOGCB_ACTIVEGROUP ) ;
    }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB_CATALOGCB_DEACTIVEGROUP, "sdbCatalogueCB::deactiveGroup" )
+   void sdbCatalogueCB::deactiveGroup( UINT32 groupID )
+   {
+      PD_TRACE_ENTRY ( SDB_CATALOGCB_DEACTIVEGROUP ) ;
+      GRP_ID_MAP::iterator it = _grpIdMap.find( groupID ) ;
+      if ( it != _grpIdMap.end() )
+      {
+         _deactiveGrpIdMap.insert( GRP_ID_MAP::value_type( groupID, it->second ) ) ;
+         _grpIdMap.erase( it ) ;
+      }
+      PD_TRACE_EXIT ( SDB_CATALOGCB_DEACTIVEGROUP ) ;
+   }
+
 
    // PD_TRACE_DECLARE_FUNCTION ( SDB_CATALOGCB_INSERTNODEID, "sdbCatalogueCB::insertNodeID" )
    void sdbCatalogueCB::insertNodeID( UINT16 nodeID )
@@ -702,12 +752,6 @@ namespace engine
       return id;
    }
 
-   UINT32 sdbCatalogueCB::getMask() const
-   {
-      return EVENT_MASK_ON_REGISTERED | EVENT_MASK_ON_PRIMARYCHG ;
-   }
-
-   // The caller must make sure id has the correct serviceID
    // PD_TRACE_DECLARE_FUNCTION ( SDB_CATALOGCB_UPDATEROUTEID, "sdbCatalogueCB::updateRouteID" )
    void sdbCatalogueCB::onRegistered ( const MsgRouteID &nodeID )
    {
@@ -751,7 +795,230 @@ namespace engine
             }
             _catMainCtrl.getChangeEvent()->wait( OSS_ONE_SEC * 120 ) ;
          }
+
+         if ( primary )
+         {
+            _isActived = TRUE ;
+         }
+         else
+         {
+            _isActived = FALSE ;
+         }
       }
+   }
+
+   void sdbCatalogueCB::regEventHandler ( _catEventHandler *pHandler )
+   {
+      SDB_ASSERT( pHandler, "Handle can't be NULL" ) ;
+      SDB_ASSERT( pmdGetThreadEDUCB() &&
+                  EDU_TYPE_MAIN == pmdGetThreadEDUCB()->getType(),
+                  "Must register in main thread" ) ;
+
+      VEC_EVENT_HANDLER::iterator iter = find( _vecEventHandler.begin(),
+                                               _vecEventHandler.end(),
+                                               pHandler ) ;
+
+      SDB_ASSERT( _vecEventHandler.end() == iter, "Handle can't be same" ) ;
+
+      _vecEventHandler.push_back( pHandler ) ;
+
+      PD_LOG( PDDEBUG, "Register cat event handler [%s]",
+              pHandler->getHandlerName() ) ;
+   }
+
+   void sdbCatalogueCB::unregEventHandler ( _catEventHandler *pHandler )
+   {
+      SDB_ASSERT( pHandler, "Handle can't be NULL" ) ;
+      SDB_ASSERT( pmdGetThreadEDUCB() &&
+                  EDU_TYPE_MAIN == pmdGetThreadEDUCB()->getType(),
+                  "Must unregister in main thread" ) ;
+
+      VEC_EVENT_HANDLER::iterator iter = find( _vecEventHandler.begin(),
+                                               _vecEventHandler.end(),
+                                               pHandler ) ;
+      if ( _vecEventHandler.end() != iter )
+      {
+         _vecEventHandler.erase( iter ) ;
+      }
+
+      PD_LOG( PDDEBUG, "Unregister cat event handler [%s]",
+              pHandler->getHandlerName() ) ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB_CATALOGCB_ONBEGINCMD, "sdbCatalogueCB::onBeginCommand" )
+   INT32 sdbCatalogueCB::onBeginCommand ( MsgHeader *pReqMsg )
+   {
+      INT32 rc = SDB_OK ;
+
+      PD_TRACE_ENTRY( SDB_CATALOGCB_ONBEGINCMD ) ;
+
+      for ( VEC_EVENT_HANDLER::iterator iter = _vecEventHandler.begin();
+            iter != _vecEventHandler.end() ;
+            ++iter )
+      {
+         _catEventHandler *pHandler = (*iter) ;
+         rc = pHandler->onBeginCommand( pReqMsg ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDWARNING,
+                    "Failed on begin command event [%d] with handler [%s]",
+                    pReqMsg->opCode, pHandler->getHandlerName() ) ;
+         }
+      }
+
+      PD_TRACE_EXIT( SDB_CATALOGCB_ONBEGINCMD ) ;
+
+      return SDB_OK ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB_CATALOGCB_ONENDCMD, "sdbCatalogueCB::onEndCommand" )
+   INT32 sdbCatalogueCB::onEndCommand ( MsgHeader *pReqMsg, INT32 result )
+   {
+      INT32 rc = SDB_OK ;
+
+      PD_TRACE_ENTRY( SDB_CATALOGCB_ONENDCMD ) ;
+
+      for ( VEC_EVENT_HANDLER::reverse_iterator iter = _vecEventHandler.rbegin();
+            iter != _vecEventHandler.rend() ;
+            ++iter )
+      {
+         _catEventHandler *pHandler = (*iter) ;
+         rc = pHandler->onEndCommand( pReqMsg, result ) ;
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDWARNING,
+                    "Failed on end command event [%d] with handler [%s]",
+                    pReqMsg->opCode, pHandler->getHandlerName() ) ;
+         }
+      }
+
+      PD_TRACE_EXIT( SDB_CATALOGCB_ONENDCMD ) ;
+
+      return SDB_OK ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB_CATALOGCB_ONSENDREPLY, "sdbCatalogueCB::onSendReply" )
+   INT32 sdbCatalogueCB::onSendReply ( MsgOpReply *pReply, INT32 result )
+   {
+      INT32 rc = SDB_OK ;
+
+      PD_TRACE_ENTRY( SDB_CATALOGCB_ONSENDREPLY ) ;
+
+      for ( VEC_EVENT_HANDLER::reverse_iterator iter = _vecEventHandler.rbegin();
+            iter != _vecEventHandler.rend() ;
+            ++iter )
+      {
+         _catEventHandler *pHandler = (*iter) ;
+         rc = pHandler->onSendReply( pReply, result ) ;
+         PD_RC_CHECK( rc, PDERROR,
+                      "Failed on send reply event [%d] with handler [%s]",
+                      pReply->header.opCode, pHandler->getHandlerName() ) ;
+      }
+
+   done :
+      PD_TRACE_EXITRC( SDB_CATALOGCB_ONSENDREPLY, rc ) ;
+      return rc ;
+   error :
+      goto done ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB_CATALOGCB_SENDREPLY, "sdbCatalogueCB::sendReply" )
+   INT32 sdbCatalogueCB::sendReply ( const NET_HANDLE &handle,
+                                     MsgOpReply *pReply,
+                                     INT32 result,
+                                     void *pReplyData,
+                                     UINT32 replyDataLen,
+                                     BOOLEAN needSync )
+   {
+      INT32 rc = SDB_OK ;
+      MsgOpReply errReply ;
+      PD_TRACE_ENTRY( SDB_CATALOGCB_SENDREPLY ) ;
+
+      rc = onSendReply( pReply, result ) ;
+      PD_RC_CHECK( rc, PDERROR, "On send reply failed, rc: %d", rc ) ;
+
+      if ( needSync )
+      {
+         rc = _catMainCtrl.waitSync( handle, pReply, pReplyData, replyDataLen ) ;
+         PD_RC_CHECK( rc, PDERROR, "Wait sync failed, rc: %d", rc ) ;
+      }
+
+   done :
+      if ( !isDelayed() && pReply )
+      {
+         BSONObj errInfo ;
+
+         PD_LOG( PDDEBUG,
+                 "Sending reply message [%d] with rc [%d]",
+                 pReply->header.opCode, pReply->flags ) ;
+
+         if ( pReply->flags &&
+              pReply->header.messageLength == sizeof( MsgOpReply ) )
+         {
+            pmdEDUCB *cb = pmdGetThreadEDUCB() ;
+            errInfo = utilGetErrorBson( pReply->flags,
+                                        cb->getInfo( EDU_INFO_ERROR ) ) ;
+            pReplyData = ( void* )errInfo.objdata() ;
+            replyDataLen = (INT32)errInfo.objsize() ;
+            pReply->numReturned = 1 ;
+            pReply->header.messageLength += replyDataLen ;
+         }
+
+         if ( pReplyData )
+         {
+            rc = netWork()->syncSend( handle, &(pReply->header),
+                                      pReplyData, replyDataLen ) ;
+         }
+         else
+         {
+            rc = netWork()->syncSend( handle, &(pReply->header) ) ;
+         }
+         if ( SDB_OK != rc )
+         {
+            PD_LOG( PDWARNING,
+                    "Failed to send reply message [%d], rc: %d",
+                    pReply->header.opCode, rc ) ;
+         }
+      }
+      PD_TRACE_EXITRC( SDB_CATALOGCB_SENDREPLY, rc ) ;
+      return rc ;
+
+   error :
+      if ( pReply )
+      {
+         SINT64 contextID = pReply->contextID ;
+         if ( -1 != contextID )
+         {
+            _catMainCtrl.delContextByID( contextID, TRUE ) ;
+         }
+
+         if ( SDB_OK == result || SDB_DMS_EOC == result )
+         {
+            fillErrReply( pReply, &errReply, rc ) ;
+            pReply = &errReply ;
+            pReplyData = NULL ;
+            replyDataLen = 0 ;
+         }
+      }
+      goto done ;
+   }
+
+   void sdbCatalogueCB::fillErrReply ( const MsgOpReply *pReply,
+                                       MsgOpReply *pErrReply, INT32 rc )
+   {
+      SDB_ASSERT( pReply, "pReply should not be NULL" ) ;
+      SDB_ASSERT( pErrReply, "pErrReply should not be NULL" ) ;
+
+      pErrReply->header.messageLength = sizeof( MsgOpReply ) ;
+      pErrReply->header.opCode = pReply->header.opCode ;
+      pErrReply->header.requestID = pReply->header.requestID ;
+      pErrReply->header.routeID.value = pReply->header.routeID.value ;
+      pErrReply->header.TID = pReply->header.TID ;
+
+      pErrReply->flags = rc ;
+      pErrReply->contextID = -1 ;
+      pErrReply->numReturned = 0 ;
+      pErrReply->startFrom = pReply->startFrom ;
    }
 
    /*

@@ -59,6 +59,8 @@ namespace engine
    #define MTH_S_RTRIM          MTH_S_PREFIX"rtrim"
    #define MTH_S_TRIM           MTH_S_PREFIX"trim"
    #define MTH_S_CAST           MTH_S_PREFIX"cast"
+   #define MTH_S_TYPE           MTH_S_PREFIX"type"
+   #define MTH_S_SIZE           MTH_S_PREFIX"size"
 
    typedef UINT32 MTH_S_ATTRIBUTE ;
 
@@ -72,7 +74,6 @@ namespace engine
    #define MTH_S_ATTR_DEFAULT_BIT        4
    #define MTH_S_ATTR_PROJECTION_BIT     8
 
-   /// attribute value
    #define MTH_S_ATTR_NONE               0
    #define MTH_S_ATTR_EXCLUDE            ( MTH_S_ATTR_VALID_BIT )
    #define MTH_S_ATTR_INCLUDE            ( MTH_S_ATTR_VALID_BIT | MTH_S_ATTR_INCLUDE_BIT )
@@ -90,6 +91,15 @@ namespace engine
 
    #define MTH_ATTR_IS_PROJECTION( attribute ) \
            ( MTH_ATTR_IS_INCLUDE(attribute) && OSS_BIT_TEST(attribute, MTH_S_ATTR_PROJECTION_BIT))
+
+#ifdef _WINDOWS
+   #define MTH_TRUNC(x)  ( (x)>0 ? floor(x) : ceil(x) )
+   #define MTH_MOD(x,y)\
+        ( (x) - ( MTH_TRUNC((x) / (y)) * (y) ) )
+#else
+   #define MTH_MOD(x,y)\
+        ( (x) - ( trunc((x) / (y)) * (y) ) )
+#endif //_WINDOWS
 }
 
 #endif

@@ -45,6 +45,8 @@
 #include "dmsStorageLoadExtent.hpp"
 #include <boost/thread/shared_mutex.hpp>
 
+using namespace bson ;
+
 namespace engine
 {
    #define MIG_SUM_BUFFER_SIZE   33554432
@@ -75,35 +77,25 @@ namespace engine
 
    struct _setParameters : public SDBObject
    {
-      //file
       CHAR        *pFileName ;
-      //cs
       CHAR        *pCollectionSpaceName ;
-      //cl
       CHAR        *pCollectionName ;
-      //CSV field list ( CSV only )
       CHAR        *pFieldArray ;
-      //send msg to client socket
       ossSocket   *clientSock ;
-      //listen port ;
       CHAR        *port ;
-      //buffer sum size
       UINT32       bufferSize ;
-      //how many buffer split
       UINT32       bucketNum ;
-      //workers number
       UINT32       workerNum ;
-      //first line in input file is a header ( CSV only )
       BOOLEAN      headerline ;
-      //asynchronous load
       BOOLEAN      isAsynchronous ;
-      //Del char field record
       CHAR         delCFR[4] ;
-      //input file type ( CSV or Json )
       MIG_PARSER_FILE_TYPE fileType ;
    } ;
    typedef struct _setParameters setParameters ;
 
+   /*
+      migMaster define
+   */
    class migMaster : public SDBObject
    {
    private:
@@ -150,8 +142,9 @@ namespace engine
       CHAR *getBuffer() ;
       migMaster() ;
       ~migMaster() ;
+
       INT32 initialize( setParameters *pParameters ) ;
-      INT32 run() ;
+      INT32 run( pmdEDUCB *cb ) ;
       void bucketDec ( INT32 blockID ) ;
    } ;
 
@@ -166,6 +159,9 @@ namespace engine
       CHAR           _pad[6] ;
    } ;
 
+   /*
+      migWorker define
+   */
    class migWorker : public SDBObject
    {
    private:
@@ -180,9 +176,10 @@ namespace engine
                         dmsStorageUnit *su,
                         UINT16 collectionID,
                         UINT32 clLID,
-                        BOOLEAN isAsynchr ) ;
+                        BOOLEAN isAsynchr,
+                        pmdEDUCB *cb ) ;
    } ;
 
 }
 
-#endif
+#endif //MIG_LOAD_JSONS_HPP_

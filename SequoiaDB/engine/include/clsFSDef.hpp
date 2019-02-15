@@ -42,34 +42,41 @@
 
 namespace engine
 {
-   #define CLS_FS_CS_NAME "cs"
-   #define CLS_FS_COLLECTION_NAME "collection"
-   #define CLS_FS_CS_META_NAME "csmeta"
-   #define CLS_FS_PAGE_SIZE "pagesize"
-   #define CLS_FS_KEYOBJ "keyobj"
-   #define CLS_FS_END_KEYOBJ "endkeyobj"
-   #define CLS_FS_NOMORE "nomore"
-   #define CLS_FS_INDEXES "indexes"
-   #define CLS_FS_INDEX "index"
-   #define CLS_FS_FULLNAME "fullname"
-   #define CLS_FS_FULLNAMES "fullnames"
-   #define CLS_FS_CSNAME    "csname"
-   #define CLS_FS_CSNAMES   "csnames"
-   #define CLS_FS_NEEDDATA  "needdata"
-   #define CLS_FS_ATTRIBUTES "attributes"
-   #define CLS_FS_LOB_PAGE_SIZE "lobpagesize"
-   #define CLS_FS_COMP_TYPE "comptype"
+
+   #define CLS_FS_VALIDCLS                "validcls"
+   #define CLS_FS_COMMITFLAG              "commitflag"
+   #define CLS_FS_COMMITLSN               "commitlsn"
+   #define CLS_FS_CS_NAME                 "cs"
+   #define CLS_FS_COLLECTION_NAME         "collection"
+   #define CLS_FS_CS_META_NAME            "csmeta"
+   #define CLS_FS_PAGE_SIZE               "pagesize"
+   #define CLS_FS_KEYOBJ                  "keyobj"
+   #define CLS_FS_END_KEYOBJ              "endkeyobj"
+   #define CLS_FS_NOMORE                  "nomore"
+   #define CLS_FS_INDEXES                 "indexes"
+   #define CLS_FS_FULLNAME                "fullname"
+   #define CLS_FS_FULLNAMES               "fullnames"
+   #define CLS_FS_CSNAME                  "csname"
+   #define CLS_FS_CSNAMES                 "csnames"
+   #define CLS_FS_NEEDDATA                "needdata"
+   #define CLS_FS_ATTRIBUTES              "attributes"
+   #define CLS_FS_LOB_PAGE_SIZE           "lobpagesize"
+   #define CLS_FS_CS_TYPE                 "cstype"
+   #define CLS_FS_COMP_TYPE               "comptype"
+   #define CLS_FS_EXT_OPTION              "extoption"
+   #define CLS_FS_CL_MAX_SIZE             "maxsize"
+   #define CLS_FS_CL_MAX_RECNUM           "maxrecnum"
 
    enum CLS_FS_STATUS
    {
-      CLS_FS_STATUS_BEGIN = 0,
+      CLS_FS_STATUS_NONE = 0,
+      CLS_FS_STATUS_BEGIN,
       CLS_FS_STATUS_META,
       CLS_FS_STATUS_INDEX,
       CLS_FS_STATUS_NOTIFY_DOC,
-      CLS_FS_STATUS_NOTIFY_LOG,
-      CLS_FS_STATUS_END,
-      CLS_FS_STATUS_NONE,
       CLS_FS_STATUS_NOTIFY_LOB,
+      CLS_FS_STATUS_NOTIFY_LOG,
+      CLS_FS_STATUS_END
    } ;
 }
 

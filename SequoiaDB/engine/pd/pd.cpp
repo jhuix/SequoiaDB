@@ -48,7 +48,10 @@
 #include "ossPrimitiveFileOp.hpp"
 #include "utilStr.hpp"
 #include "ossIO.hpp"
+
+#if defined ( SDB_ENGINE ) || defined ( SDB_FMP ) || defined ( SDB_TOOL )
 #include "ossPath.hpp"
+#endif //SDB_ENGINE || SDB_FMP || SDB_TOOL
 
 #include "pdTrace.hpp"
 
@@ -86,15 +89,12 @@ const CHAR* getPDLevelDesp ( PDLEVEL level )
 /* private variables */
 struct _pdLogFile : public SDBObject
 {
-   // ossPrimitiveFileOp is native file interface, which returns errno or
-   // GetLastError, instead of database error code
    ossPrimitiveFileOp _logFile ;
    UINT64             _fileSize ;
    ossSpinXLatch _mutex ;
 } ;
 typedef struct _pdLogFile pdLogFile ;
 
-// currently we only have diag log, we may have different types of logs later
 enum _pdLogType
 {
    PD_DIAGLOG  = 0,
@@ -123,7 +123,8 @@ typedef struct _pdCfgInfo
 
    BOOLEAN isEnabled() const
    {
-      if ( _pdLogFile[0] != 0 && _pdFileMaxNum > 0 && _pdFileMaxSize > 0 )
+      if ( _pdLogFile[0] != 0 && ( _pdFileMaxNum > 0 || _pdFileMaxNum == -1 ) &&
+           _pdFileMaxSize > 0 )
       {
          return TRUE ;
       }
@@ -131,7 +132,6 @@ typedef struct _pdCfgInfo
    }
 } pdCfgInfo ;
 
-/// define the pd config
 pdCfgInfo g_pdCfg[ PD_LOG_MAX ] ;
 
 static pdCfgInfo& _getPDCfgInfo( _pdLogType type )
@@ -151,6 +151,18 @@ const CHAR* getDialogPath ()
    return _getPDCfgInfo( PD_DIAGLOG )._pdLogPath ;
 }
 
+void setDiagFileNum( INT32 fileMaxNum )
+{
+   pdCfgInfo &info = _getPDCfgInfo( PD_DIAGLOG ) ;
+   info._pdFileMaxNum = fileMaxNum ;
+}
+
+void setAuditFileNum( INT32 fileMaxNum )
+{
+   pdCfgInfo &info = _getPDCfgInfo( PD_AUDIT ) ;
+   info._pdFileMaxNum = fileMaxNum ;
+}
+
 void sdbEnablePD( const CHAR *pdPathOrFile, INT32 fileMaxNum,
                   UINT32 fileMaxSize )
 {
@@ -166,13 +178,11 @@ void sdbEnablePD( const CHAR *pdPathOrFile, INT32 fileMaxNum,
       const CHAR *pSepStr2 = ossStrrchr( pdPathOrFile, '\\' ) ;
       const CHAR *pSepStr = pSepStr1 >= pSepStr2 ? pSepStr1 : pSepStr2 ;
 
-      // is file
       if ( pDotStr && pDotStr > pSepStr )
       {
          shortName = pSepStr ? pSepStr + 1 : pdPathOrFile ;
          ossStrncpy( info._pdLogPath, pdPathOrFile, shortName - pdPathOrFile ) ;
       }
-      // is path
       else
       {
          ossStrncpy( info._pdLogPath, pdPathOrFile, OSS_MAX_PATHSIZE ) ;
@@ -233,12 +243,11 @@ Level:%s"OSS_NEWLINE"PID:%-37dTID:%d"OSS_NEWLINE"Function:%-32sLine:%d"\
 OSS_NEWLINE"File:%s"OSS_NEWLINE"Message:"OSS_NEWLINE"%s"OSS_NEWLINE OSS_NEWLINE;
 /* extern variables */
 
-// driver don't use the code
-#ifndef SDB_CLIENT
+#if defined ( SDB_ENGINE ) || defined ( SDB_FMP ) || defined ( SDB_TOOL )
 
 static void _pdRemoveOutOfDataFiles( pdCfgInfo &info )
 {
-   map< string, string >  mapFiles ;
+   multimap< string, string >  mapFiles ;
    const CHAR *p = ossStrrchr( info._pdLogFile, OSS_FILE_SEP_CHAR ) ;
    if ( p )
    {
@@ -255,7 +264,6 @@ static void _pdRemoveOutOfDataFiles( pdCfgInfo &info )
    while ( mapFiles.size() > 0 &&
            mapFiles.size() >= (UINT32)info._pdFileMaxNum )
    {
-      // remove the oldest file
       ossDelete( mapFiles.begin()->second.c_str() ) ;
       mapFiles.erase( mapFiles.begin() ) ;
    }
@@ -271,7 +279,6 @@ static INT32 _pdLogArchive( pdCfgInfo &info )
    ossSnprintf( fileName, OSS_MAX_PATHSIZE, "%s.%s", info._pdLogFile,
                 engine::utilAscTime( tTime, strTime, sizeof( strTime ) ) ) ;
 
-   // if exist, remove
    if ( SDB_OK == ossAccess( fileName ) )
    {
       rc = ossDelete( fileName ) ;
@@ -281,7 +288,6 @@ static INT32 _pdLogArchive( pdCfgInfo &info )
                     fileName, rc ) ;
       }
    }
-   // rename
    rc = ossRenamePath( info._pdLogFile, fileName ) ;
    if ( rc )
    {
@@ -290,7 +296,6 @@ static INT32 _pdLogArchive( pdCfgInfo &info )
       ossDelete( info._pdLogFile ) ;
    }
 
-   // remove out of data files
    if ( info._pdFileMaxNum > 0 )
    {
       _pdRemoveOutOfDataFiles( info ) ;
@@ -299,10 +304,9 @@ static INT32 _pdLogArchive( pdCfgInfo &info )
    return rc ;
 }
 
-#endif // SDB_CLIENT
+#endif //SDB_ENGINE || SDB_FMP || SDB_TOOL
 
 // PD_TRACE_DECLARE_FUNCTION ( SDB_PDLOGFILEWRITE, "pdLogFileWrite" )
-// return code is errno
 static INT32 pdLogFileWrite ( _pdLogType type, const CHAR *pData )
 {
    INT32 rc = SDB_OK ;
@@ -312,20 +316,18 @@ static INT32 pdLogFileWrite ( _pdLogType type, const CHAR *pData )
    pdLogFile &logFile = _pdLogFiles[type] ;
    pdCfgInfo &info = _getPDCfgInfo( type ) ;
 
-   // lock file first
    logFile._mutex.get() ;
 
-   // if file not exist, need open
-   //if ( SDB_OK != ossAccess( info._pdLogFile ) )
-   //{
-   //   logFile._logFile.Close() ;
-   //}
 
-#ifndef SDB_CLIENT
+#if defined ( SDB_ENGINE ) || defined ( SDB_FMP ) || defined ( SDB_TOOL )
 open:
-#endif // SDB_CLIENT
+#endif //SDB_ENGINE || SDB_FMP || SDB_TOOL
 
-   // attempt to open the file
+   if ( !logFile._logFile.isExist() )
+   {
+      logFile._logFile.Close() ;
+   }
+
    if ( !logFile._logFile.isValid() )
    {
       rc = logFile._logFile.Open ( info._pdLogFile ) ;
@@ -340,7 +342,7 @@ open:
          rc = logFile._logFile.getSize( &fileSize ) ;
          if ( rc )
          {
-            ossPrintf( "Failed to get log file size, rc = %d"OSS_NEWLINE, rc ) ;
+            ossPrintf( "Failed to get log file size, rc: %d"OSS_NEWLINE, rc ) ;
             logFile._fileSize = 0 ;
          }
          else
@@ -351,29 +353,26 @@ open:
       logFile._logFile.seekToEnd () ;
    }
 
-#ifndef SDB_CLIENT
-   // if file size up the limit
+#if defined ( SDB_ENGINE ) || defined ( SDB_FMP ) || defined ( SDB_TOOL )
    if ( logFile._fileSize + dataSize > info._pdFileMaxSize )
    {
       logFile._logFile.Close() ;
       _pdLogArchive( info ) ;
       goto open ;
    }
-#endif // SDB_CLIENT
+#endif //SDB_ENGINE || SDB_FMP || SDB_TOOL
 
    PD_TRACE1 ( SDB_PDLOGFILEWRITE, PD_PACK_RAW ( pData, dataSize ) ) ;
    rc = logFile._logFile.Write ( pData, dataSize ) ;
    if ( rc )
    {
-      ossPrintf ( "Failed to reopen log file, errno = %d"OSS_NEWLINE,
+      ossPrintf ( "Failed to write log file, rc: %d"OSS_NEWLINE,
                   rc ) ;
       goto error ;
    } // if ( rc )
-   // update file size
    logFile._fileSize += dataSize ;
 
 done :
-   logFile._logFile.Close() ;
    logFile._mutex.release() ;
    PD_TRACE_EXITRC ( SDB_PDLOGFILEWRITE, rc ) ;
    return rc ;
@@ -403,7 +402,6 @@ void pdLog( PDLEVEL level, const CHAR* func, const CHAR* file,
 void pdLog( PDLEVEL level, const CHAR* func, const CHAR* file,
             UINT32 line, const CHAR* format, ...)
 {
-   INT32 rc = SDB_OK ;
    if ( getPDLevel() < level )
       return ;
    va_list ap;
@@ -415,6 +413,9 @@ void pdLog( PDLEVEL level, const CHAR* func, const CHAR* file,
    CHAR userInfo[ PD_LOG_STRINGMAX + 1 ] = { 0 } ;
    CHAR sysInfo[ PD_LOG_STRINGMAX + 1 ] = { 0 } ;  // for log header
 
+   ossSignalShield sigShield ;
+   sigShield.doNothing() ;
+
    gettimeofday(&tv, &tz);
    tt = tv.tv_sec ;
 
@@ -424,12 +425,10 @@ void pdLog( PDLEVEL level, const CHAR* func, const CHAR* file,
    localtime_r( &tt, &otm ) ;
 #endif
 
-   // create the user information
    va_start(ap, format);
    vsnprintf(userInfo, PD_LOG_STRINGMAX, format, ap);
    va_end(ap);
 
-   // create log header
    ossSnprintf(sysInfo, PD_LOG_STRINGMAX, PD_LOG_HEADER_FORMAT,
                otm.tm_year+1900,            // 1) Year (UINT32)
                otm.tm_mon+1,                // 2) Month (UINT32)
@@ -449,7 +448,7 @@ void pdLog( PDLEVEL level, const CHAR* func, const CHAR* file,
 
    pdLogRaw( level, sysInfo ) ;
 
-   PD_TRACE_EXITRC ( SDB_PDLOG, rc ) ;
+   PD_TRACE_EXIT( SDB_PDLOG ) ;
    return ;
 }
 
@@ -460,9 +459,6 @@ void pdLogRaw( PDLEVEL level, const CHAR *pData )
    if ( getPDLevel() < level )
       return ;
 
-   // use thread specific pointer to make sure there's no nested pdLog (i.e.
-   // calling pdLog in signal handler when the thread is already in pdLog
-   // function will not proceed)
    static OSS_THREAD_LOCAL BOOLEAN amIInPD = FALSE ;
    if ( amIInPD )
    {
@@ -470,8 +466,6 @@ void pdLogRaw( PDLEVEL level, const CHAR *pData )
    }
    amIInPD = TRUE ;
 
-   // if we run outside engine, _pdLogPath may not be set, in this case we
-   // simply output to screen
 #if defined (_DEBUG) && defined (SDB_ENGINE)
       ossPrintf ( "%s"OSS_NEWLINE, pData ) ;
 #else
@@ -487,7 +481,6 @@ void pdLogRaw( PDLEVEL level, const CHAR *pData )
       }
    }
 
-   // make sure to reset this before leaving
    amIInPD = FALSE ;
 
 done:
@@ -616,7 +609,6 @@ static INT32 _pdString2AuditMask( const CHAR *pStr, UINT32 &mask )
       --end ;
    }
    UINT32 len = end - start + 1 ;
-   /// compare
    if ( 0 == ossStrncasecmp( start, "ACCESS", len ) )
    {
       mask |= AUDIT_MASK_ACCESS ;
@@ -768,13 +760,11 @@ void sdbEnableAudit( const CHAR *pdPathOrFile, INT32 fileMaxNum,
       const CHAR *pSepStr2 = ossStrrchr( pdPathOrFile, '\\' ) ;
       const CHAR *pSepStr = pSepStr1 >= pSepStr2 ? pSepStr1 : pSepStr2 ;
 
-      // is file
       if ( pDotStr && pDotStr > pSepStr )
       {
          shortName = pSepStr ? pSepStr + 1 : pdPathOrFile ;
          ossStrncpy( info._pdLogPath, pdPathOrFile, shortName - pdPathOrFile ) ;
       }
-      // is path
       else
       {
          ossStrncpy( info._pdLogPath, pdPathOrFile, OSS_MAX_PATHSIZE ) ;
@@ -818,9 +808,6 @@ void pdAuditRaw( AUDIT_TYPE type, const CHAR *pData )
    if ( !( getCurAuditMask() & pdAuditType2Mask( type ) ) )
       return ;
 
-   // use thread specific pointer to make sure there's no nested pdLog (i.e.
-   // calling pdLog in signal handler when the thread is already in pdLog
-   // function will not proceed)
    static OSS_THREAD_LOCAL BOOLEAN amIInPD = FALSE ;
    if ( amIInPD )
    {
@@ -840,7 +827,6 @@ void pdAuditRaw( AUDIT_TYPE type, const CHAR *pData )
       }
    }
 
-   // make sure to reset this before leaving
    amIInPD = FALSE ;
 
 done:
@@ -904,7 +890,6 @@ void pdAudit( AUDIT_TYPE type, const CHAR *pUserName,
               const CHAR* func, const CHAR* file,
               UINT32 line, const CHAR* format, ... )
 {
-   INT32 rc = SDB_OK ;
    if ( !( getCurAuditMask() & pdAuditType2Mask( type ) ) )
       return ;
    va_list ap;
@@ -917,6 +902,9 @@ void pdAudit( AUDIT_TYPE type, const CHAR *pUserName,
    CHAR sysInfo[ PD_LOG_STRINGMAX + 1 ] = { 0 } ;  // for log header
    CHAR szFrom[ 30 ] = { 0 } ;   // ip + port
 
+   ossSignalShield sigShield ;
+   sigShield.doNothing() ;
+
    gettimeofday(&tv, &tz);
    tt = tv.tv_sec ;
 
@@ -926,7 +914,6 @@ void pdAudit( AUDIT_TYPE type, const CHAR *pUserName,
    localtime_r( &tt, &otm ) ;
 #endif
 
-   // create the user information
    va_start(ap, format);
    vsnprintf(userInfo, PD_LOG_STRINGMAX, format, ap);
    va_end(ap);
@@ -936,7 +923,6 @@ void pdAudit( AUDIT_TYPE type, const CHAR *pUserName,
       ossSnprintf( szFrom, sizeof(szFrom)-1, "%s:%u", ipAddr, port ) ;
    }
 
-   // create log header
    ossSnprintf(sysInfo, PD_LOG_STRINGMAX, PD_AUDIT_LOG_HEADER_FORMAT,
                otm.tm_year+1900,            // 1) Year (UINT32)
                otm.tm_mon+1,                // 2) Month (UINT32)
@@ -965,7 +951,7 @@ void pdAudit( AUDIT_TYPE type, const CHAR *pUserName,
 
    pdAuditRaw( type, sysInfo ) ;
 
-   PD_TRACE_EXITRC ( SDB_PDAUDIT, rc ) ;
+   PD_TRACE_EXIT( SDB_PDAUDIT ) ;
    return ;
 }
 

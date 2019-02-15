@@ -12,96 +12,174 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
-import pysequoiadb
-from pysequoiadb import common
-from pysequoiadb.common import const
+from bson.py3compat import (text_type, str_type)
+from pysequoiadb.errcode import *
 
-class SDBTypeError(TypeError):
-   """Type Error of SequoiaDB
-   """
 
 class SDBBaseError(Exception):
-   """Base Exception of Python Driver for SequoiaDB
-   """
-   def __init__(self, errmsg, code, type):
+    """Base Exception for SequoiaDB
+    """
 
-      self.__type    = type
-      self.__errmsg  = errmsg
-      self.__code    = code
-      self.__details = None
+    def __init__(self, code, detail=None):
+        if not isinstance(code, Errcode):
+            raise TypeError("code should be Errcode type")
+        if detail is not None and not isinstance(detail, (text_type, str_type)):
+            raise TypeError("detail should be str type")
+        self.__code = code
+        self.__detail = detail
+        Exception.__init__(self, code.desc)
 
-      if code is not None and isinstance(code, int):
-         try:
-            self.__details = common.get_info(code)
-         except KeyError:
-            self.__details = None
+    def __repr__(self):
+        return "%s: %s" % (self.__code, self.__detail)
 
-      Exception.__init__(self, errmsg)
+    def __str__(self):
+        if self.__detail is not None and self.__detail != "":
+            return "%s(%d), %s, detail: %s" % \
+                   (self.__code.name, self.__code.code, self.__code.desc, self.__detail)
+        else:
+            return "%s(%d), %s" % \
+                   (self.__code.name, self.__code.code, self.__code.desc)
 
-   def __repr__(self):
+    @property
+    def code(self):
+        """The error code returned by the server, if any.
+        """
+        return self.__code.code
 
-      return "%s: %s" % ( self.__type, self.__errmsg)
+    @property
+    def errcode(self):
+        """Errcode of current error.
+        """
+        return self.__code
 
-   def __str__(self):
+    @property
+    def detail(self):
+        """return the detail error message
+        """
+        return self.__detail
 
-      return self.__repr__()
 
-   def __detail(self):
-      """get detail info with code
-      """
-      return "Error code: %s, detail: %s" % (self.__code, self.__details)
+class SDBTypeError(SDBBaseError):
+    """Type Error of SequoiaDB
+    """
 
-   @property
-   def code(self):
-      """The error code returned by the server, if any.
-      """
-      return self.__code
+    def __init__(self, detail):
+        SDBBaseError.__init__(self, SDB_INVALIDARG, detail)
 
-   @property
-   def detail(self):
-      """return the detail error message
-      """
-      return self.__detail()
 
-class SDBEndOfCursor(Exception):
-   """Invalid Parameter Error
-   """
-   def __init__(self):
-      Exception.__init__(self, "End of Cursor")
+class SDBEndOfCursor(SDBBaseError):
+    """End of cursor
+    """
 
-class SDBError(SDBBaseError):
-   """Gerneral Error of SequoiaDB
-   """
-   def __init__(self, errmsg, code):
-      SDBBaseError.__init__(self, errmsg, code, "SequoiaDB Error")
+    def __init__(self):
+        SDBBaseError.__init__(self, SDB_DMS_EOC, "end of cursor")
+
 
 class SDBIOError(SDBBaseError):
-   """IO Error of SequoiaDB
-   """
-   def __init__(self, errmsg, code):
-      SDBBaseError.__init__(self, errmsg, code, "IO Error")
+    """IO Error of SequoiaDB
+    """
+
+    def __init__(self, code, detail):
+        SDBBaseError.__init__(self, code, detail)
+
 
 class SDBNetworkError(SDBBaseError):
-   """Network Error of SequoiaDB
-   """
-   def __init__(self, errmsg, code):
-      SDBBaseError.__init__(self, errmsg, code, "Network Error")
+    """Network Error of SequoiaDB
+    """
 
-class InvalidParameter(SDBBaseError):
-   """Invalid Parameter Error
-   """
-   def __init__(self, errmsg, code):
-      SDBBaseError.__init__(self, errmsg, code, "Invalid Parameter")
+    def __init__(self, code, detail):
+        SDBBaseError.__init__(self, code, detail)
+
+
+class SDBInvalidArgument(SDBBaseError):
+    """Invalid Argument Error
+    """
+
+    def __init__(self, code, detail):
+        SDBBaseError.__init__(self, code, detail)
+
 
 class SDBSystemError(SDBBaseError):
-   """System Error of SequoiaDB
-   """
-   def __init__(self, errmsg, code):
-      SDBBaseError.__init__(self, errmsg, code, "System Error")
+    """System Error of SequoiaDB
+    """
+
+    def __init__(self, code, detail):
+        SDBBaseError.__init__(self, code, detail)
+
 
 class SDBUnknownError(SDBBaseError):
-   """Unknown Error of SequoiaDB
-   """
-   def __init__(self, errmsg):
-      SDBBaseError.__init__(self, errmsg, None, "Unknown Error")
+    """Unknown Error of SequoiaDB
+    """
 
+    def __init__(self, code, detail):
+        SDBBaseError.__init__(self, Errcode("SDB_UNKNOWN", code, "Unknown error"), detail)
+
+
+class SDBError(SDBBaseError):
+    """General Error of SequoiaDB
+    """
+
+    def __init__(self, code, detail):
+        SDBBaseError.__init__(self, code, detail)
+
+
+io_error = [
+    SDB_IO,
+    SDB_FNE,
+    SDB_FE,
+    SDB_NOSPC
+]
+
+net_error = [
+    SDB_NETWORK,
+    SDB_NETWORK_CLOSE,
+    SDB_NET_ALREADY_LISTENED,
+    SDB_NET_CANNOT_LISTEN,
+    SDB_NET_CANNOT_CONNECT,
+    SDB_NET_NOT_CONNECT,
+    SDB_NET_SEND_ERR,
+    SDB_NET_TIMER_ID_NOT_FOUND,
+    SDB_NET_ROUTE_NOT_FOUND,
+    SDB_NET_BROKEN_MSG,
+    SDB_NET_INVALID_HANDLE
+]
+
+invalid_error = [
+    SDB_INVALIDARG,
+    SDB_INVALIDSIZE,
+    SDB_INVALIDPATH,
+    SDB_INVALID_FILE_TYPE
+]
+
+system_error = [
+    SDB_OOM,
+    SDB_SYS
+]
+
+
+def raise_if_error(rc, detail):
+    """Check return value, raise a SDBBaseError if error occurred.
+    """
+    if (not isinstance(rc, int)) and (not isinstance(rc, Errcode)):
+        raise TypeError("rc should be int or Errcode type")
+    if SDB_OK != rc:
+        if isinstance(rc, Errcode):
+            err_code = rc
+        else:
+            err_code = get_errcode(rc)
+
+        if err_code is None:
+            raise SDBUnknownError(rc, detail)
+
+        if err_code == SDB_DMS_EOC:
+            raise SDBEndOfCursor
+        if err_code in io_error:
+            raise SDBIOError(err_code, detail)
+        elif err_code in net_error:
+            raise SDBNetworkError(err_code, detail)
+        elif err_code in invalid_error:
+            raise SDBInvalidArgument(err_code, detail)
+        elif err_code in system_error:
+            raise SDBSystemError(err_code, detail)
+        else:
+            raise SDBError(err_code, detail)

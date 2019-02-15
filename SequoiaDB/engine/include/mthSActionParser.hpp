@@ -59,8 +59,6 @@ namespace engine
                               INT32 limit,
                                _mthSAction &action ) const ;
    public:
-      /// all children will be used as a singleton
-      /// do not hold any dynamic member in child class.
       class parser : public SDBObject
       {
       public:
@@ -89,6 +87,34 @@ namespace engine
       PARSERS _parsers ;
    } ;
    typedef class _mthSActionParser mthSActionParser ;
+
+   class _mthTypeParser : public _mthSActionParser::parser
+   {
+   public:
+      _mthTypeParser()
+      {
+         _name = MTH_S_TYPE ;
+      }
+      virtual ~_mthTypeParser(){}
+
+   public:
+      virtual INT32 parse( const bson::BSONElement &e,
+                           _mthSAction &action ) const ;
+   } ;
+
+   class _mthSizeParser : public _mthSActionParser::parser
+   {
+   public:
+      _mthSizeParser()
+      {
+         _name = MTH_S_SIZE ;
+      }
+      virtual ~_mthSizeParser(){}
+
+   public:
+      virtual INT32 parse( const bson::BSONElement &e,
+                           _mthSAction &action ) const ;
+   } ;
 }
 
 #endif

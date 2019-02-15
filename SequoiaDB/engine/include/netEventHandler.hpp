@@ -42,6 +42,7 @@
 #include "oss.hpp"
 #include "netDef.hpp"
 #include "ossLatch.hpp"
+#include "ossAtomic.hpp"
 
 #include <string>
 #include <boost/enable_shared_from_this.hpp>
@@ -61,7 +62,8 @@ namespace engine
       NET_EVENT_HANDLER_STATE_BODY
    } ;
 
-   class _netFrame ;
+   class _netEventSuit ;
+   typedef boost::shared_ptr<_netEventSuit>     netEvSuitPtr ;
 
    /*
       _netEventHandler define
@@ -71,9 +73,14 @@ namespace engine
          public SDBObject
    {
       public:
-         _netEventHandler( _netFrame *frame ) ;
-
+         _netEventHandler( netEvSuitPtr evSuitPtr,
+                           const NET_HANDLE &handle  ) ;
          ~_netEventHandler() ;
+
+         netEvSuitPtr getEVSuitPtr() const { return _evSuitPtr ; }
+
+         BOOLEAN  isConnected() const { return _isConnected ; }
+         BOOLEAN  isNew() const { return _isNew ; }
 
       public:
          OSS_INLINE void id( const _MsgRouteID &id )
@@ -100,7 +107,7 @@ namespace engine
          {
             return _mtx ;
          }
-         OSS_INLINE NET_HANDLE handle()
+         OSS_INLINE NET_HANDLE handle() const
          {
             return _handle ;
          }
@@ -108,34 +115,24 @@ namespace engine
          {
             return _buf ;
          }
-         OSS_INLINE NET_EVENT_HANDLER_STATE state()
+         OSS_INLINE NET_EVENT_HANDLER_STATE state() const
          {
             return _state ;
          }
-         OSS_INLINE void close()
-         {
-            UINT32 timeout = 0 ;
-            _mtx.get() ;
-            _isConnected = FALSE ;
-            while ( _isInAsync && timeout < 60000 )
-            {
-               ossSleep( 50 ) ;
-               timeout += 50 ;
-            }
-            SDB_ASSERT( timeout < 60000, "socket is dead locked" ) ;
-            _sock.close() ;
-            _mtx.release() ;
-         }
+
+         void  close() ;
+
          UINT64 getLastSendTick() const { return _lastSendTick ; }
          UINT64 getLastRecvTick() const { return _lastRecvTick ; }
          UINT64 getLastBeatTick() const { return _lastBeatTick ; }
 
-         void   syncLastBeatTick() ;
+         UINT32 getMBPS() const { return _mbps ; }
 
-         BOOLEAN isAcitve() const { return _isAcitve ; }
+         void   syncLastBeatTick() ;
+         void   makeStat( UINT64 curTick ) ;
 
       public:
-         void asyncRead() ;
+         void  asyncRead() ;
 
          INT32 syncConnect( const CHAR *hostName,
                             const CHAR *serviceName ) ;
@@ -153,9 +150,7 @@ namespace engine
          BOOLEAN isLocalConnection() const ;
 
       private:
-         void _readCallback(const boost::system::error_code &
-                            error ) ;
-
+         void  _readCallback( const boost::system::error_code &error ) ;
          INT32 _allocateBuf( UINT32 len ) ;
 
       private:
@@ -166,19 +161,22 @@ namespace engine
          UINT32                           _bufLen ;
          NET_EVENT_HANDLER_STATE          _state ;
          _MsgRouteID                      _id ;
-         _netFrame                        *_frame ;
+         netEvSuitPtr                     _evSuitPtr ;
          NET_HANDLE                       _handle ;
-         BOOLEAN                          _isConnected ;
-         BOOLEAN                          _isInAsync ;
+         volatile BOOLEAN                 _isConnected ;
+         volatile BOOLEAN                 _isNew ;
          BOOLEAN                          _hasRecvMsg ;
          UINT64                           _lastSendTick ;
          UINT64                           _lastRecvTick ;
          UINT64                           _lastBeatTick ;
          UINT64                           _msgid ;
 
-         BOOLEAN                          _isAcitve ;
+         UINT64                           _lastStatTick ;
+         UINT64                           _srDataLen ;
+         UINT32                           _mbps ;     /// Byte/s
 
-   };
+   } ;
+   typedef _netEventHandler netEventHandler ;
 
    typedef boost::shared_ptr<_netEventHandler> NET_EH ;
 

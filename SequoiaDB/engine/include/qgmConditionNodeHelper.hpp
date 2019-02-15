@@ -42,6 +42,7 @@
 #include <sstream>
 
 using namespace std ;
+using namespace bson ;
 
 namespace engine
 {
@@ -57,56 +58,31 @@ namespace engine
    public:
       static void releaseNodes( qgmConditionNodePtrVec &nodes ) ;
 
-
-      static BSONObj toBson( const _qgmConditionNode *node,
-                             const CHAR *begin,
-                             UINT32 size ) ;
-/*
-      static BSONObj toBson( const _qgmConditionNode *node,
-                             const CHAR *begin ) ;
-*/
-
    public:
       string toJson() const ;
+      string toString() const ;
 
       BSONObj toBson( BOOLEAN keepAlias = TRUE ) const ;
 
-      /// get all fields in condition tree.
-      /// eg: a > 1 and b < d and c = "abc"
-      /// --> a, b, d
-      INT32 getAllAttr( qgmDbAttrPtrVec &fields ) ;
+      void getAllAttr( qgmDbAttrPtrVec &fields ) ;
 
-      /// _qgmConditionNode in nodes should be freed by caller.
       INT32 separate( qgmConditionNodePtrVec &nodes ) ;
 
       INT32 merge( qgmConditionNodePtrVec &nodes ) ;
 
       INT32 merge( _qgmConditionNode *node ) ;
 
-//      BOOLEAN validate() ;
-
    private:
-      INT32 _getAllAttr( _qgmConditionNode *node,
-                         qgmDbAttrPtrVec &fields ) ;
+      void _getAllAttr( _qgmConditionNode *node,
+                        qgmDbAttrPtrVec &fields ) ;
 
-      INT32 _toString( const _qgmConditionNode *,
-                       stringstream &ss,
-                       BOOLEAN keepAlias ) const ;
-
-      INT32 _separate( _qgmConditionNode *predicate,
+      void  _separate( _qgmConditionNode *predicate,
                        qgmConditionNodePtrVec &nodes ) ;
 
+      template< class Builder >
       INT32 _crtBson( const _qgmConditionNode *node,
-                     BSONObj &obj,
-                     BOOLEAN keepAlias ) const ;
-
-      BSONObj _toBson( const _qgmConditionNode *node,
-                       const CHAR *begin,
-                       UINT32 size ) const ;
-
-      BSONObj _toBson( const _qgmConditionNode *node,
-                       const CHAR *begin ) const ;
-
+                      Builder &bb,
+                      BOOLEAN keepAlias ) const ;
 
    private:
       _qgmConditionNode *_root ;
@@ -114,5 +90,5 @@ namespace engine
    typedef class _qgmConditionNodeHelper qgmConditionNodeHelper ;
 }
 
-#endif
+#endif // QGMCONDITIONNODEHELPER_HPP_
 

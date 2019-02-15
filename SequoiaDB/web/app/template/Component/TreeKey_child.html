@@ -20,6 +20,7 @@
             <img src="./images/tree/minmaxkey.png" ng-switch-when="MaxKey">
             <img src="./images/tree/undefined.png" ng-switch-when="Undefined">
             <img src="./images/tree/bool.png" ng-switch-when="Bool">
+            <img src="./images/tree/number.png" ng-switch-when="Decimal">
          </td>
          <td>
             <div ng-style="{width: (Setting.width - 53 - field.level * 14 ) + 'px' }" class="Ellipsis" ng-if="field.type=='Object'">{{field.key}}</div>
@@ -28,5 +29,5 @@
          </td>
       </tr>
    </table>
-   <div ng-show="field.isOpen" style="padding-left:14px;" ng-if="field.type=='Object' || field.type=='Array'" ng-eval="items = field.val;" ng-include="'./app/template/Component/TreeKey_child.html'"></div>
+   <div ng-if="field.isOpen && (field.type=='Object' || field.type=='Array')" style="padding-left:14px;" ng-eval="items = field.val;" ng-include="'./app/template/Component/TreeKey_child.html'"></div>
 </div>

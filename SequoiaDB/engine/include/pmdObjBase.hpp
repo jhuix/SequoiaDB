@@ -91,7 +91,7 @@ namespace engine
    }
 
 #define ON_MSG_RANGE(typeBegin, typeEnd, func) \
-   { typeBegin, typeEnd, sig_msg, #func, (MSG_FUNC)(&thisClass::func), NULL },
+   { (UINT32)typeBegin, (UINT32)typeEnd, sig_msg, #func, (MSG_FUNC)(&thisClass::func), NULL },
 #define ON_MSG(type, func) ON_MSG_RANGE(type, type, func)
 
 #define ON_EVENT_RANGE(typeBegin, typeEnd, func ) \
@@ -147,8 +147,9 @@ namespace engine
             ossGetCurrentTime(ts);
             if (ts.time - occurTime > 2)
             {
-               PD_LOG( PDWARNING,  "[%s]Timer(ID:%u,interval:%u) lantcy %u "
-                       "seconds", name(), timerID, interval,
+               PD_LOG( PDWARNING,  "[%s]Timer(ID:%u-%u,interval:%u) lantcy %u "
+                       "seconds", name(), (UINT32)(timerID >> 32),
+                       (UINT32)(timerID & 0xFFFFFFFF), interval,
                        (UINT32)(ts.time - occurTime) );
             }
 
@@ -287,7 +288,6 @@ namespace engine
          }
       }
 
-      //On timer
       if ( event->_eventType== PMD_EDU_EVENT_TIMEOUT )
       {
          PMD_EVENT_MESSAGES *timeMsg = (PMD_EVENT_MESSAGES*)( event->_Data );

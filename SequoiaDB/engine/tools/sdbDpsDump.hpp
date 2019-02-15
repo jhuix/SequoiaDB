@@ -71,13 +71,10 @@
    ( DPS_FILTER_COMMANDS_STRING( DPS_DUMP_NAME,      ",n" ), boost::program_options::value< std::string >(), "specify the name of collectionspace/collections" ) \
    ( DPS_FILTER_COMMANDS_STRING( DPS_DUMP_LSN,       ",l" ), boost::program_options::value< std::string >(), "specify the lsn, -a/-b may help" ) \
    ( DPS_FILTER_COMMANDS_STRING( DPS_DUMP_LAST,      ",e" ), boost::program_options::value< INT32 >(), "specify the number of last records of file to display ")\
-   ( DPS_FILTER_COMMANDS_STRING( DPS_DUMP_SOURCE,    ",s" ), boost::program_options::value<std::string>(), "specify source log file path, or current path specified default" ) \
-   ( DPS_FILTER_COMMANDS_STRING( DPS_DUMP_OUTPUT,    ",o" ), boost::program_options::value< std::string >(), "specify output file path, or current path specified default " ) \
+   ( DPS_FILTER_COMMANDS_STRING( DPS_DUMP_SOURCE,    ",s" ), boost::program_options::value<std::string>(), "specify source log file or path, default: current path" ) \
+   ( DPS_FILTER_COMMANDS_STRING( DPS_DUMP_OUTPUT,    ",o" ), boost::program_options::value< std::string >(), "specify output file or path, default: screen output" ) \
    ( DPS_FILTER_COMMANDS_STRING( DPS_DUMP_LSN_AHEAD, ",a" ), boost::program_options::value< INT32 >(), "specify the number of records to display before the lsn specified by -l/--lsn" ) \
    ( DPS_FILTER_COMMANDS_STRING( DPS_DUMP_LSN_BACK,  ",b" ), boost::program_options::value< INT32 >(), "specify the number of records to display after the lsn specified by -l/--lsn" )
-
-#define SDB_DPS_DUMP_HELP 1
-#define SDB_DPS_DUMP_VER  2
 
 struct _dpsFileMeta : public SDBObject
 {
@@ -125,7 +122,7 @@ typedef _dpsCmdData dpsCmdData ;
 
 
 #define DPS_LOG_REACH_HEAD 1
-#define DPS_LOG_FILE_INVALID 1
+#define DPS_LOG_FILE_INVALID 2
 #define DPS_LOG_INVALID_LSN 0xffffffffffffffff
 #define LOG_BUFFER_FORMAT_MULTIPLIER 10
 #define NONE_LSN_FILTER -1
@@ -193,7 +190,7 @@ public:
       _type( type )
    {}
 
-   virtual ~_dpsDumpFilter() 
+   virtual ~_dpsDumpFilter()
    {
       _nextFilter = NULL ;
    }
@@ -236,7 +233,6 @@ protected:
 typedef _dpsDumpFilter dpsDumpFilter ;
 
 
-// declare filter by DECLARE_FILTER
 #define DECLARE_FILTER( filterName, alias, typeIndex )                  \
 class filterName : public dpsDumpFilter                                 \
 {                                                                       \
@@ -259,13 +255,14 @@ FILTER_DEFINITION( Name, SDB_LOG_FILTER_NAME )
 FILTER_DEFINITION( Lsn,  SDB_LOG_FILTER_LSN  )
 FILTER_DEFINITION( None, SDB_LOG_FILTER_NONE )
 FILTER_DEFINITION( Last, SDB_LOG_FILTER_LAST )
+FILTER_DEFINITION( Meta, SDB_LOG_FILTER_META )
 
 class _dpsFilterFactory
 {
 public:
    static _dpsFilterFactory* getInstance() ;
 
-   dpsDumpFilter* createFilter( int type ) ;   
+   dpsDumpFilter* createFilter( int type ) ;
 
    void release( dpsDumpFilter *filter ) ;
 
@@ -288,8 +285,10 @@ public:
       std::cout << desc << std::endl ;
    }
 
-   INT32 initialize( INT32 argc, char** agrv,
-                     po::options_description &desc, po::variables_map &vm ) ;
+   INT32 initialize( INT32 argc,
+                     char** agrv,
+                     po::options_description &desc,
+                     po::variables_map &vm ) ;
 
    INT32 prepare( po::variables_map &vm );
 
@@ -304,12 +303,12 @@ public:
 
 public:
    virtual INT32 doDataExchange( engine::pmdCfgExchange *pEx ) ;
-   virtual INT32 postLoaded() ;
+   virtual INT32 postLoaded( engine::PMD_CFG_STEP step ) ;
    virtual INT32 preSaving() ;
 
 public:
-   static const INT32 getFileCount( const CHAR *path );
-   static BOOLEAN isDir( const CHAR *path ) ;
+   static INT32   getFileCount( const CHAR *path, INT32 &fileCount );
+   static INT32   isDir( const CHAR *path, BOOLEAN &dir ) ;
    static BOOLEAN isFileExisted( const CHAR *path );
    static INT32   sortFiles(dpsMetaData& meta);
    static INT32   toFile( OSSFILE& out, const CHAR *buffer);
@@ -318,12 +317,14 @@ private:
 
    BOOLEAN     _validCheck( const po::variables_map &vm ) ;
 
-   INT32       _analysisMeta() ;
-   
+   INT32       _analysisMeta(map<UINT32, string > &mapFiles) ;
+
    INT32       _metaFilte( const CHAR *filename, INT32 index,
                            dpsFileMeta& meta ) ;
    INT64       _dumpMeta( const dpsMetaData& meta,
                           CHAR* pBuffer, const UINT64 bufferSize ) ;
+   INT32       _changeFileName();
+   INT32       _getSortedFileMap( const CHAR *dirPath, map<UINT32, string> &mapFiles);
 
 private:
    INT32   _checkLogFile( OSSFILE &file, INT64 &size, const CHAR *filename );
@@ -352,8 +353,10 @@ public:
    CHAR     name[ OSS_MAX_PATHSIZE + 1 ] ;
    CHAR     srcPath[ OSS_MAX_PATHSIZE + 1 ] ;
    CHAR     dstPath[ OSS_MAX_PATHSIZE + 1 ] ;
+   UINT32   dstPathLen;
 private:
    CHAR    *_metaContent;
+   UINT64   _metaContentSize ;
    dpsDumpFilter *_filter ;
    dpsMetaData _meta ;
 };

@@ -37,6 +37,8 @@
 
 #include "catLevelLock.hpp"
 #include "catalogueCB.hpp"
+#include "catCommon.hpp"
+#include "rtn.hpp"
 
 namespace engine
 {
@@ -48,15 +50,18 @@ namespace engine
    */
    _catLockTreeNode::_catLockTreeNode()
    {
-      _latch   = NULL ;
-      _mgr     = NULL ;
-      _parent  = NULL ;
-      _type    = CAT_LOCK_MAX ;
-      _lockType= -1 ;
+      _latch     = NULL ;
+      _mgr       = NULL ;
+      _parent    = NULL ;
+      _type      = CAT_LOCK_MAX ;
+      _lockType  = -1 ;
+      _lockCount = 0L ;
    }
 
    _catLockTreeNode::~_catLockTreeNode()
    {
+      SDB_ASSERT( -1 == _lockType && 0L == _lockCount,
+                  "lock should be freed" ) ;
       _latch   = NULL ;
       _mgr     = NULL ;
       _parent  = NULL ;
@@ -69,6 +74,10 @@ namespace engine
          return FALSE ;
       }
       if ( _lockType != -1 )
+      {
+         return FALSE ;
+      }
+      if ( _lockCount != 0L )
       {
          return FALSE ;
       }
@@ -107,7 +116,6 @@ namespace engine
    BOOLEAN _catLockTreeNode::tryLock( OSS_LATCH_MODE mode )
    {
       BOOLEAN lock = FALSE ;
-      SDB_ASSERT( _lockType == -1, "Has already locked" ) ;
 
       if ( _isZeroLevel() ) // zero level
       {
@@ -128,16 +136,17 @@ namespace engine
       if ( lock )
       {
          _lockType = (INT32)mode ;
+         _lockCount++ ;
       }
       return lock ;
    }
 
    void _catLockTreeNode::unLock()
    {
-      SDB_ASSERT( -1 != _lockType, "Has't lock" ) ;
-
-      if ( -1 == _lockType )
+      if ( -1 == _lockType || 0L == _lockCount )
       {
+         SDB_ASSERT( -1 == _lockType && 0L == _lockCount,
+                     "lock should be freed" ) ;
          return ;
       }
 
@@ -152,7 +161,11 @@ namespace engine
             _latch->release_shared() ;
          }
       }
-      _lockType = -1 ;
+      _lockCount-- ;
+      if ( 0L == _lockCount )
+      {
+         _lockType = -1 ;
+      }
    }
 
    void _catLockTreeNode::_setLatch( ossSpinSLatch *latch )
@@ -209,7 +222,6 @@ namespace engine
       catLockTreeNode &lockTree = _mapType2Lock[ type ] ;
       if ( NULL == lockTree._getMgr() )
       {
-         // zero level don't need latch
          lockTree._setType( type ) ;
          lockTree._setMgr( this ) ;
       }
@@ -292,6 +304,7 @@ namespace engine
          locked = _zeroLevelNode->tryLock( mode ) ;
          if ( !locked )
          {
+            _zeroLevelNode = NULL ;
             goto error ;
          }
       }
@@ -338,8 +351,6 @@ namespace engine
    {
       BOOLEAN locked = FALSE ;
 
-      // first lock zero
-      // then lock one
       if ( _catZeroLevelLock::tryLock( SHARED ) )
       {
          if ( NULL == _oneLevelNode )
@@ -352,6 +363,7 @@ namespace engine
             locked = _oneLevelNode->tryLock( mode ) ;
             if ( !locked )
             {
+               _oneLevelNode = NULL ;
                goto error ;
             }
          }
@@ -401,8 +413,6 @@ namespace engine
    {
       BOOLEAN locked = FALSE ;
 
-      // first lock one
-      // then lock two
       if ( _catOneLevelLock::tryLock( SHARED ) )
       {
          if ( NULL == _twoLevelNode )
@@ -415,6 +425,7 @@ namespace engine
             locked = _twoLevelNode->tryLock( mode ) ;
             if ( !locked )
             {
+               _twoLevelNode = NULL ;
                goto error ;
             }
          }
@@ -494,6 +505,147 @@ namespace engine
    {
    }
 
+   /*
+      _catCtxLockMgr implement
+    */
+   _catCtxLockMgr::_catCtxLockMgr ()
+   {
+   }
+
+   _catCtxLockMgr::~_catCtxLockMgr ()
+   {
+      unlockObjects() ;
+   }
+
+   BOOLEAN _catCtxLockMgr::tryLockCollectionSpace (
+         const std::string &csName,
+         OSS_LATCH_MODE mode )
+   {
+      return _tryLockObject ( CAT_LOCK_DATA, csName, mode ) ;
+   }
+
+   BOOLEAN _catCtxLockMgr::tryLockCollection (
+         const std::string &csName,
+         const std::string &clFullName,
+         OSS_LATCH_MODE mode )
+   {
+      return _tryLockObject ( CAT_LOCK_DATA, csName, clFullName, mode ) ;
+   }
+
+   BOOLEAN _catCtxLockMgr::tryLockCollection (
+         const std::string &clFullName,
+         OSS_LATCH_MODE mode )
+   {
+      INT32 rc = SDB_OK ;
+      CHAR csName[ DMS_COLLECTION_SPACE_NAME_SZ + 1 ] = {0} ;
+
+      rc = rtnResolveCollectionSpaceName( clFullName.c_str(),
+                                          clFullName.size(),
+                                          csName,
+                                          DMS_COLLECTION_SPACE_NAME_SZ ) ;
+      if ( SDB_OK != rc )
+      {
+         return FALSE ;
+      }
+      return _tryLockObject ( CAT_LOCK_DATA, csName, clFullName, mode ) ;
+   }
+
+   BOOLEAN _catCtxLockMgr::tryLockDomain (
+         const std::string &domainName,
+         OSS_LATCH_MODE mode )
+   {
+      return _tryLockObject ( CAT_LOCK_DOMAIN, domainName, mode ) ;
+   }
+
+   BOOLEAN _catCtxLockMgr::tryLockGroup(
+         const std::string &groupName,
+         OSS_LATCH_MODE mode )
+   {
+      return _tryLockObject ( CAT_LOCK_NODE, groupName, mode ) ;
+   }
+
+   BOOLEAN _catCtxLockMgr::tryLockNode ( const std::string &groupName,
+                                         const std::string &nodeName,
+                                         OSS_LATCH_MODE mode )
+   {
+      return _tryLockObject ( CAT_LOCK_NODE, groupName, nodeName, mode ) ;
+   }
+
+   BOOLEAN _catCtxLockMgr::_tryLockObject ( CAT_LOCK_TYPE type,
+                                            const std::string &name,
+                                            OSS_LATCH_MODE mode )
+   {
+      catOneLevelLock *pLock = NULL ;
+
+      switch ( type )
+      {
+      case CAT_LOCK_DATA :
+         pLock = SDB_OSS_NEW catCSLock ( name ) ;
+         break ;
+      case CAT_LOCK_NODE :
+         pLock = SDB_OSS_NEW catGroupLock ( name ) ;
+         break ;
+      case CAT_LOCK_DOMAIN :
+         pLock = SDB_OSS_NEW catDomainLock ( name ) ;
+         break ;
+      default :
+         break ;
+      }
+
+      return _tryLockObject ( pLock, mode ) ;
+   }
+
+   BOOLEAN _catCtxLockMgr::_tryLockObject ( CAT_LOCK_TYPE type,
+                                            const std::string &parentName,
+                                            const std::string &name,
+                                            OSS_LATCH_MODE mode )
+   {
+      catOneLevelLock *pLock = NULL ;
+
+      SDB_ASSERT( parentName != name, "Names of 2 levels are the same" ) ;
+
+      switch ( type )
+      {
+      case CAT_LOCK_DATA :
+         pLock = SDB_OSS_NEW catCLLock ( parentName, name ) ;
+         break ;
+      case CAT_LOCK_NODE :
+         pLock = SDB_OSS_NEW catNodeLock ( parentName, name ) ;
+         break ;
+      default :
+         break ;
+      }
+
+      return _tryLockObject ( pLock, mode ) ;
+   }
+
+   BOOLEAN _catCtxLockMgr::_tryLockObject ( catOneLevelLock *pLock,
+                                            OSS_LATCH_MODE mode )
+   {
+      if ( !pLock )
+         return FALSE ;
+
+      if ( pLock->tryLock( mode ) )
+      {
+         _lockList.push_back( pLock ) ;
+         return TRUE ;
+      }
+
+      SDB_OSS_DEL pLock ;
+      return FALSE ;
+   }
+
+   void _catCtxLockMgr::unlockObjects ()
+   {
+      LOCK_LIST::iterator iterLock = _lockList.begin () ;
+      while ( iterLock != _lockList.end() )
+      {
+         catOneLevelLock *pLock = ( *iterLock ) ;
+         iterLock = _lockList.erase( iterLock ) ;
+         pLock->unLock();
+         SDB_OSS_DEL pLock;
+      }
+   }
 }
 
 

@@ -46,19 +46,17 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
       clsLSNNtyInfo lsnInfo ;
-      EDUID myEDUID = cb->getID () ;
       pmdEDUMgr * eduMgr = cb->getEDUMgr() ;
       replCB *pReplCb = ( replCB* )arg ;
       ossQueue< clsLSNNtyInfo > *pNtyQue = pReplCb->getNtyQue() ;
 
-      rc = eduMgr->activateEDU ( myEDUID ) ;
+      rc = eduMgr->activateEDU ( cb ) ;
       if ( rc )
       {
          PD_LOG ( PDERROR, "Failed to activate EDU" ) ;
          goto error ;
       }
 
-      // just sit here do nothing at the moment
       while ( !cb->isDisconnected() )
       {
          if ( !pNtyQue->timed_wait_and_pop( lsnInfo, OSS_ONE_SEC ) )
@@ -76,6 +74,10 @@ namespace engine
       goto done ;
    }
 
+   PMD_DEFINE_ENTRYPOINT( EDU_TYPE_CLSLOGNTY, TRUE,
+                          pmdClsNtyEntryPoint,
+                          "ClusterLogNotify" ) ;
+
    INT32 pmdDBMonitorEntryPoint( pmdEDUCB *cb, void *arg )
    {
       INT32 rc = SDB_OK ;
@@ -83,7 +85,7 @@ namespace engine
       pmdEDUEvent data ;
       _clsLocalValidation v ;
 
-      rc = pEduMgr->activateEDU( cb->getID() ) ;
+      rc = pEduMgr->activateEDU( cb ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to activate edu[%s], rc: %d",
                    cb->toString().c_str(), rc ) ;
 
@@ -93,9 +95,7 @@ namespace engine
          {
             pmdEduEventRelase( data, cb ) ;
          }
-         /// set the edu to active
-         pEduMgr->activateEDU( cb->getID() ) ;
-         /// monitor
+         pEduMgr->activateEDU( cb ) ;
          rc = v.run() ;
          if ( SDB_OK != rc )
          {
@@ -115,6 +115,10 @@ namespace engine
    error:
       goto done ;
    }
+
+   PMD_DEFINE_ENTRYPOINT( EDU_TYPE_DBMONITOR, TRUE,
+                          pmdDBMonitorEntryPoint,
+                          "DBMonitor" ) ;
 
 }
 

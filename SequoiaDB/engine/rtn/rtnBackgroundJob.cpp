@@ -37,27 +37,28 @@
 #include "ixm.hpp"
 #include "dmsStorageUnit.hpp"
 #include "dmsStorageLoadExtent.hpp"
+#include "rtnRecover.hpp"
 #include "pdTrace.hpp"
 #include "rtnTrace.hpp"
 
 namespace engine
 {
 
-   ////////////////////////////////////////////////////////////////////////////
-   // background job implements //
-   ////////////////////////////////////////////////////////////////////////////
 
    // PD_TRACE_DECLARE_FUNCTION ( SDB__RTNINDEXJOB__RTNINDEXJOB, "_rtnIndexJob::_rtnIndexJob" )
    _rtnIndexJob::_rtnIndexJob ( RTN_JOB_TYPE type, const CHAR *pCLName,
-                                const BSONObj & indexObj, SDB_DPSCB * dpsCB )
+                                const BSONObj & indexObj, SDB_DPSCB * dpsCB,
+                                UINT64 offset, BOOLEAN isRollBack )
    {
       PD_TRACE_ENTRY ( SDB__RTNINDEXJOB__RTNINDEXJOB ) ;
       _type = type ;
-      ossMemcpy ( _clFullName, pCLName, DMS_COLLECTION_FULL_NAME_SZ ) ;
+      ossStrncpy ( _clFullName, pCLName, DMS_COLLECTION_FULL_NAME_SZ ) ;
       _clFullName[DMS_COLLECTION_FULL_NAME_SZ] = 0 ;
       _indexObj = indexObj.copy() ;
       _dpsCB = dpsCB ;
       _dmsCB = pmdGetKRCB()->getDMSCB() ;
+      _lsn = offset ;
+      _isRollback = isRollBack ;
       PD_TRACE_EXIT ( SDB__RTNINDEXJOB__RTNINDEXJOB ) ;
    }
 
@@ -77,14 +78,12 @@ namespace engine
          case RTN_JOB_CREATE_INDEX :
             {
                _jobName = "CreateIndex-" ;
-               // need to get the index name
                _indexName = _indexObj.getStringField( IXM_NAME_FIELD ) ;
             }
             break ;
          case RTN_JOB_DROP_INDEX :
             {
                _jobName = "DropIndex-" ;
-               // need to get the index name
                _indexEle = _indexObj.getField( IXM_NAME_FIELD ) ;
                if ( _indexEle.eoo() )
                {
@@ -119,7 +118,6 @@ namespace engine
                   }
 
                   _indexEle.Val( oid ) ;
-                  // get index extent
                   rc = su->index()->getIndexCBExtent( mbContext, oid,
                                                       idxExtent ) ;
                   if ( SDB_OK != rc )
@@ -223,11 +221,17 @@ namespace engine
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__RTNINDEXJOB_DOIT ) ;
 
+      if ( !_dpsCB )
+      {
+         eduCB()->insertLsn( _lsn, _isRollback ) ;
+      }
+
       switch ( _type )
       {
          case RTN_JOB_CREATE_INDEX :
             rc = rtnCreateIndexCommand( _clFullName, _indexObj, eduCB(),
-                                        _dmsCB, _dpsCB, TRUE, SDB_INDEX_SORT_BUFFER_DEFAULT_SIZE ) ;
+                                        _dmsCB, _dpsCB, TRUE,
+                                        SDB_INDEX_SORT_BUFFER_DEFAULT_SIZE ) ;
             break ;
          case RTN_JOB_DROP_INDEX :
             rc = rtnDropIndexCommand( _clFullName, _indexEle, eduCB(),
@@ -243,6 +247,9 @@ namespace engine
       return rc ;
    }
 
+   /*
+      _rtnLoadJob implement
+   */
    RTN_JOB_TYPE _rtnLoadJob::type () const
    {
       return RTN_JOB_LOAD ;
@@ -250,16 +257,12 @@ namespace engine
 
    const CHAR* _rtnLoadJob::name () const
    {
-      return _jobName.c_str() ;
+      return "Load" ;
    }
 
-   // PD_TRACE_DECLARE_FUNCTION ( SDB__RTNLOADJOB_MUTEXON, "_rtnLoadJob::muteXOn" )
    BOOLEAN _rtnLoadJob::muteXOn ( const _rtnBaseJob * pOther )
    {
-      PD_TRACE_ENTRY ( SDB__RTNLOADJOB_MUTEXON ) ;
-      BOOLEAN ret = FALSE;
-      PD_TRACE_EXIT ( SDB__RTNLOADJOB_MUTEXON ) ;
-      return ret ;
+      return FALSE ;
    }
 
    // PD_TRACE_DECLARE_FUNCTION ( SDB__RTNLOADJOB_DOIT , "_rtnLoadJob::doit" )
@@ -274,8 +277,8 @@ namespace engine
       pmdEDUMgr        *eduMgr   = krcb->getEDUMgr () ;
       pmdEDUCB         *eduCB    = eduMgr->getEDU() ;
       dmsStorageLoadOp dmsLoadExtent ;
-      std::set<monCollectionSpace> csList ;
-      std::set<monCollectionSpace>::iterator it ;
+      MON_CS_LIST csList ;
+      MON_CS_LIST::iterator it ;
 
       if ( SDB_ROLE_STANDALONE != krcb->getDBRole() &&
            SDB_ROLE_DATA != krcb->getDBRole() )
@@ -287,8 +290,8 @@ namespace engine
 
       for ( it = csList.begin(); it != csList.end(); ++it )
       {
-         std::set<monCollection> clList ;
-         std::set<monCollection>::iterator itCollection ;
+         MON_CL_LIST clList ;
+         MON_CL_LIST::iterator itCollection ;
          rc = rtnCollectionSpaceLock ( (*it)._name,
                                        dmsCB,
                                        FALSE,
@@ -302,7 +305,7 @@ namespace engine
    
          dmsLoadExtent.init ( su ) ;
 
-         su->dumpInfo ( clList ) ;
+         su->dumpInfo ( clList, FALSE ) ;
          for ( itCollection = clList.begin();
                itCollection != clList.end();
                ++itCollection )
@@ -330,7 +333,6 @@ namespace engine
             }
             collectionFlag = mbContext->mb()->_flag ;
 
-            // unlock collection
 
             if ( DMS_IS_MB_FLAG_LOAD_LOAD ( collectionFlag ) )
             {
@@ -375,6 +377,64 @@ namespace engine
       goto done ;
    }
 
+   /*
+      _rtnRebuildJob implement
+   */
+   _rtnRebuildJob::_rtnRebuildJob()
+   {
+      _pFunc = NULL ;
+   }
+
+   _rtnRebuildJob::~_rtnRebuildJob()
+   {
+   }
+
+   void _rtnRebuildJob::setInfo( RTN_ON_REBUILD_DONE_FUNC pFunc )
+   {
+      _pFunc = pFunc ;
+   }
+
+   RTN_JOB_TYPE _rtnRebuildJob::type() const
+   {
+      return RTN_JOB_REBUILD ;
+   }
+
+   const CHAR* _rtnRebuildJob::name() const
+   {
+      return "Rebuild" ;
+   }
+
+   BOOLEAN _rtnRebuildJob::muteXOn( const _rtnBaseJob *pOther )
+   {
+      if ( type() == pOther->type() )
+      {
+         return TRUE ;
+      }
+      return FALSE ;
+   }
+
+   INT32 _rtnRebuildJob::doit()
+   {
+      INT32 rc = SDB_OK ;
+
+      rtnDBRebuilder rebuilder ;
+      PMD_SET_DB_STATUS( SDB_DB_REBUILDING ) ;
+      rc = rebuilder.doOpr( eduCB() ) ;
+      PMD_SET_DB_STATUS( SDB_DB_NORMAL ) ;
+
+      if ( rc )
+      {
+         PD_LOG( PDERROR, "Failed to rebuild database, rc: %d, "
+                 "shutdown db", rc ) ;
+      }
+
+      if ( _pFunc )
+      {
+         _pFunc( rc ) ;
+      }
+      return rc ;
+   }
+
    // PD_TRACE_DECLARE_FUNCTION ( SDB_RTNSTARTLOADJOB, "rtnStartLoadJob" )
    INT32 rtnStartLoadJob()
    {
@@ -392,6 +452,36 @@ namespace engine
 
    done :
       PD_TRACE_EXITRC ( SDB_RTNSTARTLOADJOB, rc );
+      return rc ;
+   error :
+      goto done ;
+   }
+
+   INT32 rtnStartRebuildJob( RTN_ON_REBUILD_DONE_FUNC pFunc )
+   {
+      INT32 rc = SDB_OK ;
+      rtnRebuildJob *pJob = SDB_OSS_NEW rtnRebuildJob() ;
+      if ( NULL == pJob )
+      {
+         PD_LOG ( PDERROR, "Failed to alloc memory for rtnRebuildJob" ) ;
+         rc = SDB_OOM ;
+         goto error ;
+      }
+
+      pJob->setInfo( pFunc ) ;
+      rc = rtnGetJobMgr()->startJob( pJob, RTN_JOB_MUTEX_RET, NULL ) ;
+      if ( rc )
+      {
+         PD_LOG( PDERROR, "Failed to start rebuild job, rc: %d", rc ) ;
+
+         if ( SDB_RTN_MUTEX_JOB_EXIST != rc && pFunc )
+         {
+            pFunc( rc ) ;
+         }
+         goto error ;
+      }
+
+   done :
       return rc ;
    error :
       goto done ;

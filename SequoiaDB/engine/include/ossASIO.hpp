@@ -47,12 +47,10 @@
 #include <boost/bind.hpp>
 #include <boost/enable_shared_from_this.hpp>
 #include <boost/shared_ptr.hpp>
+#include <boost/asio/steady_timer.hpp>
 #include <map>
 using namespace boost::asio ;
 using namespace boost::asio::ip ;
-// the caller is taking message as input, and may or may not allocate reply
-// buffer. The caller will free reply when it's not NULL and not same as message
-// pointer.
 typedef INT32 (*ossAsioProcessFunction) ( CHAR *message,
                                           CHAR **reply,
                                           tcp::socket *sock ) ;
@@ -110,7 +108,7 @@ class _timerPair : public
       public SDBObject
 {
 private :
-   deadline_timer _timer ;
+   boost::asio::steady_timer _timer ;
    ossAsioProcessFunction _onTimer ;
    UINT32 _timeoutMS ;
 public :

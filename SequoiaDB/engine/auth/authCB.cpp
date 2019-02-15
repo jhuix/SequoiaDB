@@ -35,7 +35,6 @@
 #include "rtn.hpp"
 #include "authTrace.hpp"
 #include "pmdCB.hpp"
-#include "catCommon.hpp"
 
 using namespace bson ;
 
@@ -72,6 +71,11 @@ namespace engine
       return SDB_OK ;
    }
 
+   void _authCB::onConfigChange()
+   {
+      _authEnabled = pmdGetOptionCB()->authEnabled() ;
+   }
+
    // PD_TRACE_DECLARE_FUNCTION ( SDB_AUTHCB_AUTHENTICATE, "_authCB::authenticate" )
    INT32 _authCB::authenticate( BSONObj &obj, _pmdEDUCB *cb,
                                 BOOLEAN chkPasswd )
@@ -105,7 +109,6 @@ namespace engine
       }
       catch ( std::exception &e )
       {
-         // if exception happen, let's just continue
          PD_LOG ( PDWARNING, "Failed to initialize hint: %s",
                   e.what() ) ;
       }
@@ -187,6 +190,76 @@ namespace engine
       goto done ;
    }
 
+   // PD_TRACE_DECLARE_FUNCTION ( SDB_AUTHCB_GETUSRINFO, "_authCB::getUsrInfo" )
+   INT32 _authCB::getUsrInfo( const string &user, _pmdEDUCB *cb, BSONObj &info )
+   {
+      INT32 rc = SDB_OK ;
+      SINT64 contextID = -1 ;
+      SDB_DMSCB *dmsCB = pmdGetKRCB()->getDMSCB() ;
+      SDB_RTNCB *rtnCB = pmdGetKRCB()->getRTNCB() ;
+      rtnContextBuf buffObj ;
+      BSONObj condition ;
+      BSONObj selector ;
+      BSONObj order ;
+      BSONObj hint ;
+
+      PD_TRACE_ENTRY ( SDB_AUTHCB_GETUSRINFO ) ;
+
+      condition = BSON( SDB_AUTH_USER << user ) ;
+
+      rc = rtnQuery( AUTH_USR_COLLECTION, selector, condition, order, hint, 0,
+                     cb, 0, -1, dmsCB, rtnCB, contextID ) ;
+      if ( rc )
+      {
+         PD_LOG( PDERROR, "failed to query:%d",rc ) ;
+         goto error ;
+      }
+
+      rc = rtnGetMore( contextID, -1, buffObj, cb, rtnCB ) ;
+      if ( rc && SDB_DMS_EOC != rc)
+      {
+         PD_LOG( PDERROR, "failed to getmore:%d",rc ) ;
+         rc = SDB_AUTH_AUTHORITY_FORBIDDEN ;
+         goto error ;
+      }
+      else if ( SDB_DMS_EOC == rc )
+      {
+         rc = SDB_AUTH_AUTHORITY_FORBIDDEN ;
+         goto error ;
+      }
+      else if ( 0 == buffObj.recordNum() )
+      {
+         rc = SDB_AUTH_AUTHORITY_FORBIDDEN ;
+         goto error ;
+      }
+      else if ( 1 == buffObj.recordNum() )
+      {
+         rc = SDB_OK ;
+      }
+      else
+      {
+         PD_LOG( PDERROR, "get more than one record, impossible" ) ;
+         rc = SDB_SYS ;
+         SDB_ASSERT( FALSE, "impossible" ) ;
+      }
+
+      {
+         BSONObj result( buffObj.data() ) ;
+
+         info = result.copy() ;
+      }
+
+   done:
+      if ( -1 != contextID )
+      {
+         rtnCB->contextDelete ( contextID, cb ) ;
+      }
+      PD_TRACE_EXITRC ( SDB_AUTHCB_GETUSRINFO, rc ) ;
+      return rc ;
+   error:
+      goto done ;
+   }
+
    INT32 _authCB::updatePasswd( const string &user, const string &oldPasswd, 
                                 const string &newPasswd, _pmdEDUCB *cb )
    {
@@ -240,7 +313,6 @@ namespace engine
                              << obj.getStringField(SDB_AUTH_USER) ) ;
       rtnContextBuf buffObj ;
 
-      // firstly, we check the user is exist or not
       rc = rtnQuery( AUTH_USR_COLLECTION, selector, newObj, order, hint,
                      0, cb, 0, -1, dmsCB, rtnCB, contextID ) ;
       if ( SDB_OK != rc )
@@ -279,15 +351,12 @@ namespace engine
       }
          
       {
-         // then, we check user name and password is correct or not
          rc = authenticate( obj, cb, FALSE ) ;
          if ( SDB_OK != rc )
          {
             goto error ;
          }
 
-         // at last, we confirm eht user and password is correct
-         // now we remove the record from system collection
          hint = BSON( "" << AUTH_USR_INDEX_NAME ) ;
          rc = rtnDelete( AUTH_USR_COLLECTION,
                          obj, hint,
@@ -318,13 +387,12 @@ namespace engine
       PD_TRACE_ENTRY ( SDB_AUTHCB_INITAUTH ) ;
       SDB_DMSCB *dmsCB = pmdGetKRCB()->getDMSCB() ;
 
-      rc = catTestAndCreateCL( AUTH_USR_COLLECTION, cb, dmsCB, NULL, TRUE ) ;
+      rc = rtnTestAndCreateCL( AUTH_USR_COLLECTION, cb, dmsCB, NULL, TRUE ) ;
       if ( rc )
       {
          goto error ;
       }
 
-      // create index
       {
          BSONObjBuilder builder ;
          builder.append( IXM_FIELD_NAME_KEY, BSON( SDB_AUTH_USER << 1) ) ;
@@ -332,7 +400,7 @@ namespace engine
          builder.appendBool( IXM_FIELD_NAME_UNIQUE, TRUE ) ;
          BSONObj indexDef = builder.obj() ;
 
-         rc = catTestAndCreateIndex( AUTH_USR_COLLECTION, indexDef, cb, dmsCB,
+         rc = rtnTestAndCreateIndex( AUTH_USR_COLLECTION, indexDef, cb, dmsCB,
                                      NULL, TRUE ) ;
          if ( SDB_OK != rc )
          {
@@ -362,6 +430,7 @@ namespace engine
       if ( !_authEnabled )
       {
          need = FALSE ;
+         goto done ;
       }
 
       rc = rtnResolveCollectionNameAndLock( AUTH_USR_COLLECTION,
@@ -427,7 +496,6 @@ namespace engine
       }
       else
       {
-         /// do nothing
       }
 
    done:
@@ -521,6 +589,7 @@ namespace engine
       }
 
    done:
+      PD_TRACE_EXITRC( SDB_AUTHCB__VALID, rc ) ;
       return rc ;
    error:
       rc = SDB_INVALIDARG ;

@@ -1,4 +1,4 @@
-#! /bin/sh
+#!/bin/sh
 ### BEGIN INIT INFO
 # Provides:          skeleton
 # Required-Start:    $remote_fs $syslog
@@ -21,6 +21,8 @@
 PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="sequoiadb database service"
 NAME=sequoiadb
+LOCK_FILE_DIR=/var/lock/subsys
+LOCK_FILE=${LOCK_FILE_DIR}/sdbcm
 
 DAEMON_START=sdbcmart
 DAEMON_STOP=sdbcmtop
@@ -167,6 +169,22 @@ log_warning_msg () {
     log_end_msg 255 || true
 }
 
+#
+# Set ulimit 
+#
+set_ulimits() {
+    local type="$1"
+    local value="$2"
+    if [ "$value" = -1 ]; then
+       ulimit $type unlimited
+    else
+       ulimit $type "$value"
+    fi
+    
+    if [ $? != 0 ]; then
+       echo "please check ${INSTALL_DIR}/conf/limits.conf!"
+    fi
+}
 
 #
 # Return LSB status
@@ -195,18 +213,27 @@ status_of_proc () {
 #
 do_start()
 {
-  # Set ulimit 
-  ulimit -Sc 0   #no coredump
-  ulimit -Sd `ulimit -Hd` #data seg size
-  ulimit -Sf `ulimit -Hf` #file size 
-  ulimit -Sv `ulimit -Hv` #virtual memory 
-  ulimit -Sn `ulimit -Hn` #open files
+  if [ -f "${INSTALL_DIR}/conf/limits.conf" ]; then
+    . ${INSTALL_DIR}/conf/limits.conf
+    #no coredump
+    set_ulimits "-c" "$core_file_size"
+    #data seg size
+    set_ulimits "-d" "$data_seg_size"
+    #file size 
+    set_ulimits "-f" "$file_size"
+    #virtual memory
+    set_ulimits "-v" "$virtual_memory"
+    #open files
+    set_ulimits "-n" "$open_files"
+  fi
+  mkdir -p ${LOCK_FILE_DIR}
+  touch ${LOCK_FILE}
 
 	# Return
 	#   0 if daemon has been started
 	#   1 if daemon was already running
 	#   2 if daemon could not be started
-  su - $SDBADMIN_USER -c $INSTALL_DIR/bin/$DAEMON_START $DAEMON_ARGS \
+  $INSTALL_DIR/bin/$DAEMON_START $DAEMON_ARGS \
 		|| return 2
 
 	# Add code here, if necessary, that waits for the process to be ready
@@ -250,7 +277,7 @@ do_reload() {
 
 case "$1" in
   start)
-	[ "$VERBOSE" != "no" ] && log_daemon_msg "Starting $DESC" "$NAME"
+	[ "$VERBOSE" != "no" ] && log_daemon_msg "Starting $DESC" "$NAME "
 	do_start
 	case "$?" in
 		0) [ "$VERBOSE" != no ] && log_end_msg 0 ;;
@@ -258,7 +285,7 @@ case "$1" in
 	esac
 	;;
   stop)
-	[ "$VERBOSE" != no ] && log_daemon_msg "Stopping $DESC" "$NAME"
+	[ "$VERBOSE" != no ] && log_daemon_msg "Stopping $DESC" "$NAME "
 	do_stop
 	case "$?" in
 		0) [ "$VERBOSE" != no ] && log_end_msg 0 ;;
@@ -283,7 +310,14 @@ case "$1" in
 	# 'force-reload' alias
 	#
 	log_daemon_msg "Restarting $DESC" "$NAME"
-	do_stop "false"
+   
+   if [ "X$2" != "Xall-nodes" ]
+   then
+      do_stop "false"
+   else
+      do_stop "true"
+   fi
+   
 	case "$?" in
 	  0)
 		do_start
@@ -299,8 +333,8 @@ case "$1" in
 	esac
 	;;
   *)
-	#echo "Usage: $SCRIPTNAME {start|stop|restart|reload|force-reload}" >&2
-	echo "Usage: $SCRIPTNAME {start|stop|status|restart|force-reload}" >&2
+   echo "Usage: $SCRIPTNAME { start | stop | status | restart | force-reload }" >&2
+   echo "       $SCRIPTNAME { restart all-nodes | force-reload all-nodes }" >&2
 	exit 3
 	;;
 esac

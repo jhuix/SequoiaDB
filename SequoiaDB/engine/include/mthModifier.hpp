@@ -46,8 +46,9 @@
 #include "../bson/bson.h"
 #include "../bson/bsonobj.h"
 #include "mthCommon.hpp"
-using namespace bson ;
+#include "ixmIndexKey.hpp"
 
+using namespace bson ;
 
 namespace engine
 {
@@ -61,7 +62,9 @@ namespace engine
       PUSH,
       PUSH_ALL,
       PULL,
+      PULL_BY,
       PULL_ALL,
+      PULL_ALL_BY,
       POP,
       UNSET,
       BITNOT,
@@ -74,6 +77,7 @@ namespace engine
       NULLOPR,
       REPLACE,
       KEEP,
+      SETARRAY,
 
       UNKNOW
    } ;
@@ -181,15 +185,16 @@ namespace engine
       vector<ModifierElement> _modifierElements ;
       UINT32  _modifierBits ;
 
-      // add for replace begin
+      _ixmIndexKeyGen *_shardingKeyGen ;
+
       set<string>    _keepKeys ;
       BOOLEAN        _isReplaceID ;
       BOOLEAN        _isReplace ;
-      // add for replace end
 
       vector<INT64> *_dollarList ;
       _compareFieldNames1  _fieldCompare ;
       BOOLEAN        _ignoreTypeError ;
+      BOOLEAN        _strictDataMode ;
 
       INT32 _addModifier ( const BSONElement &ele, ModType type ) ;
       INT32 _parseElement ( const BSONElement &ele ) ;
@@ -202,7 +207,8 @@ namespace engine
       BOOLEAN _dupFieldName ( const BSONElement &l,
                               const BSONElement &r ) ;
       BOOLEAN _pullElementMatch( BSONElement& org,
-                                 BSONElement& toMatch ) ;
+                                 BSONElement& toMatch,
+                                 BOOLEAN fullMatch ) ;
       template<class Builder>
       void _applyUnsetModifier(Builder &b) ;
 
@@ -252,12 +258,32 @@ namespace engine
       INT32 _appendBitModifier2 ( const CHAR *pRoot, const CHAR *pShort,
                                   Builder &bb, INT32 in,
                                   ModifierElement &me ) ;
-      // if the original object has the element we asked to modify, then e is
-      // the
-      // original element, b is the builder, me is the info that we want to
-      // modify
-      // basically we need to take the original data from e, and use modifier
-      // element me to make some change, and add into builder b
+
+      template<class Builder>
+      INT32 _applySetArrayModifier ( const CHAR *pRoot, Builder &bb,
+                                     const BSONElement &in,
+                                     ModifierElement &me ) ;
+
+      template<class Builder>
+      INT32 _appendSetArrayModifier ( const CHAR *pRoot, const CHAR *pShort,
+                                      Builder &bb, ModifierElement &me ) ;
+
+      INT32 _parseSetArray( const BSONElement &toModify, INT32 &beginPos,
+                            INT32 &endPos, BSONObj &arr ) ;
+
+      template<class Builder>
+      OSS_INLINE void _buildSetArray ( Builder *builder, const CHAR *pRoot,
+                                       INT32 beginPos, INT32 endPos,
+                                       const BSONObj &arr ) ;
+
+      template<class Builder>
+      OSS_INLINE void _buildSetArray ( Builder *builder, const CHAR *pRoot,
+                                       INT32 beginPos, const BSONObj &arr ) ;
+
+      template<class Builder>
+      OSS_INLINE void _buildSetArray ( Builder *builder, const CHAR *pRoot,
+                                       INT32 beginPos, const BSONElement &ele ) ;
+
       template<class Builder>
       INT32 _applyChange ( CHAR **ppRoot,
                            INT32 &rootBufLen,
@@ -266,19 +292,10 @@ namespace engine
                            Builder &b,
                            SINT32 *modifierIndex ) ;
 
-      // when requested update want to change something that not exist in
-      // original
-      // object, we need to append the original object in those cases
       template<class Builder>
       INT32 _appendNew ( const CHAR *pRoot, const CHAR *pShort,
                          Builder& b, SINT32 *modifierIndex ) ;
 
-      // Builder could be BSONObjBuilder or BSONArrayBuilder
-      // _appendNewFromMods appends the current builder with the new field
-      // root represent the current fieldName, me is the current modifier element
-      // b is the builder, onedownseen represent the all subobjects have been
-      // processed in the current object, and modifierIndex is the pointer for
-      // current modifier
       template<class Builder>
       INT32 _appendNewFromMods ( CHAR **ppRoot,
                                  INT32 &rootBufLen,
@@ -287,10 +304,6 @@ namespace engine
                                  Builder &b,
                                  SINT32 *modifierIndex,
                                  BOOLEAN hasCreateNewRoot ) ;
-      // Builder could be BSONObjBuilder or BSONArrayBuilder
-      // This function is recursively called to build new object
-      // The prerequisit is that _modifierElement is sorted, which supposed to
-      // happen at end of loadPattern
       template<class Builder>
       INT32 _buildNewObj ( CHAR **ppRoot,
                            INT32 &rootBufLen,
@@ -313,20 +326,27 @@ namespace engine
          _modifierBits  = 0 ;
          _isReplace     = FALSE ;
          _isReplaceID   = FALSE ;
+         _shardingKeyGen = NULL ;
+         _strictDataMode = FALSE ;
       }
       ~_mthModifier()
       {
          _modifierElements.clear() ;
+         SAFE_OSS_DELETE( _shardingKeyGen ) ;
       }
       INT32 loadPattern ( const BSONObj &modifierPattern,
                           vector<INT64> *dollarList = NULL,
-                          BOOLEAN ignoreTypeError = TRUE ) ;
+                          BOOLEAN ignoreTypeError = TRUE,
+                          const BSONObj* shardingKey = NULL,
+                          BOOLEAN strictDataMode = FALSE ) ;
       void modifierSort() ;
       INT32 modify ( const BSONObj &source, BSONObj &target,
                      BSONObj *srcID = NULL,
                      BSONObj *srcChange = NULL,
                      BSONObj *dstID = NULL,
-                     BSONObj *dstChange = NULL ) ;
+                     BSONObj *dstChange = NULL,
+                     BSONObj *srcShardingKey = NULL,
+                     BSONObj *dstShardingKey = NULL ) ;
       OSS_INLINE BOOLEAN isInitialized () { return _initialized ; }
    } ;
    typedef _mthModifier mthModifier ;

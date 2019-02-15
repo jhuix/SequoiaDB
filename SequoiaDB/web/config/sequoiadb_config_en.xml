@@ -15,7 +15,7 @@
 	<FILLER>
 		<Name>svcname</Name>
 		<WebName>service name</WebName>
-		<Type>port</Type>
+		<Type>string</Type>
 		<Default>11810</Default>
 		<Valid></Valid>
 		<Display>edit box</Display>
@@ -94,37 +94,11 @@
 		<Name>preferedinstance</Name>
 		<WebName>Instance Mode</WebName>
 		<Type>string</Type>
-		<Default>A</Default>
+		<Default>M</Default>
 		<Valid>M,S,A,1,2,3,4,5,6,7</Valid>
 		<Display>select box</Display>
 		<Edit>true</Edit>
 		<Desc>Set priory selecting instances when executing read request. M -- R/W instance； S -- Read Only Instance； A -- Any Instance； 1~7 --  n th instance</Desc>
-		<Level>0</Level>
-		<DynamicEdit>false</DynamicEdit>
-		<BatchEdit>true</BatchEdit>
-	</FILLER>
-	<FILLER>
-		<Name>numpagecleaners</Name>
-		<WebName>Dirty page cleaner number</WebName>
-		<Type>int</Type>
-		<Default>1</Default>
-		<Valid>0-50</Valid>
-		<Display>edit box</Display>
-		<Edit>true</Edit>
-		<Desc>The diry page cleaner number must turn on when start the database, and 0 means non dirty page cleaner to start, value range:[0,50]</Desc>
-		<Level>0</Level>
-		<DynamicEdit>false</DynamicEdit>
-		<BatchEdit>true</BatchEdit>
-	</FILLER>
-	<FILLER>
-		<Name>pagecleaninterval</Name>
-		<WebName>Dirty page least distance</WebName>
-		<Type>int</Type>
-		<Default>10000</Default>
-		<Valid>1000-</Valid>
-		<Display>edit box</Display>
-		<Edit>true</Edit>
-		<Desc>Least time interval of each collection space doing dirty page cleaning. Unit: ms , Default:10000, Least:1000</Desc>
 		<Level>0</Level>
 		<DynamicEdit>false</DynamicEdit>
 		<BatchEdit>true</BatchEdit>
@@ -163,7 +137,7 @@
 		<Valid>0-200</Valid>
 		<Display>edit box</Display>
 		<Edit>true</Edit>
-		<Desc>Max concurrency of log syncronizing,default is 10, value range:[0,200], 0 stands for not use log concurrently syncronizing.</Desc>
+		<Desc>Max concurrency of log syncronizing,default is 10, value range:[0,200], 0 stands for not using log concurrently syncronizing.</Desc>
 		<Level>1</Level>
 		<DynamicEdit>false</DynamicEdit>
 		<BatchEdit>true</BatchEdit>
@@ -185,11 +159,11 @@
 		<Name>sortbuf</Name>
 		<WebName>Sorting buffer size</WebName>
 		<Type>int</Type>
-		<Default>512</Default>
+		<Default>256</Default>
 		<Valid>128-</Valid>
 		<Display>edit box</Display>
 		<Edit>true</Edit>
-		<Desc>Sorting buffer size(MB), default value :512, min value:128</Desc>
+		<Desc>Sorting buffer size(MB), default value :256, min value:128</Desc>
 		<Level>1</Level>
 		<DynamicEdit>false</DynamicEdit>
 		<BatchEdit>true</BatchEdit>
@@ -232,5 +206,187 @@
 		<Level>1</Level>
 		<DynamicEdit>false</DynamicEdit>
 		<BatchEdit>true</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>maxsyncjob</Name>
+		<WebName>data-sync's maxinum task count</WebName>
+		<Type>int</Type>
+		<Default>10</Default>
+		<Valid>2-200</Valid>
+		<Display>edit box</Display>
+		<Edit>true</Edit>
+		<Desc>The maximum number of data-sync threads, default:10, value range:[2, 200]</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>true</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>syncinterval</Name>
+		<WebName>the interval time of data-sync</WebName>
+		<Type>int</Type>
+		<Default>10000</Default>
+		<Valid>0-</Valid>
+		<Display>edit box</Display>
+		<Edit>true</Edit>
+		<Desc>The interval time(unit:ms) of data-sync, default:10000, 0 means disable data-sync by time</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>true</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>syncrecordnum</Name>
+		<WebName>the trigger condition of record number of data-sync</WebName>
+		<Type>int</Type>
+		<Default>0</Default>
+		<Valid>0-</Valid>
+		<Display>edit box</Display>
+		<Edit>true</Edit>
+		<Desc>The trigger condition of record number of data-sync, default:0, 0 means disable data-sync by record</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>true</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>syncdeep</Name>
+		<WebName>turn on deep mode in data-sync</WebName>
+		<Type>bool</Type>
+		<Default>false</Default>
+		<Valid>true,false</Valid>
+		<Display>select box</Display>
+		<Edit>true</Edit>
+		<Desc>Turn on deep mode in data-sync, default:FALSE</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>true</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>archiveon</Name>
+		<WebName>turn on replica log archive</WebName>
+		<Type>bool</Type>
+		<Default>false</Default>
+		<Valid>true,false</Valid>
+		<Display>select box</Display>
+		<Edit>true</Edit>
+		<Desc>Turn on replica log archive, default false</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>true</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>archivecompresson</Name>
+		<WebName>turn on replica log archive compression</WebName>
+		<Type>bool</Type>
+		<Default>true</Default>
+		<Valid>true,false</Valid>
+		<Display>select box</Display>
+		<Edit>true</Edit>
+		<Desc>Turn on replica log archive compression, default true</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>true</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>archivepath</Name>
+		<WebName>archive log file path</WebName>
+		<Type>string</Type>
+		<Default></Default>
+		<Valid></Valid>
+		<Display>text box</Display>
+		<Edit>true</Edit>
+		<Desc>Archive log file path</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>false</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>archivetimeout</Name>
+		<WebName>timeout interval for archiving</WebName>
+		<Type>int</Type>
+		<Default>600</Default>
+		<Valid>0-</Valid>
+		<Display>edit box</Display>
+		<Edit>true</Edit>
+		<Desc>The timeout interval for archiving( in seconds ), default:600, 0 for no-timeout.</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>true</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>archiveexpired</Name>
+		<WebName>expired time for archive log file</WebName>
+		<Type>int</Type>
+		<Default>240</Default>
+		<Valid>0-</Valid>
+		<Display>edit box</Display>
+		<Edit>true</Edit>
+		<Desc>The expired time for archive log file ( in hours ), default:240, 0 for no-expired.</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>true</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>archivequota</Name>
+		<WebName>disk quota for archive log directory</WebName>
+		<Type>int</Type>
+		<Default>10</Default>
+		<Valid>0-</Valid>
+		<Display>edit box</Display>
+		<Edit>true</Edit>
+		<Desc>The disk quota for archive log directory ( in GB ), default:10, 0 for no limit.</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>true</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>indexpath</Name>
+		<WebName>Index Path</WebName>
+		<Type>string</Type>
+		<Default></Default>
+		<Valid></Valid>
+		<Display>text box</Display>
+		<Edit>true</Edit>
+		<Desc>Index storing path,Default is 'dbpath'</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>false</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>bkuppath</Name>
+		<WebName>Backup Path</WebName>
+		<Type>string</Type>
+		<Default></Default>
+		<Valid></Valid>
+		<Display>text box</Display>
+		<Edit>true</Edit>
+		<Desc>Backup storing path, Default is 'dbpath/bakfile'</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>false</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>lobpath</Name>
+		<WebName>Lob Data Path</WebName>
+		<Type>string</Type>
+		<Default></Default>
+		<Valid></Valid>
+		<Display>text box</Display>
+		<Edit>true</Edit>
+		<Desc>Lob data file storing path, Default is 'dbpath'</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>false</BatchEdit>
+	</FILLER>
+	<FILLER>
+		<Name>lobmetapath</Name>
+		<WebName>Lob Meta Path</WebName>
+		<Type>string</Type>
+		<Default></Default>
+		<Valid></Valid>
+		<Display>text box</Display>
+		<Edit>true</Edit>
+		<Desc>Lob meta file storing path, Default is 'dbpath'</Desc>
+		<Level>1</Level>
+		<DynamicEdit>false</DynamicEdit>
+		<BatchEdit>false</BatchEdit>
 	</FILLER>
 </Property>

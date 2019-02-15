@@ -44,6 +44,7 @@
 #include "dpsLogDef.hpp"
 #include "dpsMessageBlock.hpp"
 #include "rtnLobFetcher.hpp"
+#include "rtnRecover.hpp"
 #include "../bson/bsonobj.h"
 #include <map>
 
@@ -61,9 +62,13 @@ namespace engine
    class _clsReplicateSet ;
    class _monIndex ;
    class _clsCatalogAgent ;
+   class _clsFreezingWindow ;
    class _clsSplitTask ;
    class _rtnContextData ;
 
+   /*
+      _clsDataSrcBaseSession define
+   */
    class _clsDataSrcBaseSession : public _pmdAsyncSession
    {
       DECLARE_OBJ_MSG_MAP()
@@ -75,9 +80,7 @@ namespace engine
 
          virtual void    onRecieve ( const NET_HANDLE netHandle,
                                      MsgHeader * msg ) ;
-         // called by net io thread
          virtual BOOLEAN timeout ( UINT32 interval ) ;
-         // called by self thread
          virtual void    onTimer ( UINT64 timerID, UINT32 interval ) ;
 
       public:
@@ -90,6 +93,7 @@ namespace engine
          virtual const CHAR* _onObjFilter ( const CHAR* inBuff, INT32 inSize,
                                             INT32 &outSize ) = 0 ;
          virtual INT32     _onFSMeta ( const CHAR *clFullName ) = 0 ;
+         virtual void      _onNotifyOver( const CHAR *clFullName ) = 0 ;
          virtual INT32     _scanType () const = 0 ;
          virtual BOOLEAN   _canSwitchWhenSyncLog() = 0 ;
 
@@ -102,7 +106,6 @@ namespace engine
          virtual void   _onAttach () ;
          virtual void   _onDetach () ;
 
-      //message function
       protected:
          INT32 handleFSMeta( NET_HANDLE handle, MsgHeader* header ) ;
          INT32 handleFSIndex( NET_HANDLE handle, MsgHeader* header ) ;
@@ -115,7 +118,6 @@ namespace engine
          BOOLEAN           _existIndex( const CHAR *indexName ) ;
          INT32             _openContext( CHAR *cs, CHAR *collection ) ;
          void              _constructIndex( BSONObj &obj ) ;
-         INT32             _constructFullNames( BSONObj &obj ) ;
          void              _constructMeta( BSONObj &obj, const CHAR *cs,
                                            const CHAR *collection,
                                            _dmsStorageUnit *su ) ;
@@ -138,10 +140,14 @@ namespace engine
                                      SINT64 packet,
                                      const MsgRouteID &routeID,
                                      UINT32 TID, UINT64 requestID ) ;
+
+         INT32             _buildCLCommitInfo( const string &fullName,
+                                               BSONObj &obj ) ;
+
       protected:
          BSONObj                          _rangeKeyObj ;
          BSONObj                          _rangeEndKeyObj ;
-         vector<_monIndex>                _indexs ;
+         MON_IDX_LIST                     _indexs ;
          _netRouteAgent                   *_agent ;
          DPS_LSN                          _lsn ;
          DPS_LSN_OFFSET                   _beginLSNOffset ;
@@ -175,6 +181,9 @@ namespace engine
 
    };
 
+   /*
+      _clsFSSrcSession define
+   */
    class _clsFSSrcSession : public _clsDataSrcBaseSession
    {
    DECLARE_OBJ_MSG_MAP()
@@ -192,7 +201,6 @@ namespace engine
       virtual INT32 notifyLSN ( UINT32 suLID, UINT32 clLID, dmsExtentID extLID,
                                 const DPS_LSN_OFFSET &offset ) ;
 
-   //message function
    protected:
       INT32 handleBegin( NET_HANDLE handle, MsgHeader* header ) ;
       INT32 handleEnd( NET_HANDLE handle, MsgHeader* header ) ;
@@ -206,14 +214,25 @@ namespace engine
                                   UINT32 sequence,
                                   BOOLEAN &need2Send ) ;
       virtual INT32   _onFSMeta ( const CHAR *clFullName ) ;
+      virtual void    _onNotifyOver( const CHAR *clFullName ) ;
       virtual INT32   _scanType () const ;
       virtual BOOLEAN _canSwitchWhenSyncLog() ;
 
+   protected:
+      INT32 _extractBeginBody( const BSONObj &obj,
+                               MAP_SU_STATUS &validCLs ) ;
+      void  _processValidCLs(  MAP_SU_STATUS &validCLs ) ;
+      INT32 _constructBeginRspData( BSONObj &obj, MAP_SU_STATUS &validCLs ) ;
+
    private:
-      _dpsMessageBlock     _lsnSearchMB ;
+      _dpsMessageBlock           _lsnSearchMB ;
+
    } ;
    typedef class _clsFSSrcSession clsFSSrcSession ;
 
+   /*
+      _clsSplitSrcSession define
+   */
    class _clsSplitSrcSession : public _clsDataSrcBaseSession
    {
       DECLARE_OBJ_MSG_MAP()
@@ -235,6 +254,7 @@ namespace engine
          virtual const CHAR* _onObjFilter ( const CHAR* inBuff, INT32 inSize,
                                             INT32 &outSize ) ;
          virtual INT32   _onFSMeta ( const CHAR *clFullName ) ;
+         virtual void    _onNotifyOver( const CHAR *clFullName ) ;
          virtual INT32   _scanType () const ;
          virtual BOOLEAN _canSwitchWhenSyncLog() ;
          virtual INT32   _onLobFilter( const bson::OID &oid,
@@ -243,6 +263,7 @@ namespace engine
 
       protected:
          INT32   _genKeyObj ( const BSONObj &obj, BSONObj &keyObj ) ;
+         BOOLEAN _containMultiKey ( const BSONObj &obj ) ;
          BOOLEAN _GEThanRangeKey ( const BSONObj &keyObj ) ;
          BOOLEAN _LThanRangeEndKey( const BSONObj &keyObj ) ;
          BOOLEAN _LEThanScanObj ( const BSONObj &keyObj ) ;
@@ -251,7 +272,6 @@ namespace engine
          virtual void   _onAttach () ;
          virtual void   _onDetach () ;
 
-      //message function
       protected:
          INT32 handleBegin( NET_HANDLE handle, MsgHeader* header ) ;
          INT32 handleEnd( NET_HANDLE handle, MsgHeader* header ) ;
@@ -262,6 +282,7 @@ namespace engine
          _dpsMessageBlock                 _lsnSearchMB ;
          BSONObj                          _shardingKey ;
          _clsCatalogAgent                 *_pCatAgent ;
+         _clsFreezingWindow               *_pFreezingWindow ;
          EDUID                            _cleanupJobID ;
 
          BOOLEAN                          _hasShardingIndex ;
@@ -270,11 +291,13 @@ namespace engine
          UINT32                           _partitionBit ;
 
          UINT64                           _taskID ;
-         UINT64                           _updateMetaTime ;
+         UINT64                           _ntyOverTime ;
          DPS_LSN_OFFSET                   _lastEndNtyOffset ;
          BOOLEAN                          _getLastEndNtyOffset ;
          UINT32                           _collectionW ;
+         UINT64                           _lastOprLSN ;
          UINT32                           _internalV ;
+         string                           _mainCLName ;
    };
 }
 

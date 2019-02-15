@@ -40,6 +40,7 @@
 #include "pmdRemoteSession.hpp"
 #include "restAdaptor.hpp"
 #include "pmdRestSession.hpp"
+#include "omCommandTool.hpp"
 #include <map>
 #include <string>
 
@@ -115,6 +116,8 @@ namespace engine
 
          INT32             _getBusinessInfo( const string &business, 
                                              BSONObj &businessInfo ) ;
+         INT32             _getBusinessInfoOfCluster( const string &clusterName,
+                                                      BSONObj &clusterBusinessInfo ) ;
          INT32             _deleteHost( const string &hostName ) ;
          INT32             _getClusterInfo( const string &clusterName, 
                                             BSONObj &clusterInfo ) ;
@@ -138,7 +141,8 @@ namespace engine
                                              const string &businessName ) ;
 
          INT32             _getBusinessType( const string &businessName ,
-                                             string &businessType ) ;
+                                             string &businessType,
+                                             string &deployMode ) ;
 
          BOOLEAN           _isClusterExist( const string &clusterName ) ;
          BOOLEAN           _isBusinessExist( const string &clusterName, 
@@ -163,6 +167,8 @@ namespace engine
          string            _errorDetail ;
          restAdaptor*      _restAdaptor ;
          pmdRestSession*   _restSession ;
+
+         omErrorTool       _errorMsg ;
    } ;
 
    class omAgentReqBase : public omCommandInterafce
@@ -178,6 +184,9 @@ namespace engine
          BSONObj          _request ;
          BSONObj          _response ;
    } ;
+
+   const CHAR *omGetEDUInfoSafe( _pmdEDUCB *cb, EDU_INFO_TYPE type ) ;
+   const CHAR *omGetMyEDUInfoSafe( EDU_INFO_TYPE type ) ;
 }
 
 #endif /* OM_COMMANDINTERFACE_HPP_ */

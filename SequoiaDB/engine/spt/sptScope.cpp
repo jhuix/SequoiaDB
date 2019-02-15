@@ -35,14 +35,43 @@
 #include "sptObjDesc.hpp"
 #include "ossUtil.hpp"
 #include "sptCommon.hpp"
-
+#include <algorithm>
+using namespace std ;
 namespace engine
 {
-   _sptScope::OBJ_DESCS _sptScope::_descs ;
 
+   /*
+      _sptResultVal implement
+   */
+   _sptResultVal::_sptResultVal()
+   {
+   }
+
+   _sptResultVal::~_sptResultVal()
+   {
+   }
+
+   BOOLEAN _sptResultVal::hasError() const
+   {
+      return _errStr.empty() ? FALSE : TRUE ;
+   }
+
+   const CHAR* _sptResultVal::getErrrInfo() const
+   {
+      return _errStr.c_str() ;
+   }
+
+   void _sptResultVal::setError( const  string &err )
+   {
+      _errStr = err ;
+   }
+
+   /*
+      _sptScope implement
+   */
    _sptScope::_sptScope()
    {
-
+      _loadMask = 0 ;
    }
 
    _sptScope::~_sptScope()
@@ -50,14 +79,34 @@ namespace engine
 
    }
 
-   INT32 _sptScope::getLastError()
+   INT32 _sptScope::getLastError() const
    {
       return sdbGetErrno() ;
    }
 
-   const CHAR* _sptScope::getLastErrMsg()
+   const CHAR* _sptScope::getLastErrMsg() const
    {
       return sdbGetErrMsg() ;
+   }
+
+   bson::BSONObj _sptScope::getLastErrObj() const
+   {
+      const CHAR *pObjData = sdbGetErrorObj() ;
+
+      if ( pObjData )
+      {
+         try
+         {
+            bson::BSONObj obj( pObjData ) ;
+            return obj ;
+         }
+         catch( std::exception &e )
+         {
+            PD_LOG( PDERROR, "Occur exception: %s", e.what() ) ;
+         }
+      }
+
+      return bson::BSONObj() ;
    }
 
    INT32 _sptScope::loadUsrDefObj( _sptObjDesc *desc )
@@ -77,5 +126,52 @@ namespace engine
       return rc ;
    error:
       goto done ;
+   }
+
+   void _sptScope::pushJSFileNameToStack( const string &filename )
+   {
+      _fileNameStack.push_back( filename ) ;
+   }
+
+   void _sptScope::popJSFileNameFromStack()
+   {
+      _fileNameStack.pop_back() ;
+   }
+
+   INT32 _sptScope::getStackSize()
+   {
+      return _fileNameStack.size() ;
+   }
+
+   void _sptScope::addJSFileNameToList( const string &filename )
+   {
+      _fileNameList.push_back( filename ) ;
+   }
+
+   void _sptScope::clearJSFileNameList()
+   {
+      _fileNameList.clear() ;
+   }
+
+   BOOLEAN _sptScope::isJSFileNameExistInStack( const string &filename )
+   {
+      BOOLEAN isExist = FALSE ;
+      if( find( _fileNameStack.begin(), _fileNameStack.end(), filename )
+          != _fileNameStack.end() )
+      {
+         isExist = TRUE ;
+      }
+      return isExist ;
+   }
+
+   BOOLEAN _sptScope::isJSFileNameExistInList( const string &filename )
+   {
+      BOOLEAN isExist = FALSE ;
+      if( find( _fileNameList.begin(), _fileNameList.end(), filename )
+          != _fileNameList.end() )
+      {
+         isExist = TRUE ;
+      }
+      return isExist ;
    }
 }

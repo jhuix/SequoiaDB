@@ -59,12 +59,11 @@ namespace engine
       PD_TRACE_ENTRY ( SDB__CLSVSANN_HDINPUT ) ;
       SDB_ASSERT( NULL != header, "header should not be NULL" ) ;
 
-      /// do not accept any ballot
       if ( MSG_CLS_BALLOT == header->opCode )
       {
          next = id() ;
       }
-      else if ( MSG_CLS_BALLOT_RES == (UINT32)header->opCode )
+      else if ( MSG_CLS_BALLOT_RES == header->opCode )
       {
          const _MsgClsElectionRes *msg = ( const _MsgClsElectionRes * )
                                           header ;
@@ -79,6 +78,7 @@ namespace engine
                if ( _info()->groupSize() <= ( ++_accepted() + 1 ) )
                {
                   next =  CLS_ELECTION_STATUS_PRIMARY;
+                  PD_LOG( PDEVENT, "Change to primary by all accept" ) ;
                }
                else
                {
@@ -93,7 +93,6 @@ namespace engine
       }
       else
       {
-         /// error msg
          next = id() ;
       }
       PD_TRACE_EXIT ( SDB__CLSVSANN_HDINPUT ) ;
@@ -111,6 +110,7 @@ namespace engine
          if ( _isAccepted() )
          {
             next = CLS_ELECTION_STATUS_PRIMARY ;
+            PD_LOG( PDEVENT, "Change to primary by timeout" ) ;
          }
          else
          {

@@ -36,6 +36,7 @@
 #include "ixm.hpp"
 #include "dmsCB.hpp"
 #include "pmdEDU.hpp"
+#include "dmsTrace.hpp"
 
 namespace engine
 {
@@ -57,7 +58,6 @@ namespace engine
       INT32 rc = SDB_OK ;
       Ordering ordering = Ordering::make( _indexCB->keyPattern() ) ;
 
-      // loop through each extent
       while ( DMS_INVALID_EXTENT != _currentExtentID )
       {
          rc = _mbContext->mbLock( SHARED ) ;
@@ -80,11 +80,13 @@ namespace engine
          }
 
          dmsExtScanner extScanner( _suData, _mbContext, NULL, _currentExtentID ) ;
+         _mthRecordGenerator generator ;
          dmsRecordID recordID ;
          ossValuePtr recordDataPtr ;
 
-         while ( SDB_OK == ( rc = extScanner.advance( recordID, recordDataPtr, _eduCB ) ) )
+         while ( SDB_OK == ( rc = extScanner.advance( recordID, generator, _eduCB ) ) )
          {
+            generator.getDataPtr( recordDataPtr ) ;
             rc = _insertKey( recordDataPtr, recordID, ordering ) ;
             if ( SDB_OK != rc )
             {
@@ -132,10 +134,6 @@ namespace engine
       _eoc = FALSE ;
       _bufSize = (INT64)sortBufferSize * 1024 * 1024 ;
 
-      // add extend size for fetching records by extent granularity
-      // and to prevent sorter's buffer overflowing.
-      // so we assign max extent size to ensure the sorter can't 
-      // overflow when fetching records from a extent.
       _bufExtSize = DMS_MAX_EXTENT_SZ ;
    }
 
@@ -192,9 +190,7 @@ namespace engine
 
          if ( _sorter->usedBufferSize() > _bufSize )
          {
-            // the sorter's buffer is logical overflow (actually not overflow in sorter),
-            // so stop fetching records from next extent
-            PD_LOG( PDDEBUG, "sorter is full, bufSize=%d, usedBufSize=%d, total=%d",
+            PD_LOG( PDDEBUG, "sorter is full, bufSize=%lld, usedBufSize=%lld, total=%lld",
                     _bufSize, _sorter->usedBufferSize(), _sorter->bufferSize() ) ;
             goto done ;
          }
@@ -211,13 +207,15 @@ namespace engine
          }
 
          dmsExtScanner extScanner( _suData, _mbContext, NULL, _currentExtentID ) ;
+         _mthRecordGenerator generator ;
          dmsRecordID recordID ;
          ossValuePtr recordDataPtr ;
 
-         while ( SDB_OK == ( rc = extScanner.advance( recordID, recordDataPtr, _eduCB ) ) )
+         while ( SDB_OK == ( rc = extScanner.advance( recordID, generator, _eduCB ) ) )
          {
             BSONObjSet keySet ;
             BSONObjSet::iterator it ;
+            generator.getDataPtr( recordDataPtr ) ;
 
             rc = _getKeySet( recordDataPtr, keySet ) ;
             if ( SDB_OK != rc )
@@ -368,5 +366,118 @@ namespace engine
       goto done;
    }
 
+   _dmsIndexExtBuilder::_dmsIndexExtBuilder( dmsStorageIndex* indexSU,
+                                             dmsStorageData* dataSU,
+                                             dmsMBContext* mbContext,
+                                             pmdEDUCB* eduCB,
+                                             dmsExtentID indexExtentID)
+   : _dmsIndexBuilder( indexSU, dataSU, mbContext, eduCB, indexExtentID ),
+     _extHandler( NULL )
+   {
+      ossMemset( _collectionName, 0, DMS_COLLECTION_NAME_SZ + 1 ) ;
+      ossMemset( _idxName, 0, IXM_INDEX_NAME_SIZE + 1 ) ;
+   }
+
+   _dmsIndexExtBuilder::~_dmsIndexExtBuilder()
+   {
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DMSINDEXEXTBUILDER__ONINIT, "_dmsIndexExtBuilder::_onInit" )
+   INT32 _dmsIndexExtBuilder::_onInit()
+   {
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY( SDB__DMSINDEXEXTBUILDER__ONINIT ) ;
+
+      SDB_ASSERT( IXM_EXTENT_HAS_TYPE( IXM_EXTENT_TYPE_TEXT,
+                                       _indexCB->getIndexType() ),
+                  "Not text index" ) ;
+
+      _extHandler = _suData->getExtDataHandler() ;
+      PD_CHECK( _extHandler, SDB_SYS, error, PDERROR,
+                "External data handle is NULL" ) ;
+
+      ossStrncpy( _collectionName, _mbContext->mb()->_collectionName,
+                  DMS_COLLECTION_NAME_SZ + 1 ) ;
+      ossStrncpy( _idxName, _indexCB->getName(), IXM_INDEX_NAME_SIZE + 1 ) ;
+
+      if ( IXM_INDEX_FLAG_INVALID != _indexCB->getFlag() )
+      {
+         _indexCB->setFlag( IXM_INDEX_FLAG_INVALID ) ;
+      }
+
+   done:
+      PD_TRACE_EXITRC( SDB__DMSINDEXEXTBUILDER__ONINIT, rc ) ;
+      return rc ;
+   error:
+      _extHandler = NULL ;
+      goto done ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DMSINDEXEXTBUILDER__BUILD, "_dmsIndexExtBuilder::_build" )
+   INT32 _dmsIndexExtBuilder::_build()
+   {
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY( SDB__DMSINDEXEXTBUILDER__BUILD ) ;
+      BOOLEAN mbLocked = FALSE ;
+      BOOLEAN hasRebuild = FALSE ;
+      INT32 idxID = 0 ;
+
+      rc = _extHandler->onRebuildTextIdx( _suData->getSuName(),
+                                          _collectionName, _idxName, _eduCB ) ;
+      PD_RC_CHECK( rc, PDERROR, "External handle on text index rebuild "
+                   "failed: %d", rc ) ;
+      hasRebuild = TRUE ;
+
+      rc = _mbContext->mbLock( EXCLUSIVE ) ;
+      PD_RC_CHECK( rc, PDERROR, "dms mb context lock failed, rc: %d", rc ) ;
+      mbLocked = TRUE ;
+      for ( idxID = 0; idxID < DMS_COLLECTION_MAX_INDEX; ++idxID )
+      {
+         if ( DMS_INVALID_EXTENT == _mbContext->mb()->_indexExtent[idxID] )
+         {
+            break ;
+         }
+         ixmIndexCB indexCBTmp( _mbContext->mb()->_indexExtent[idxID], _suIndex,
+                                _mbContext ) ;
+         if ( _indexLID == indexCBTmp.getLogicalID() )
+         {
+            break ;
+         }
+      }
+
+      if ( DMS_COLLECTION_MAX_INDEX == idxID )
+      {
+         rc = SDB_DMS_INVALID_INDEXCB ;
+         goto error ;
+      }
+
+      _indexCB->setFlag( IXM_INDEX_FLAG_CREATING ) ;
+
+   done:
+      if ( mbLocked )
+      {
+         _mbContext->mbUnlock() ;
+      }
+      PD_TRACE_EXITRC( SDB__DMSINDEXEXTBUILDER__BUILD, rc ) ;
+      return rc ;
+   error:
+      if ( hasRebuild )
+      {
+         if ( ( SDB_DMS_NOTEXIST != rc ) && ( SDB_DMS_TRUNCATED != rc ) &&
+              ( SDB_DMS_INVALID_INDEXCB != rc ) )
+         {
+            INT32 rcTmp = _extHandler->onDropTextIdx( _suData->getSuName(),
+                                                      _collectionName,
+                                                      _idxName,
+                                                      _eduCB, NULL ) ;
+            if ( rcTmp )
+            {
+               PD_LOG( PDERROR, "External operation on drop text index failed, "
+                       "rc: %d", rcTmp ) ;
+            }
+         }
+      }
+      goto done ;
+   }
 }
 

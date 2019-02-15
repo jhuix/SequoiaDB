@@ -15,21 +15,18 @@
 #include <string>
 #include "testcommon.h"
 #include "client.h"
+#include "jstobs.h"
 
-// create collection
 void selectCreateCL( sdbCollectionHandle *cl )
 {
    sdbConnectionHandle db = SDB_OK ;
    sdbCSHandle cs = SDB_OK ;
-   //sdbCollectionHandle cl = SDB_OK ;
    INT32 rc = SDB_OK ;
    const CHAR *csName = "selector_query_cs" ;
    const CHAR *clName = "selector_query_cl" ;
 
-   // connect to sdb
    rc = sdbConnect( HOST, SERVER, USER, PASSWD, &db ) ;
    ASSERT_EQ( SDB_OK, rc ) ;
-   // create collection space
    bson csOptions ;
    bson_init( &csOptions ) ;
    bson_append_int( &csOptions, "PageSize", 65536 ) ;
@@ -41,7 +38,6 @@ void selectCreateCL( sdbCollectionHandle *cl )
    }
    ASSERT_EQ( SDB_OK, rc ) ;
    bson_destroy( &csOptions ) ;
-   // create collection
    bson clOptions ;
    bson_init( &clOptions ) ;
    bson_append_int( &clOptions, "ReplSize", 0 ) ;
@@ -61,47 +57,23 @@ void selectCreateCL( sdbCollectionHandle *cl )
    bson_destroy( &clOptions ) ;
 }
 
-// test for $elementMatch
 TEST( selector, elementMatch )
 {
    sdbCollectionHandle cl = SDB_OK ;
    sdbCursorHandle cursor = SDB_OK ;
    INT32 rc = SDB_OK ;
-
-   // create colleciton and insert data
-   selectCreateCL( &cl ) ;
-   // { Group: [{"GroupInfo":[ { "GroupName":"group1", "SvcType": 1000, "SvcName": 41000},...]}]}
    bson recordObj ;
-   bson subObj ;
-   bson_init( &recordObj ) ;
-   bson_append_start_array( &recordObj, "Group" ) ;
-   bson_append_start_object ( &recordObj, "Group" ) ;
-   bson_append_start_array( &recordObj, "GroupInfo" ) ;
-   bson_append_start_object ( &recordObj, "GroupInfo" ) ;
-   bson_append_string( &recordObj, "HostName", "host1" ) ;
-   bson_append_int( &recordObj, "SvcType", 1000 ) ;
-   bson_append_int( &recordObj, "SvcName", 41000 ) ;
-   bson_append_finish_object( &recordObj ) ;
-   bson_append_start_object ( &recordObj, "Group" ) ;
-   bson_append_string( &recordObj, "HostName", "host2" ) ;
-   bson_append_int( &recordObj, "SvcType", 1001 ) ;
-   bson_append_int( &recordObj, "SvcName", 42000 ) ;
-   bson_append_finish_object( &recordObj ) ;
-   bson_append_start_object ( &recordObj, "Group" ) ;
-   bson_append_string( &recordObj, "HostName", "host3" ) ;
-   bson_append_int( &recordObj, "SvcType", 1002 ) ;
-   bson_append_int( &recordObj, "SvcName", 41000 ) ;
-   bson_append_finish_object( &recordObj ) ;
-   bson_append_finish_array( &recordObj ) ;
-   bson_append_finish_object( &recordObj ) ;
-   bson_append_finish_array( &recordObj ) ;
-   bson_append_finish_object( &recordObj ) ;
+   const CHAR *pStr = "{ Group: [ { \"GroupInfo\":[ { \"GroupName\":\"group1\", \"SvcType\": 1000, \"SvcName\": 41000 } ] } ] }" ;
+
+   selectCreateCL( &cl ) ;
+   rc = jsonToBson( &recordObj, pStr ) ;
+   ASSERT_EQ( TRUE, rc ) ; 
+
    bson_print( &recordObj ) ;
    rc = sdbInsert( cl, &recordObj ) ;
    ASSERT_EQ( SDB_OK, rc ) ;
    bson_destroy( &recordObj ) ;
 
-   // $elementMatch: {"Group.GroupInfo":{"$elemMatch":{"Name":41000}}}
    bson selectObj ;
    bson_init( &selectObj ) ;
    bson_append_start_object( &selectObj, "Group.GroupInfo" ) ;
@@ -122,51 +94,27 @@ TEST( selector, elementMatch )
    {
       bson_print( &retObj ) ;
    }
-   // parse object
    bson_destroy( &retObj ) ;
 }
 
-// test for $elemMatchOne
 TEST( selector, elementMatchOne )
 {
    sdbCollectionHandle cl = SDB_OK ;
    sdbCursorHandle cursor = SDB_OK ;
    INT32 rc = SDB_OK ;
+   const CHAR *pStr = "{ Group: [ { \"GroupInfo\":[ { \"GroupName\":\"group1\", \"SvcType\": 1000, \"SvcName\": 41000 } ] } ] }" ;
 
-   // create colleciton and insert data
    selectCreateCL( &cl ) ;
-   // { Group: [{"GroupInfo":[ { "GroupName":"group1", "SvcType": 1000, "SvcName": 41000},...]}]}
+
    bson recordObj ;
-   bson subObj ;
-   bson_init( &recordObj ) ;
-   bson_append_start_array( &recordObj, "Group" ) ;
-   bson_append_start_object ( &recordObj, "Group" ) ;
-   bson_append_start_array( &recordObj, "GroupInfo" ) ;
-   bson_append_start_object ( &recordObj, "GroupInfo" ) ;
-   bson_append_string( &recordObj, "HostName", "host1" ) ;
-   bson_append_int( &recordObj, "SvcType", 1000 ) ;
-   bson_append_int( &recordObj, "SvcName", 41000 ) ;
-   bson_append_finish_object( &recordObj ) ;
-   bson_append_start_object ( &recordObj, "Group" ) ;
-   bson_append_string( &recordObj, "HostName", "host2" ) ;
-   bson_append_int( &recordObj, "SvcType", 1001 ) ;
-   bson_append_int( &recordObj, "SvcName", 42000 ) ;
-   bson_append_finish_object( &recordObj ) ;
-   bson_append_start_object ( &recordObj, "Group" ) ;
-   bson_append_string( &recordObj, "HostName", "host3" ) ;
-   bson_append_int( &recordObj, "SvcType", 1002 ) ;
-   bson_append_int( &recordObj, "SvcName", 41000 ) ;
-   bson_append_finish_object( &recordObj ) ;
-   bson_append_finish_array( &recordObj ) ;
-   bson_append_finish_object( &recordObj ) ;
-   bson_append_finish_array( &recordObj ) ;
-   bson_append_finish_object( &recordObj ) ;
+   rc = jsonToBson( &recordObj, pStr ) ;
+   ASSERT_EQ( TRUE, rc ) ;
+    
    bson_print( &recordObj ) ;
    rc = sdbInsert( cl, &recordObj ) ;
    ASSERT_EQ( SDB_OK, rc ) ;
    bson_destroy( &recordObj ) ;
 
-   // $elementMatchOne: {"Group.GroupInfo":{"$elemMatchOne":{"Name":41000}}}
    bson selectObj ;
    bson_init( &selectObj ) ;
    bson_append_start_object( &selectObj, "Group.GroupInfo" ) ;
@@ -187,20 +135,16 @@ TEST( selector, elementMatchOne )
    {
       bson_print( &retObj ) ;
    }
-   // parse object
    bson_destroy( &retObj ) ;
    printf( "test over\n" ) ;
 }
-// test for $slice
 TEST( selector, slice )
 {
    sdbCollectionHandle cl = SDB_OK ;
    sdbCursorHandle cursor = SDB_OK ;
    INT32 rc = SDB_OK ;
 
-   // create colleciton and insert data
    selectCreateCL( &cl ) ;
-   // { Group:[ "rg1", "rg2", "rg3", "rg4", "rg5", "rg6" ]}
    bson recordObj ;
    bson subObj ;
    bson_init( &recordObj ) ;
@@ -219,7 +163,6 @@ TEST( selector, slice )
    ASSERT_EQ( SDB_OK, rc ) ;
    bson_destroy( &recordObj ) ;
 
-   // $slice: {"Group":{"$slice": [ 1, 3 ] }}}
    bson selectObj ;
    bson_init( &selectObj ) ;
    bson_append_start_object( &selectObj, "Group" ) ;
@@ -242,21 +185,17 @@ TEST( selector, slice )
    {
       bson_print( &retObj ) ;
    }
-   // parse object
    bson_destroy( &retObj ) ;
    printf( "test over\n" ) ;
 }
 
-// test for $default
 TEST( selector, _default )
 {
    sdbCollectionHandle cl = SDB_OK ;
    sdbCursorHandle cursor = SDB_OK ;
    INT32 rc = SDB_OK ;
 
-   // create colleciton and insert data
    selectCreateCL( &cl ) ;
-   // { Group1: "rg1", Group2:"rg2", Group3: "rg3", Group1:"rg4", Group1: "rg5"}
    bson recordObj ;
    bson subObj ;
    bson_init( &recordObj ) ;
@@ -272,7 +211,6 @@ TEST( selector, _default )
    ASSERT_EQ( SDB_OK, rc ) ;
    bson_destroy( &recordObj ) ;
 
-   // $slice: {"Group":{"$default": "defaultValue"}}}
    bson selectObj ;
    bson_init( &selectObj ) ;
    bson_append_start_object( &selectObj, "Group1" ) ;
@@ -292,21 +230,17 @@ TEST( selector, _default )
    {
       bson_print( &retObj ) ;
    }
-   // parse object
    bson_destroy( &retObj ) ;
    printf( "test over\n" ) ;
 }
 
-// test for $include
 TEST( selector, include )
 {
    sdbCollectionHandle cl = SDB_OK ;
    sdbCursorHandle cursor = SDB_OK ;
    INT32 rc = SDB_OK ;
 
-   // create colleciton and insert data
    selectCreateCL( &cl ) ;
-   // { Group1: "rg1", Group2:"rg2", Group3: "rg3", Group1:"rg4", Group1: "rg5"}
    bson recordObj ;
    bson subObj ;
    bson_init( &recordObj ) ;
@@ -322,7 +256,6 @@ TEST( selector, include )
    ASSERT_EQ( SDB_OK, rc ) ;
    bson_destroy( &recordObj ) ;
 
-   // $slice: {"Group":{"$include": 0}}
    bson selectObj ;
    bson_init( &selectObj ) ;
    bson_append_start_object( &selectObj, "Group1" ) ;
@@ -342,21 +275,17 @@ TEST( selector, include )
    {
       bson_print( &retObj ) ;
    }
-   // parse object
    bson_destroy( &retObj ) ;
    printf( "test over\n" ) ;
 }
 
-// test for $include
 TEST( selector, includeAbnormal )
 {
    sdbCollectionHandle cl = SDB_OK ;
    sdbCursorHandle cursor = SDB_OK ;
    INT32 rc = SDB_OK ;
 
-   // create colleciton and insert data
    selectCreateCL( &cl ) ;
-   // { Group1: "rg1", Group2:"rg2", Group3: "rg3", Group1:"rg4", Group1: "rg5"}
    bson recordObj ;
    bson subObj ;
    bson_init( &recordObj ) ;
@@ -372,7 +301,6 @@ TEST( selector, includeAbnormal )
    ASSERT_EQ( SDB_OK, rc ) ;
    bson_destroy( &recordObj ) ;
 
-   // $slice: {"Group":{"$include": 0}}
    bson selectObj ;
    bson_init( &selectObj ) ;
    bson_append_start_object( &selectObj, "Group1" ) ;
@@ -399,7 +327,6 @@ TEST( selector, includeAbnormal )
    {
       bson_print( &retObj ) ;
    }
-   // parse object
    bson_destroy( &retObj ) ;
 */
    printf( "test over\n" ) ;

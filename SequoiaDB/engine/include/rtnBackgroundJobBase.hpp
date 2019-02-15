@@ -53,11 +53,16 @@ namespace engine
       RTN_JOB_EXTENDSEGMENT      = 6,
       RTN_JOB_RESTORE            = 7,
       RTN_JOB_REPLSYNC           = 8,
-      RTN_JOB_PAGECLEANER        = 9,
       RTN_JOB_STARTNODE          = 10, // start node
       RTN_JOB_CMSYNC             = 11, // cm and cmd sync info
       RTN_JOB_OMAGENT            = 12, // omagent job
       RTN_JOB_CREATE_DICT        = 13, // create compression dictionary
+      PMD_JOB_CACHE              = 14, // cache job
+      PMD_JOB_SYNC               = 15, // sync job
+      RTN_JOB_REBUILD            = 16, // rebuild job
+      RTN_JOB_CLS_STORAGE_CHECK  = 17, // storage check job
+      RTN_JOB_OPT_PLAN_CLEAR     = 18, // opt plan clear job
+      RTN_JOB_PAGEMAPPING        = 19, // page mapping job
 
       RTN_JOB_MAX
    } ;
@@ -125,6 +130,8 @@ namespace engine
          virtual const CHAR* name () const = 0 ;
          virtual BOOLEAN muteXOn ( const _rtnBaseJob *pOther ) = 0 ;
          virtual INT32 doit () = 0 ;
+
+         virtual BOOLEAN reuseEDU() const { return FALSE ; }
 
       private:
          ossSpinXLatch        _latchIn ;

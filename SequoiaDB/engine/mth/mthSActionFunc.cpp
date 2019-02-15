@@ -36,16 +36,13 @@
 #include "pdTrace.hpp"
 #include "mthTrace.hpp"
 #include "mthSAction.hpp"
-#include "mthSliceIterator.hpp"
 #include "mthElemMatchIterator.hpp"
 #include "utilString.hpp"
 #include "utilStr.hpp"
 #include "../util/fromjson.hpp"
 
-using namespace bson ;
 
-#define MTH_MOD(x,y)\
-        ( (x) - ( floor((x) / (y)) * (y) ) )
+using namespace bson ;
 
 namespace engine
 {
@@ -79,7 +76,7 @@ namespace engine
       PD_TRACE_EXITRC( SDB__MTHINCLUDEGET, rc ) ;
       return rc ;
    }
- 
+
    ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHDEFAULTBUILD, "mthDefaultBuild" )
    INT32 mthDefaultBuild( const CHAR *fieldName,
                           const bson::BSONElement &e,
@@ -141,30 +138,18 @@ namespace engine
       PD_TRACE_ENTRY( SDB__MTHSLICEBUILD ) ;
       SDB_ASSERT( NULL != action, "can not be null" ) ;
 
-      if ( e.eoo() )
-      {
-         goto done ;
-      }
-      else if ( Array == e.type() )
-      {
-         BSONObj args = action->getArg() ;
-         _mthSliceIterator i( e.embeddedObject(),
-                              args.getIntField( "arg1" ),
-                              args.getIntField("arg2") ) ;
-         BSONArrayBuilder sliceBuilder( builder.subarrayStart( fieldName ) ) ;
-         while ( i.more() )
-         {
-            sliceBuilder.append( i.next() ) ;
-         }
-         sliceBuilder.doneFast() ;
-      }
-      else
-      {
-         builder.append( e ) ;
-      }
+      BSONObj args = action->getArg() ;
+
+      INT32 begin = args.getIntField( "arg1" ) ;
+      INT32 limit = args.getIntField( "arg2" ) ;
+      rc = mthSlice( fieldName, e, begin, limit, builder ) ;
+      PD_RC_CHECK( rc, PDERROR, "mthSlice failed:rc=%d", rc ) ;
+
    done:
       PD_TRACE_EXITRC( SDB__MTHSLICEBUILD, rc ) ;
       return rc ;
+   error:
+      goto done ;
    }
 
    ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHSLICEGET, "mthSliceGet" )
@@ -176,31 +161,27 @@ namespace engine
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY( SDB__MTHSLICEGET ) ;
       SDB_ASSERT( NULL != action, "can not be null" ) ;
+      BSONObjBuilder builder ;
+      BSONObj obj ;
 
-      if ( Array != in.type() )
+      BSONObj args = action->getArg() ;
+      INT32 begin = args.getIntField( "arg1" ) ;
+      INT32 limit = args.getIntField( "arg2" ) ;
+      rc = mthSlice( fieldName, in, begin, limit, builder ) ;
+      PD_RC_CHECK( rc, PDERROR, "mthSlice failed:rc=%d", rc ) ;
+
+      obj = builder.obj() ;
+      if ( !obj.isEmpty() )
       {
-         out = in ;
-         goto done ; 
-      }
-      else if ( Array == in.type() )
-      {
-         BSONObjBuilder subBuilder ;
-         BSONObj args = action->getArg() ;
-         _mthSliceIterator i( in.embeddedObject(), 
-                              args.getIntField( "arg1" ),
-                              args.getIntField( "arg2" ) ) ;
-         BSONArrayBuilder sliceBuilder( subBuilder.subarrayStart( fieldName ) ) ;
-         while ( i.more() )
-         {
-            sliceBuilder.append( i.next() ) ;
-         }
-         sliceBuilder.doneFast() ;
-         action->setObj( subBuilder.obj() ) ;
+         action->setObj( obj ) ;
          out = action->getObj().getField( fieldName ) ;
       }
+
    done:
       PD_TRACE_EXITRC( SDB__MTHSLICEGET, rc ) ;
       return rc ;
+   error:
+      goto done ;
    }
 
    ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHELEMMATCHBUILDN, "mthElemMatchBuildN" )
@@ -212,11 +193,15 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY( SDB__MTHELEMMATCHBUILDN ) ;
+
+      PD_CHECK( NULL != action->getMatchTree(), SDB_SYS, error, PDERROR,
+                "Failed to get match tree" ) ;
+
       if ( Array == e.type() )
       {
          BSONArrayBuilder arrayBuilder( builder.subarrayStart( fieldName ) ) ;
          _mthElemMatchIterator i( e.embeddedObject(),
-                                  &( action->getMatcher() ),
+                                  action->getMatchTree(),
                                   n ) ;
          do
          {
@@ -224,11 +209,35 @@ namespace engine
             rc = i.next( next ) ;
             if ( SDB_OK == rc )
             {
-               arrayBuilder.append( next ) ;    
+               arrayBuilder.append( next ) ;
             }
             else if ( SDB_DMS_EOC == rc )
             {
                arrayBuilder.doneFast() ;
+               rc = SDB_OK ;
+               break ;
+            }
+            else
+            {
+               PD_LOG( PDERROR, "failed to get next element:%d", rc ) ;
+               goto error ;
+            }
+         } while ( TRUE ) ;
+      }
+      else if ( Object == e.type() )
+      {
+         _mthElemMatchIterator i( e.embeddedObject(), action->getMatchTree(),
+                                  n, FALSE ) ;
+         do
+         {
+            BSONElement next ;
+            rc = i.next( next ) ;
+            if ( SDB_OK == rc )
+            {
+               builder.append( fieldName, next.wrap() ) ;
+            }
+            else if ( SDB_DMS_EOC == rc )
+            {
                rc = SDB_OK ;
                break ;
             }
@@ -255,12 +264,16 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY( SDB__MTHELEMMATCHGETN ) ;
+
+      PD_CHECK( NULL != action->getMatchTree(), SDB_SYS, error, PDERROR,
+                "Failed to get match tree" ) ;
+
       if ( Array == in.type() )
       {
          BSONObjBuilder objBuilder ;
          BSONArrayBuilder arrayBuilder( objBuilder.subarrayStart( fieldName ) ) ;
          _mthElemMatchIterator i( in.embeddedObject(),
-                                  &( action->getMatcher() ),
+                                  action->getMatchTree(),
                                   n ) ;
          do
          {
@@ -356,41 +369,30 @@ namespace engine
                       bson::BSONObjBuilder &builder )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       PD_TRACE_ENTRY( SDB__MTHABSBUILD ) ;
       SDB_ASSERT( NULL != action, "can not be null" ) ;
-      if ( NumberDouble == e.type() )
+      BOOLEAN strictDataMode = action->getStrictDataMode() ;
+
+      rc = mthAbs( fieldName, e, builder, flag ) ;
+      if ( SDB_OK != rc )
       {
-         builder.append( fieldName, fabs( e.Double() ) ) ;
+         PD_LOG( PDERROR, "mthAbs failed:rc=%d", rc ) ;
+         goto error ;
       }
-      else if ( NumberInt == e.type() )
+      if ( strictDataMode && OSS_BIT_TEST( flag, MTH_OPERATION_FLAG_OVERFLOW ) )
       {
-         INT32 v = e.numberInt() ;
-         /// - 2 ^ 31
-         if ( -2147483648 != v )
-         {
-            builder.append( fieldName, 0 <= v ? v : -v ) ;
-         }
-         else
-         {
-            builder.append( fieldName, -((INT64)v) ) ;
-         }
+         rc = SDB_VALUE_OVERFLOW ;
+         PD_LOG( PDERROR, "overflow happened, field: %s, abs(%lld), rc = %d",
+                 fieldName, e.numberLong(), rc ) ;
+         goto error ;
       }
-      else if ( NumberLong == e.type() )
-      {
-         INT64 v = e.numberLong() ;
-         /// return -9223372036854775808 when v is -9223372036854775808
-         builder.append( fieldName, 0 <= v ? ( INT64 )v : ( INT64 )( -v ) ) ;
-      }
-      else if ( !e.eoo() )
-      {
-         builder.appendNull( fieldName ) ;
-      }
-      else
-      {
-         /// do nothing.
-      }
+
+   done:
       PD_TRACE_EXITRC( SDB__MTHABSBUILD, rc ) ;
       return rc ;
+   error:
+      goto done ;
    }
 
    ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHABSGET, "mthAbsGet" )
@@ -400,55 +402,28 @@ namespace engine
                     bson::BSONElement &out )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       PD_TRACE_ENTRY( SDB__MTHABSGET ) ;
       SDB_ASSERT( NULL != action, "can not be null" ) ;
+      BOOLEAN strictDataMode = action->getStrictDataMode() ;
       BSONObjBuilder builder ;
       BSONObj obj ;
-      if ( NumberDouble == in.type() )
-      {
-         builder.append( fieldName, fabs( in.Double() ) ) ;
-         obj = builder.obj() ;
-      }
-      else if ( NumberInt == in.type() )
-      {
-         INT32 v = 0 ;
-         if ( 0 <= in.Int() )
-         {
-            out = in ;
-            goto done ;
-         }
 
-         v = in.numberInt() ;
-         if ( -2147483648 != v )
-         {
-            builder.append( fieldName, ( INT32 )( -v ) ) ;
-         }
-         else
-         {
-            builder.append( fieldName, -(( INT64 )v) ) ;
-         }
-         obj = builder.obj() ;
-      }
-      else if ( NumberLong == in.type() )
+      rc = mthAbs( fieldName, in, builder, flag ) ;
+      if ( SDB_OK != rc )
       {
-         if ( 0 <= in.Long() )
-         {
-            out = in ;
-            goto done ;
-         }
-         builder.append( fieldName, ( INT64 )( -( in.Long() ) ) ) ;
-         obj = builder.obj() ;
+         PD_LOG( PDERROR, "mthAbs failed:rc=%d", rc ) ;
+         goto error ;
       }
-      else if ( !in.eoo() )
+      if ( strictDataMode && OSS_BIT_TEST( flag, MTH_OPERATION_FLAG_OVERFLOW ) )
       {
-         builder.appendNull( fieldName ) ;
-         obj = builder.obj() ;
-      }
-      else
-      {
-         /// do nothing
+         rc = SDB_VALUE_OVERFLOW ;
+         PD_LOG( PDERROR, "overflow happened, field: %s, abs(%lld), rc = %d",
+                 fieldName, in.numberLong(), rc ) ;
+         goto error ;
       }
 
+      obj = builder.obj() ;
       if ( !obj.isEmpty() )
       {
          action->setObj( obj ) ;
@@ -457,6 +432,8 @@ namespace engine
    done:
       PD_TRACE_EXITRC( SDB__MTHABSGET, rc ) ;
       return rc ;
+   error:
+      goto done ;
    }
 
    ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHCEILINGBUILD, "mthCeilingBuild" )
@@ -466,30 +443,21 @@ namespace engine
                           bson::BSONObjBuilder &builder )
    {
       INT32 rc = SDB_OK ;
-      PD_TRACE_ENTRY( SDB__MTHABSGET ) ;
+      PD_TRACE_ENTRY( SDB__MTHCEILINGBUILD ) ;
       SDB_ASSERT( NULL != action, "can not be null" ) ;
-      if ( NumberLong == e.type() )
+
+      rc = mthCeiling( fieldName, e, builder ) ;
+      if ( SDB_OK != rc )
       {
-         builder.append( fieldName,
-                         ( INT64 )( e.numberLong() ) ) ;
+         PD_LOG( PDERROR, "mthCeiling failed:rc=%d", rc ) ;
+         goto error ;
       }
-      else if ( NumberInt == e.type() )
-      {
-         builder.append( fieldName,
-                         ( INT32 )( e.numberInt() ) ) ;
-      }
-      else if ( NumberDouble == e.type() )
-      {
-         builder.append( fieldName,
-                        ( INT64 )( ceil( e.Number() ) ) ) ;
-      }
-      else if ( !e.eoo() )
-      {
-         builder.appendNull( fieldName ) ;
-      }
-      
+
+   done:
       PD_TRACE_EXITRC( SDB__MTHCEILINGBUILD, rc ) ;
       return rc ;
+   error:
+      goto done ;
    }
 
    ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHCEILINGGET, "mthCeilingGet" )
@@ -499,41 +467,29 @@ namespace engine
                         bson::BSONElement &out )
    {
       INT32 rc = SDB_OK ;
-      PD_TRACE_ENTRY( SDB__MTHABSGET ) ;
+      PD_TRACE_ENTRY( SDB__MTHCEILINGGET ) ;
       SDB_ASSERT( NULL != action, "can not be null" ) ;
       BSONObjBuilder builder ;
       BSONObj obj ;
 
-      if ( NumberLong == in.type() )
+      rc = mthCeiling( fieldName, in, builder ) ;
+      if ( SDB_OK != rc )
       {
-         builder.append( fieldName,
-                         ( INT64 )( in.numberLong() ) ) ;
-         obj = builder.obj() ;
-      }
-      else if ( NumberInt == in.type() )
-      {
-         builder.append( fieldName,
-                         ( INT32 )( in.numberInt() ) ) ;
-         obj = builder.obj() ;
-      }
-      else if ( NumberDouble == in.type() )
-      {
-         builder.append( fieldName,
-                        ( FLOAT64 )( ceil( in.Number() ) ) ) ;
-         obj = builder.obj() ;
-      }
-      else if ( !in.eoo() )
-      {
-         builder.appendNull( fieldName ) ;
-         obj = builder.obj() ;
+         PD_LOG( PDERROR, "mthCeiling failed:rc=%d", rc ) ;
+         goto error ;
       }
 
+      obj = builder.obj() ;
       if ( !obj.isEmpty() )
       {
          action->setObj( obj ) ;
          out = action->getObj().getField( fieldName ) ;
       }
+   done:
+      PD_TRACE_EXITRC( SDB__MTHCEILINGGET, rc ) ;
       return rc ;
+   error:
+      goto done ;
    }
 
    ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHFLOORBUILD, "mthFloorBuild" )
@@ -545,27 +501,19 @@ namespace engine
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY( SDB__MTHFLOORBUILD ) ;
       SDB_ASSERT( NULL != action, "can not be null" ) ;
-      if ( NumberInt == e.type() )
+
+      rc = mthFloor( fieldName, e, builder ) ;
+      if ( SDB_OK != rc )
       {
-         builder.append( fieldName,
-                        ( INT32 )( e.numberInt() ) ) ;
+         PD_LOG( PDERROR, "mthFloor failed:rc=%d", rc ) ;
+         goto error ;
       }
-      else if ( NumberLong == e.type() )
-      {
-         builder.append( fieldName,
-                       ( INT64 )( e.numberLong() ) ) ;
-      }
-      else if ( NumberDouble == e.type() )
-      {
-         builder.append( fieldName,
-                        ( FLOAT64 )floor( e.numberDouble() ) ) ;
-      }
-      else if ( !e.eoo() )
-      {
-         builder.appendNull( fieldName ) ;
-      }
+
+   done:
       PD_TRACE_EXITRC( SDB__MTHFLOORBUILD, rc ) ;
       return rc ;
+   error:
+      goto done ;
    }
 
    ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHFLOORGET, "mthFloorGet" )
@@ -580,37 +528,24 @@ namespace engine
       BSONObjBuilder builder ;
       BSONObj obj ;
 
-      if ( NumberInt == in.type() )
+      rc = mthFloor( fieldName, in, builder ) ;
+      if ( SDB_OK != rc )
       {
-         builder.append( fieldName,
-                       ( INT32 )( in.numberInt() ) ) ;
-         obj = builder.obj() ;
-      }
-      else if ( NumberLong == in.type() )
-      {
-         builder.append( fieldName,
-                        ( INT64 )( in.numberLong() ) ) ;
-         obj = builder.obj() ;
-      }
-      else if ( NumberDouble == in.type() )
-      {
-         builder.append( fieldName,
-                        ( FLOAT64 )floor( in.numberDouble() ) ) ;
-         obj = builder.obj() ;
-      }
-      else if ( !in.eoo() )
-      {
-         builder.appendNull( fieldName ) ;
-         obj = builder.obj() ;
+         PD_LOG( PDERROR, "mthFloor failed:rc=%d", rc ) ;
+         goto error ;
       }
 
+      obj = builder.obj() ;
       if ( !obj.isEmpty() )
       {
          action->setObj( obj ) ;
          out = action->getObj().getField( fieldName ) ;
-      }   
+      }
+   done:
       PD_TRACE_EXITRC( SDB__MTHFLOORGET, rc ) ;
       return rc ;
+   error:
+      goto done ;
    }
 
    ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHMODBUILD, "mthModBuild" )
@@ -624,44 +559,19 @@ namespace engine
       SDB_ASSERT( NULL != action, "can not be null" ) ;
       const BSONObj &obj = action->getArg() ;
       BSONElement arg = obj.getField( "arg1" ) ;
-      if ( e.eoo() )
+
+      rc = mthMod( fieldName, e, arg, builder ) ;
+      if ( SDB_OK != rc )
       {
-         /// do nothing.
+         PD_LOG( PDERROR, "mthMod failed:rc=%d", rc ) ;
+         goto error ;
       }
-      else if ( 0 == arg.numberLong() ||
-                !e.isNumber() ||
-                !arg.isNumber() )
-      {
-         builder.appendNull( fieldName ) ;
-      }
-      else if ( NumberDouble == e.type() &&
-                NumberDouble == arg.type() )
-      {
-         FLOAT64 v = MTH_MOD( e.numberDouble(),
-                              arg.numberDouble() ) ;
-         builder.append( fieldName, v ) ;
-      }
-      else if ( NumberDouble != e.type () &&
-                NumberDouble == arg.type() )
-      {
-         FLOAT64 v = MTH_MOD( e.numberLong(),
-                              arg.numberDouble() ) ;
-         builder.append( fieldName, v ) ;
-      }
-      else if ( NumberDouble == e.type () &&
-                NumberDouble != arg.type() )
-      {
-         FLOAT64 v = MTH_MOD( e.numberDouble(),
-                              arg.numberLong() ) ;
-         builder.append( fieldName, v ) ;
-      }
-      else
-      {
-         INT64 v = e.numberLong() % arg.numberLong() ;
-         builder.appendNumber( fieldName, v ) ;
-      } 
+
+   done:
       PD_TRACE_EXITRC( SDB__MTHMODBUILD, rc ) ;
       return rc ;
+   error:
+      goto done ;
    }
 
     ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHMODGET, "mthModGet" )
@@ -677,425 +587,22 @@ namespace engine
       BSONObj obj ;
       const BSONObj &arg = action->getArg() ;
       BSONElement argEle = arg.getField( "arg1" ) ;
-      if ( in.eoo() )
+
+      rc = mthMod( fieldName, in, argEle, builder ) ;
+      if ( SDB_OK != rc )
       {
-         /// do nothing.
-      }
-      else if ( 0 == argEle.numberLong() ||
-                !in.isNumber() ||
-                !argEle.isNumber() )
-      {
-         builder.appendNull( fieldName ) ;
-      }
-      else if ( NumberDouble == in.type() &&
-                NumberDouble == argEle.type() )
-      {
-         FLOAT64 v = MTH_MOD( in.numberDouble(),
-                              argEle.numberDouble() ) ;
-         builder.append( fieldName, v ) ;
-      }
-      else if ( NumberDouble != in.type () &&
-                NumberDouble == argEle.type() )
-      {
-         FLOAT64 v = MTH_MOD( in.numberLong(),
-                              argEle.numberDouble() ) ;
-         builder.append( fieldName, v ) ;
-      }
-      else if ( NumberDouble == in.type () &&
-                NumberDouble != argEle.type() )
-      {
-        FLOAT64 v = MTH_MOD( in.numberDouble(),
-                              argEle.numberLong() ) ;
-         builder.append( fieldName, v ) ;
-      }
-      else
-      {
-         INT64 v = in.numberLong() % argEle.numberLong() ;
-         builder.append( fieldName, v ) ;
+         PD_LOG( PDERROR, "mthMod failed:rc=%d", rc ) ;
+         goto error ;
       }
 
       obj = builder.obj() ;
       if ( !obj.isEmpty() )
       {
          action->setObj( obj ) ;
-         out = action->getObj().getField( fieldName ) ; 
-      }
-      PD_TRACE_EXITRC( SDB__MTHMODBUILD, rc ) ;
-      return rc ;
-   }
-
-   static INT32 _mthCast( const CHAR *fieldName,
-                         const bson::BSONElement &e,
-                         BSONType type,
-                         BSONObjBuilder &builder )
-   {
-      INT32 rc = SDB_OK ;
-      SDB_ASSERT( e.type() != type, "should not be same" ) ;
-      switch ( type )
-      {
-      case MinKey :
-         builder.appendMinKey( fieldName ) ;
-         break ;
-      case EOO :
-         rc = SDB_INVALIDARG ;
-         break ;
-      case NumberDouble :
-      {
-         if ( Bool == e.type() )
-         {
-            FLOAT64 f = e.Bool() ? 1.0 : 0.0 ;
-            builder.appendNumber( fieldName, f ) ;
-         }
-         else if ( String != e.type() )
-         {
-            builder.appendNumber( fieldName, e.numberDouble() ) ;
-         }
-         else
-         {
-            try
-            {
-               FLOAT64 f = 0.0 ;
-               f = boost::lexical_cast<FLOAT64>( e.valuestr () ) ;
-               builder.appendNumber( fieldName, f ) ;
-            }
-            catch ( boost::bad_lexical_cast &e )
-            {
-               builder.appendNumber( fieldName, 0.0 ) ;
-            }
-         }
-         break ;
-      }
-      case String :
-      {
-         if ( NumberInt == e.type() )
-         {
-            utilString us ;
-            rc = us.appendINT32( e.numberInt() ) ;
-            if ( SDB_OK != rc )
-            {
-               PD_LOG( PDERROR, "failed to append int32:%d", rc ) ;
-               goto error ;
-            }
-            builder.append( fieldName, us.str() ) ;
-         }
-         else if ( NumberLong == e.type() )
-         {
-            utilString us ;
-            rc = us.appendINT64( e.numberLong() ) ;
-            if ( SDB_OK != rc )
-            {
-               PD_LOG( PDERROR, "failed to append int64:%d", rc ) ;
-               goto error ;
-            }
-            builder.append( fieldName, us.str() ) ;
-         }
-         else if ( NumberDouble == e.type() )
-         {
-            utilString us ;
-            rc = us.appendDouble( e.numberDouble() ) ;
-            if ( SDB_OK != rc )
-            {
-               PD_LOG( PDERROR, "failed to append float64:%d", rc ) ;
-               goto error ;
-            }
-            builder.append( fieldName, us.str() ) ;
-         }
-         else if ( Date == e.type() )
-         {
-            CHAR buffer[64] = { 0 };
-            time_t timer = (time_t)( ( INT64 )( e.date() ) / 1000 ) ;
-            struct tm psr ;
-            local_time ( &timer, &psr ) ;
-            sprintf ( buffer,
-                      "%04d-%02d-%02d",
-                      psr.tm_year + 1900,
-                      psr.tm_mon + 1,
-                      psr.tm_mday ) ;
-            builder.append( fieldName, buffer ) ;
-         }
-         else if ( Timestamp == e.type() )
-         {
-            Date_t date = e.timestampTime () ;
-            unsigned int inc = e.timestampInc () ;
-            char buffer[128] = { 0 };
-            time_t timer = (time_t)((( INT64 )(date.millis))/1000) ;
-            struct tm psr ;
-            local_time ( &timer, &psr ) ;
-            sprintf ( buffer,
-                      "%04d-%02d-%02d-%02d.%02d.%02d.%06d",
-                      psr.tm_year + 1900,
-                      psr.tm_mon + 1,
-                      psr.tm_mday,
-                      psr.tm_hour,
-                      psr.tm_min,
-                      psr.tm_sec,
-                      inc ) ;
-            builder.append( fieldName, buffer ) ;
-         }
-         else if ( jstOID == e.type() )
-         {
-            builder.append( fieldName, e.OID().str() ) ;
-         }
-         else if ( Object == e.type() )
-         {
-            builder.append( fieldName,
-                            e.embeddedObject().toString( FALSE, TRUE ) ) ; 
-         }
-         else if ( Array == e.type() )
-         {
-            builder.append( fieldName,
-                            e.embeddedObject().toString( TRUE, TRUE ) ) ;
-         }
-         else if ( Bool == e.type() )
-         {
-            builder.append( fieldName,
-                            e.booleanSafe() ?
-                            "true" : "false" ) ;
-         }
-         else
-         {
-            builder.appendNull( fieldName ) ;
-         }
-         break ;
-      }   
-      case Object :
-      {
-         if ( String == e.type() )
-         {
-            BSONObj obj ;
-            INT32 r = fromjson( e.valuestr(), obj ) ;
-            if ( SDB_OK == r )
-            {
-               builder.append( fieldName, obj ) ;
-            }
-            else
-            {
-               builder.appendNull( fieldName ) ;
-            }
-         }
-         else
-         {
-            builder.appendNull( fieldName ) ;
-         }
-         break ;
-      }
-      case Array :
-      case BinData :
-      case Undefined :
-         builder.appendNull( fieldName ) ;
-         break ;
-      case jstOID :
-      {
-         if ( String == e.type() &&
-              25 == e.valuestrsize() )
-         {
-            bson::OID o( e.valuestr() ) ;
-            builder.appendOID( fieldName, &o ) ;
-         }
-         else
-         {
-            builder.appendNull( fieldName ) ;
-         }
-         break ;
-      }
-      case Bool :
-         builder.appendBool( fieldName, e.trueValue() ) ;
-         break ;
-      case Date :
-      {
-         UINT64 tm = 0 ;
-         if ( e.isNumber() )
-         {
-            Date_t d( e.numberLong() ) ;
-            builder.appendDate( fieldName, d ) ;
-         }
-         else if ( String == e.type() &&
-                   SDB_OK == utilStr2Date( e.valuestr(), tm ))
-         {
-            builder.appendDate( fieldName, Date_t( tm ) ) ;
-         }
-         else if ( Timestamp == e.type() )
-         {
-            builder.appendDate( fieldName, e.timestampTime() ) ;
-         }
-         else
-         {
-            builder.appendNull( fieldName ) ;
-         }
-         break ;
-      }
-      case jstNULL :
-      case RegEx :
-      case DBRef :
-      case Code :
-      case Symbol :
-      case CodeWScope :
-         builder.appendNull( fieldName ) ;
-         break ;
-      case NumberInt :
-      {
-         if ( Date == e.type() )
-         {
-            builder.appendNumber( fieldName,
-                                  ( INT32 )( e.date().millis ) ) ;
-         }
-         else if ( Timestamp == e.type() )
-         {
-            INT32 l = e.timestampTime().millis ;
-            l += e.timestampInc() / 1000 ;
-            builder.appendNumber( fieldName, ( INT32 )l ) ;
-         }
-         else if ( Bool == e.type() )
-         {
-            INT32 v = e.Bool() ? 1 : 0 ;
-            builder.append( fieldName, v ) ;
-         }
-         else if ( NumberLong == e.type() )
-         {
-            INT32 i = 0 ;
-            INT64 l = e.numberLong() ;
-            if ( l > 2147483647LL || l < -2147483648LL )
-            {
-               i = 0 ;
-            }
-            {
-               i = ( INT32 )l ;
-            }
-            builder.appendNumber( fieldName, i ) ;
-         }
-         else if ( NumberDouble == e.type() )
-         {
-            INT32 i = 0 ;
-            double d = e.Double() ;
-            if ( d > 2147483647.0 || d < -2147483648.0 )
-            {
-               i = 0 ;
-            }
-            else
-            {
-               i = ( INT32 )d ;
-            }
-            builder.appendNumber( fieldName, i ) ;
-         }
-         else if ( String != e.type() )
-         {
-            builder.appendNumber( fieldName, e.numberInt() ) ;
-         }
-         else
-         {
-            try
-            {
-               INT32 i = 0 ;
-               double v = 0 ;
-               v = boost::lexical_cast<double>( e.valuestr () ) ;
-               if ( v > 2147483647.0 || v < -2147483648.0 )
-               {
-                  i = 0 ;
-               }
-               else
-               {
-                  i = ( INT32 )v ;
-               }
-               builder.appendNumber( fieldName, i ) ;
-            }
-            catch ( boost::bad_lexical_cast &e )
-            {
-               builder.appendNumber( fieldName, 0 ) ;
-            }
-         }
-         break ;
-      }
-      case Timestamp :
-      {
-         time_t tm = 0 ;;
-         UINT64 usec = 0 ;
-         if ( e.isNumber() )
-         {
-            /// millis
-            OpTime t( (unsigned) (e.numberLong() / 1000) , 0 );
-            builder.appendTimestamp( fieldName, t.asDate() ) ;
-         }
-         else if ( String == e.type() &&
-                   SDB_OK == engine::utilStr2TimeT( e.valuestr(),
-                                                    tm,
-                                                    &usec ))
-         {
-            OpTime t( (unsigned) (tm) , usec );
-            builder.appendTimestamp( fieldName, t.asDate() ) ;
-         }
-         else if ( Date == e.type() )
-         {
-            builder.appendTimestamp( fieldName, e.date().millis, 0 ) ;
-         }
-         else
-         {
-            builder.appendNull( fieldName ) ;
-         }
-         break ;
-      }
-      case NumberLong :
-      {
-         if ( Date == e.type() )
-         {
-            builder.appendNumber( fieldName,
-                                  ( INT64 )( e.date().millis ) ) ;
-         }
-         else if ( Timestamp == e.type() )
-         {
-            UINT64 l = e.timestampTime().millis ;
-            l += e.timestampInc() / 1000 ;
-            builder.appendNumber( fieldName, ( INT64 )l ) ;
-         }
-         else if ( Bool == e.type() )
-         {
-            INT64 v = e.Bool() ? 1 : 0 ;
-            builder.append( fieldName, v ) ;
-         }
-         else if ( String != e.type() )
-         {
-            builder.appendNumber( fieldName, e.numberLong() ) ;
-         }
-         else
-         {
-            try
-            {  
-               //if the STRING has "." "e" or "E" use double type
-               if ( ossStrchr ( e.valuestr (), '.' ) != NULL || 
-                    ossStrchr ( e.valuestr (), 'E' ) != NULL || 
-                    ossStrchr ( e.valuestr (), 'e' ) != NULL )
-               {
-                  double d = 0  ;
-                  d = boost::lexical_cast<double>( e.valuestr () ) ;
-                  builder.appendNumber( fieldName, ( INT64 )d ) ;
-               }
-               else
-               {
-                  INT64 l = 0 ;
-                  l = boost::lexical_cast<INT64>( e.valuestr () ) ;
-                  builder.appendNumber( fieldName, l ) ;
-               }
-            }
-            catch ( boost::bad_lexical_cast &e )
-            {
-               builder.appendNumber( fieldName, 0 ) ;
-            }
-         }
-         break ;
-      } 
-      case MaxKey :
-         builder.appendMaxKey( fieldName ) ;
-         break ;
-      default:
-         rc = SDB_INVALIDARG ;
-         break ;
-      }
-
-      if ( SDB_OK != rc )
-      {
-         PD_LOG( PDERROR, "invalid cast type:%d", type ) ;
-         goto error ;
+         out = action->getObj().getField( fieldName ) ;
       }
    done:
+      PD_TRACE_EXITRC( SDB__MTHMODBUILD, rc ) ;
       return rc ;
    error:
       goto done ;
@@ -1112,11 +619,6 @@ namespace engine
       BSONElement arg ;
       BSONType type = EOO ;
 
-      if ( e.eoo() )
-      {
-         goto done ;
-      }
-
       arg = action->getArg().getField( "arg1" ) ;
       if ( !arg.isNumber() )
       {
@@ -1127,27 +629,13 @@ namespace engine
       }
 
       type = ( BSONType )( arg.numberInt() ) ;
-      if ( EOO == type )
+      rc = mthCast( fieldName, e, type, builder ) ;
+      if ( SDB_OK != rc )
       {
-         PD_LOG( PDERROR, "can not cast to eoo" ) ;
-         rc = SDB_INVALIDARG ;
+         PD_LOG( PDERROR, "mthCast failed:rc=%d", rc ) ;
          goto error ;
       }
-      else if ( e.type() == type )
-      {
-         builder.appendAs( e, fieldName ) ;
-      }
-      else
-      {
-         rc = _mthCast( fieldName, e, type, builder ) ;
-         if ( SDB_OK != rc )
-         {
-            PD_LOG( PDERROR, "failed to cast element[%s] to"
-                    " type[%d]", e.toString( TRUE, TRUE ).c_str(), type ) ;
-            goto error ;
-                   
-         }
-      }
+
    done:
       PD_TRACE_EXITRC( SDB__MTHCASTBUILD, rc ) ;
       return rc ;
@@ -1189,69 +677,23 @@ namespace engine
       }
       else
       {
-         rc = _mthCast( fieldName, in, type, builder ) ;
+         rc = mthCast( fieldName, in, type, builder ) ;
          if ( SDB_OK != rc )
          {
             PD_LOG( PDERROR, "failed to cast element[%s] to"
-                    " type[%d]", in.toString( TRUE, TRUE ).c_str(), type ) ;
+                    " type[%d]", in.toString().c_str(), type ) ;
             goto error ;
 
          }
+
          action->setObj( builder.obj() ) ;
-         out = action->getObj().getField( fieldName ) ;    
+         out = action->getObj().getField( fieldName ) ;
       }
+
    done:
       PD_TRACE_EXITRC( SDB__MTHCASTGET, rc ) ;
       return rc ;
    error:
-      goto done ;
-   }
-
-   static void _getSubStr( const CHAR *str,
-                           INT32 strLen,
-                           INT32 begin,
-                           INT32 limit,
-                           const CHAR *&pos,
-                           INT32 &cpLen )
-   {
-      const CHAR *cpBegin = NULL ;
-
-      if ( strLen < 0 )
-      {
-         goto error ;
-      }
-
-      if ( 0 <= begin )
-      {
-         if ( strLen <= begin )
-         {
-            goto error ;
-         }
-         cpBegin = str + begin ;
-         cpLen = strLen - begin ;
-      }
-      else
-      {
-         INT32 beginPos = strLen + begin ;
-         if ( beginPos < 0 )
-         {
-            goto error ;
-         }
-         cpBegin = str + beginPos ;
-         cpLen = strLen - beginPos ;
-      }
-
-      if ( 0 <= limit && limit < cpLen )
-      {
-         cpLen = limit ;
-      }
-
-      pos = cpBegin ;
-   done:
-      return ;
-   error:
-      pos = NULL ;
-      cpLen = -1 ;
       goto done ;
    }
 
@@ -1266,36 +708,21 @@ namespace engine
       SDB_ASSERT( NULL != action, "can not be null" ) ;
       INT32 begin = 0 ;
       INT32 limit = -1 ;
-      if ( e.eoo() )
+
+      begin = action->getArg().getIntField( "arg1" ) ;
+      limit = action->getArg().getIntField( "arg2" ) ;
+      rc = mthSubStr( fieldName, e, begin, limit, builder ) ;
+      if ( SDB_OK != rc )
       {
-         goto done ;
+         PD_LOG( PDERROR, "mthSubStr failed:rc=%d", rc ) ;
+         goto error ;
       }
-      else if ( String != e.type() )
-      {
-         builder.appendNull( fieldName ) ;
-      }
-      else
-      {
-         begin = action->getArg().getIntField( "arg1" ) ;
-         limit = action->getArg().getIntField( "arg2" ) ;
-         const CHAR *pos = NULL ;
-         INT32 cpLen = -1 ;
-         _getSubStr( e.valuestr(),
-                     e.valuestrsize() - 1,
-                     begin, limit,
-                     pos, cpLen ) ;
-         if ( NULL == pos || -1 == cpLen )
-         {
-            builder.append( fieldName, "" ) ;
-         }
-         else
-         {
-            builder.appendStrWithNoTerminating( fieldName, pos, cpLen ) ;
-         }
-      }
+
    done:
       PD_TRACE_EXITRC( SDB__MTHSUBSTRBUILD, rc ) ;
       return rc ;
+   error:
+      goto done ;
    }
 
    ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHSUBSTRGET, "mthSubStrGet" )
@@ -1309,51 +736,30 @@ namespace engine
       SDB_ASSERT( NULL != action, "can not be null" ) ;
       BSONObjBuilder builder ;
       BSONObj obj ;
-      if ( in.eoo() )
+      INT32 begin = 0 ;
+      INT32 limit = -1 ;
+
+      begin = action->getArg().getIntField( "arg1" ) ;
+      limit = action->getArg().getIntField( "arg2" ) ;
+      rc = mthSubStr( fieldName, in, begin, limit, builder ) ;
+      if ( SDB_OK != rc )
       {
-         goto done ;
-      }
-      else if ( String != in.type() )
-      {
-         builder.appendNull( fieldName ) ;
-      }
-      else
-      {
-         INT32 begin = action->getArg().getIntField( "arg1" ) ;
-         INT32 limit = action->getArg().getIntField( "arg2" ) ;
-         const CHAR *pos = NULL ;
-         INT32 cpLen = -1 ;
-         _getSubStr( in.valuestr(),
-                     in.valuestrsize(),
-                     begin, limit,
-                     pos, cpLen ) ;
-         if ( NULL == pos || -1 == cpLen )
-         {
-            builder.append( fieldName, "" ) ;
-            obj = builder.obj() ;
-         }
-         else if ( pos == in.valuestr() &&
-                   cpLen == in.valuestrsize() - 1 )
-         {
-            out = in ;
-            goto done ;
-         }
-         else
-         {
-            builder.appendStrWithNoTerminating( fieldName, pos, cpLen ) ;
-            obj = builder.obj() ;
-         }
+         PD_LOG( PDERROR, "mthSubStr failed:rc=%d", rc ) ;
+         goto error ;
       }
 
+      obj = builder.obj() ;
       if ( !obj.isEmpty() )
       {
          action->setObj( obj ) ;
-         out = action->getObj().getField( fieldName ) ;      
+         out = action->getObj().getField( fieldName ) ;
       }
-      
-      PD_TRACE_EXITRC( SDB__MTHSUBSTRGET, rc ) ;
+
    done:
+      PD_TRACE_EXITRC( SDB__MTHSUBSTRGET, rc ) ;
       return rc ;
+   error:
+      goto done ;
    }
 
    ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHSTRLENBUILD, "mthStrLenBuild" )
@@ -1365,21 +771,19 @@ namespace engine
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY( SDB__MTHSTRLENBUILD ) ;
       SDB_ASSERT( NULL != action, "can not be null" ) ;
-      if ( e.eoo() )
+
+      rc = mthStrLen( fieldName, e, builder ) ;
+      if ( SDB_OK != rc )
       {
-         goto done ;
+         PD_LOG( PDERROR, "mthStrLen failed:rc=%d", rc ) ;
+         goto error ;
       }
-      else if ( String != e.type() )
-      {
-         builder.appendNull( fieldName ) ;
-      }
-      else
-      {
-         builder.append( fieldName, e.valuestrsize() - 1 ) ;
-      }
+
    done:
       PD_TRACE_EXITRC( SDB__MTHSTRLENBUILD, rc ) ;
       return rc ;
+   error:
+      goto done ;
    }
 
    ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHSTRLENGET, "mthStrLenGet" )
@@ -1396,119 +800,23 @@ namespace engine
       {
          goto done ;
       }
-      else if ( String != in.type() )
+
+      rc = mthStrLen( fieldName, in, builder ) ;
+      if ( SDB_OK != rc )
       {
-         builder.appendNull( fieldName ) ;
-         obj = builder.obj() ;
-      }
-      else
-      {
-         builder.append( fieldName, in.valuestrsize() - 1 ) ;
-         obj = builder.obj() ;
+         PD_LOG( PDERROR, "mthStrLen failed:rc=%d", rc ) ;
+         goto error ;
       }
 
+      obj = builder.obj() ;
       if ( !obj.isEmpty() )
       {
          action->setObj( obj ) ;
          out = action->getObj().getField( fieldName ) ;
       }
+
    done:
       PD_TRACE_EXITRC( SDB__MTHSTRLENGET, rc ) ;
-      return rc ;
-   }
-
-   static BOOLEAN _isLower( const CHAR *str )
-   {
-      BOOLEAN rc = TRUE ; 
-      const CHAR *p = str ;
-      while ( '\0' != *p )
-      {
-         if ( 'A' <= *p &&
-              *p <= 'Z' )
-         {
-            rc = FALSE ;
-            break ;
-         }
-         ++p ;
-      }
-      return rc ;
-   }
-
-   static BOOLEAN _isUpper( const CHAR *str )
-   {
-      BOOLEAN rc = TRUE ;
-      const CHAR *p = str ;
-      while ( '\0' != *p )
-      {
-         if ( 'a' <= *p &&
-              *p <= 'z' )
-         {
-            rc = FALSE ;
-            break ;
-         }
-         ++p ;
-      }
-      return rc ;
-   }
-
-   /// TODO:move lower and upper to utilStr.hpp
-   static INT32 _lower( const CHAR *str,
-                        UINT32 len,
-                        utilString &us )
-   {
-      INT32 rc = SDB_OK ;
-      us.resize( len ) ;
-      for ( UINT32 i = 0; i < len; ++i )
-      {
-         const CHAR *p = str + i ;
-         if ( 'A' <= *p &&
-              *p <= 'Z' )
-         {
-            rc = us.append( *p + 32 ) ;
-         }
-         else
-         {
-             rc = us.append( *p ) ;
-         }
-
-         if ( SDB_OK != rc )
-         {
-            PD_LOG( PDERROR, "failed to append str:%d", rc ) ;
-            goto error ;
-         }
-      }
-   done:
-      return rc ;
-   error:
-      goto done ;
-   }
-
-   static INT32 _upper( const CHAR *str,
-                        UINT32 len,
-                        utilString &us )
-   {
-      INT32 rc = SDB_OK ;
-      us.resize( len ) ;
-      for ( UINT32 i = 0; i < len; ++i )
-      {
-         const CHAR *p = str + i ;
-         if ( 'a' <= *p &&
-              *p <= 'z' )
-         {
-            rc = us.append( *p - 32 ) ;
-         }
-         else
-         {
-             rc = us.append( *p ) ;
-         }
-
-         if ( SDB_OK != rc )
-         {
-            PD_LOG( PDERROR, "failed to append str:%d", rc ) ;
-            goto error ;
-         }
-      }
-   done:
       return rc ;
    error:
       goto done ;
@@ -1526,24 +834,14 @@ namespace engine
       {
          goto done ;
       }
-      else if ( String != e.type() )
-      {
-         builder.appendNull( fieldName ) ;
-      }
-      else
-      {
-         utilString us ;
-         rc = _lower( e.valuestr(),
-                      e.valuestrsize(),
-                      us ) ;
-         if ( SDB_OK != rc )
-         {
-            PD_LOG( PDERROR, "failed to create lower str:%d", rc ) ;
-            goto error ;
-         }
 
-         builder.append( fieldName, us.str() ) ;
+      rc = mthLower( fieldName, e, builder ) ;
+      if ( SDB_OK != rc )
+      {
+         PD_LOG( PDERROR, "mthLower failed:rc=%d", rc ) ;
+         goto error ;
       }
+
    done:
       PD_TRACE_EXITRC( SDB__MTHLOWERBUILD, rc ) ;
       return rc ;
@@ -1566,37 +864,21 @@ namespace engine
       {
          goto done ;
       }
-      else if ( String != in.type() )
-      {
-         builder.appendNull( fieldName ) ;
-         obj = builder.obj() ;
-      }
-      else if ( _isLower( in.valuestr() ) )
-      {
-         out = in ;
-         goto done ;
-      }
-      else
-      {
-         utilString us ;
-         rc = _lower( in.valuestr(),
-                      in.valuestrsize(),
-                      us ) ;
-         if ( SDB_OK != rc )
-         {
-            PD_LOG( PDERROR, "failed to create lower str:%d", rc ) ;
-            goto error ;
-         }
 
-         builder.append( fieldName, us.str() ) ;
-         obj = builder.obj() ;
+      rc = mthLower( fieldName, in, builder ) ;
+      if ( SDB_OK != rc )
+      {
+         PD_LOG( PDERROR, "mthLower failed:rc=%d", rc ) ;
+         goto error ;
       }
 
+      obj = builder.obj() ;
       if ( !obj.isEmpty() )
       {
          action->setObj( obj ) ;
-         out = action->getObj().getField( fieldName ) ;      
+         out = action->getObj().getField( fieldName ) ;
       }
+
    done:
       PD_TRACE_EXITRC( SDB__MTHLOWERGET, rc ) ;
       return rc ;
@@ -1616,24 +898,14 @@ namespace engine
       {
          goto done ;
       }
-      else if ( String != e.type() )
-      {
-         builder.appendNull( fieldName ) ;
-      }
-      else
-      {
-         utilString us ;
-         rc = _upper( e.valuestr(),
-                      e.valuestrsize(),
-                      us ) ;
-         if ( SDB_OK != rc )
-         {
-            PD_LOG( PDERROR, "failed to create upper str:%d", rc ) ;
-            goto error ;
-         }
 
-         builder.append( fieldName, us.str() ) ;
+      rc = mthUpper( fieldName, e, builder ) ;
+      if ( SDB_OK != rc )
+      {
+         PD_LOG( PDERROR, "mthUpper failed:rc=%d", rc ) ;
+         goto error ;
       }
+
    done:
       PD_TRACE_EXITRC( SDB__MTHUPPERBUILD, rc ) ;
       return rc ;
@@ -1656,32 +928,15 @@ namespace engine
       {
          goto done ;
       }
-      else if ( String != in.type() )
-      {
-         builder.appendNull( fieldName ) ;
-         obj = builder.obj() ;
-      }
-      else if ( _isUpper( in.valuestr() ) )
-      {
-         out = in ;
-         goto done ;
-      }
-      else
-      {
-         utilString us ;
-         rc = _upper( in.valuestr(),
-                      in.valuestrsize(),
-                      us ) ;
-         if ( SDB_OK != rc )
-         {
-            PD_LOG( PDERROR, "failed to create upper str:%d", rc ) ;
-            goto error ;
-         }
 
-         builder.append( fieldName, us.str() ) ;
-         obj = builder.obj() ;
+      rc = mthUpper( fieldName, in, builder ) ;
+      if ( SDB_OK != rc )
+      {
+         PD_LOG( PDERROR, "mthUpper failed:rc=%d", rc ) ;
+         goto error ;
       }
 
+      obj = builder.obj() ;
       if ( !obj.isEmpty() )
       {
          action->setObj( obj ) ;
@@ -1689,146 +944,6 @@ namespace engine
       }
    done:
       PD_TRACE_EXITRC( SDB__MTHUPPERGET, rc ) ;
-      return rc ;
-   error:
-      goto done ;
-   }
-
-   /// lr: -1(ltrim) 0(trim) 1(rtrim)
-   static BOOLEAN isTrimed( const CHAR *str,
-                            INT32 size,
-                            INT8 lr )
-   {
-      BOOLEAN rc = TRUE ;
-      SDB_ASSERT( NULL != str, "can not be null" ) ;
-      INT32 strLen = 0 <= size ? size : ossStrlen( str ) ;
-      if ( 0 == strLen )
-      {
-         goto done ;
-      }
-
-      if ( lr <= 0 )
-      {
-         if ( ' ' == *str ||
-              '\t' == *str ||
-              '\n' == *str ||
-              '\r' == *str )
-         {
-            rc = FALSE ;
-            goto done ;
-         }
-      }
-
-      if ( 0 <= lr )
-      {
-         if ( ' ' == *( str + strLen - 1 ) ||
-              '\t' == *( str + strLen - 1 ) ||
-              '\n' == *( str + strLen - 1 ) ||
-              '\r' == *( str + strLen - 1 ) )
-         {
-            rc = FALSE ;
-            goto done ;
-         }
-      }
-   done:
-      return rc ;
-   }
-
-   static void ltrim( const CHAR *str,
-                      const CHAR *&trimed )
-   {
-      const CHAR *p = str ;
-      while ( '\0' != *p )
-      {
-         if ( ' ' != *p &&
-              '\t' != *p &&
-              '\n' != *p &&
-              '\r' != *p )
-         {
-            break ;
-         }
-         ++p ;
-      }
-      trimed = p ;
-      return ;
-   }
-
-   static INT32 rtrim( const CHAR *str,
-                       INT32 size,
-                       _utilString &us )
-   {
-      INT32 rc = SDB_OK ;
-      INT32 pos = size - 1 ;
-      while ( 0 <= pos )
-      {
-         const CHAR *p = str + pos ;
-         if ( ' ' != *p &&
-              '\t' != *p &&
-              '\n' != *p &&
-              '\r' != *p )
-         {
-            break ;
-         }
-         --pos ;
-      }
-
-      if ( 0 <= pos )
-      {
-         rc = us.append( str, pos + 1 ) ;
-         if ( SDB_OK != rc )
-         {
-            PD_LOG( PDERROR, "failed to append string:%d", rc ) ;
-            goto error ;
-         }
-      }
-   done:
-      return rc ;
-   error:
-      goto done ;
-   }
-
-   static INT32 trim( const CHAR *str,
-                      INT32 size,
-                      INT8 lr,
-                      _utilString &us )
-   {
-      INT32 rc = SDB_OK ;
-      SDB_ASSERT( NULL != str, "can not be null" ) ;
-      INT32 strLen = 0 <= size ? size : ossStrlen( str ) ;
-      const CHAR *p = str ;
-      if ( 0 == strLen )
-      {
-         goto done ;
-      }
-
-      if ( lr <= 0 )
-      {
-         const CHAR *newP = NULL ;
-         ltrim( p, newP ) ;
-         p = newP ;
-      }
-
-      if ( 0 <= lr )
-      {
-         rc = rtrim( p, size - ( p - str ), us ) ;
-         if ( SDB_OK != rc )
-         {
-            PD_LOG( PDERROR, "failed to trim right site:%d", rc ) ;
-            goto error ;
-         }
-      }
-      else
-      {
-         /// necessary to avoid one more copy when 
-         /// str is like "  abc" ?
-         rc = us.append( p, size - ( p - str ) ) ;
-         if ( SDB_OK != rc )
-         {
-            PD_LOG( PDERROR, "failed to trim right site:%d", rc ) ;
-            goto error ;
-         }
-      }
-   done:
       return rc ;
    error:
       goto done ;
@@ -1843,34 +958,14 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY( SDB__MTHLRTRIMBUILD ) ;
-      if ( e.eoo() )
-      {
-         goto done ;
-      }
-      else if ( String != e.type() )
-      {
-         builder.appendNull( fieldName ) ;
-      }
-      else if ( isTrimed( e.valuestr(),
-                          e.valuestrsize() - 1,
-                          lr ) )
-      {
-         builder.appendAs( e, fieldName ) ;
-      }
-      else
-      {
-         utilString us ;
-         rc = trim( e.valuestr(),
-                    e.valuestrsize() - 1,
-                    lr, us ) ;
-         if ( SDB_OK != rc )
-         {
-            PD_LOG( PDERROR, "failed to trim string:%d", rc ) ;
-            goto error ;
-         }
 
-         builder.append( fieldName, us.str() ) ;
+      rc = mthTrim( fieldName, e, lr, builder ) ;
+      if ( SDB_OK != rc )
+      {
+         PD_LOG( PDERROR, "mthTrim failed:rc=%d", rc ) ;
+         goto error ;
       }
+
    done:
       PD_TRACE_EXITRC( SDB__MTHLRTRIMBUILD, rc ) ;
       return rc ;
@@ -1879,43 +974,21 @@ namespace engine
    }
 
    ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHLRTRIMGET, "mthLRTrimGet" )
-   INT32 mthLRTrimGet( const CHAR *fieldName,
-                       const bson::BSONElement &in,
-                       _mthSAction *action,
-                       INT8 lr,
-                       bson::BSONElement &out )
+   static INT32 mthLRTrimGet( const CHAR *fieldName,
+                              const bson::BSONElement &in,
+                              _mthSAction *action,
+                              INT8 lr,
+                              bson::BSONElement &out )
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY( SDB__MTHLRTRIMGET ) ;
       BSONObjBuilder builder ;
-      if ( in.eoo() )
-      {
-         goto done ;
-      }
-      else if ( String != in.type() )
-      {
-         builder.appendNull( fieldName ) ;
-      }
-      else if ( isTrimed( in.valuestr(),
-                          in.valuestrsize() - 1 ,
-                          lr ) )
-      {
-         out = in ;
-         goto done ;
-      }
-      else
-      {
-         utilString us ;
-         rc = trim( in.valuestr(),
-                    in.valuestrsize() - 1,
-                    lr, us ) ;
-         if ( SDB_OK != rc )
-         {
-            PD_LOG( PDERROR, "failed to trim string:%d", rc ) ;
-            goto error ;
-         }
 
-         builder.append( fieldName, us.str() ) ;
+      rc = mthTrim( fieldName, in, lr, builder ) ;
+      if ( SDB_OK != rc )
+      {
+         PD_LOG( PDERROR, "mthTrim failed:rc=%d", rc ) ;
+         goto error ;
       }
 
       action->setObj( builder.obj() ) ;
@@ -2060,34 +1133,33 @@ namespace engine
                       bson::BSONObjBuilder &builder )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       PD_TRACE_ENTRY( SDB__MTHADDBUILD ) ;
       SDB_ASSERT( NULL != action, "can not be null" ) ;
+      BOOLEAN strictDataMode = action->getStrictDataMode() ;
       const BSONObj &obj = action->getArg() ;
       BSONElement arg = obj.getField( "arg1" ) ;
       SDB_ASSERT( arg.isNumber(), "must be numeric" ) ;
 
-      if ( e.eoo() )
+      rc = mthAdd( fieldName, e, arg, builder, flag ) ;
+      if ( SDB_OK != rc )
       {
-         goto done ;
+         PD_LOG( PDERROR, "mthAdd failed:rc=%d", rc ) ;
+         goto error ;
       }
-      else if ( !e.isNumber() )
+      if ( strictDataMode && OSS_BIT_TEST( flag, MTH_OPERATION_FLAG_OVERFLOW ) )
       {
-         builder.appendNull( fieldName ) ;
+         rc = SDB_VALUE_OVERFLOW ;
+         PD_LOG( PDERROR, "overflow happened, field: %s, (%lld + %lld), rc = %d",
+                 fieldName, e.numberLong(), arg.numberLong(), rc ) ;
+         goto error ;
       }
-      else if ( NumberDouble == e.type() ||
-                NumberDouble == arg.type() )
-      {
-         FLOAT64 f = arg.numberDouble() + e.numberDouble() ;
-         builder.appendNumber( fieldName, f ) ;
-      }
-      else
-      {
-         INT64 i = arg.numberLong() + e.numberLong() ;
-         builder.appendIntOrLL( fieldName, i ) ;
-      }
+
    done:
       PD_TRACE_EXITRC( SDB__MTHADDBUILD, rc ) ;
       return rc ;
+   error:
+      goto done ;
    }
 
    ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHADDGET, "mthAddGet" )
@@ -2097,42 +1169,40 @@ namespace engine
                     bson::BSONElement &out )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       PD_TRACE_ENTRY( SDB__MTHADDGET ) ;
       BSONObjBuilder builder ;
       BSONObj obj ;
+      BOOLEAN strictDataMode = action->getStrictDataMode() ;
       BSONElement arg = action->getArg().getField( "arg1" ) ;
       SDB_ASSERT( arg.isNumber(), "must be numeric" ) ;
 
-      if ( in.eoo() )
+      rc = mthAdd( fieldName, in, arg, builder, flag ) ;
+      if ( SDB_OK != rc )
       {
-         /// do nothing.
+         PD_LOG( PDERROR, "mthAdd failed:rc=%d", rc ) ;
+         goto error ;
       }
-      else if ( !in.isNumber() )
+      if ( strictDataMode && OSS_BIT_TEST( flag, MTH_OPERATION_FLAG_OVERFLOW ) )
       {
-         builder.appendNull( fieldName ) ;
-         obj = builder.obj() ;
-      }
-      else if ( NumberDouble == in.type() ||
-                NumberDouble == arg.type() )
-      {
-         FLOAT64 f = in.numberDouble() + arg.numberDouble() ;
-         builder.appendNumber( fieldName, f ) ;
-         obj = builder.obj() ;
-      }
-      else
-      {
-         INT64 l = in.numberLong() + arg.numberLong() ;
-         builder.appendIntOrLL( fieldName, l ) ;
-         obj = builder.obj() ;
+         rc = SDB_VALUE_OVERFLOW ;
+         PD_LOG( PDERROR, "overflow happened, field: %s, (%lld + %lld), rc = %d",
+                 fieldName, in.numberLong(), arg.numberLong(), rc ) ;
+         goto error ;
       }
 
+      obj = builder.obj() ;
       if ( !obj.isEmpty() )
       {
          action->setObj( obj ) ;
          out = action->getObj().getField( fieldName ) ;
       }
+
+   done:
       PD_TRACE_EXITRC( SDB__MTHADDGET, rc ) ;
       return rc ;
+   error:
+      goto done ;
    }
 
    ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHSUBTRACTBUILD, "mthSubtractBuild" )
@@ -2142,34 +1212,33 @@ namespace engine
                            bson::BSONObjBuilder &builder )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       PD_TRACE_ENTRY( SDB__MTHSUBTRACTBUILD ) ;
       SDB_ASSERT( NULL != action, "can not be null" ) ;
+      BOOLEAN strictDataMode = action->getStrictDataMode() ;
       const BSONObj &obj = action->getArg() ;
       BSONElement arg = obj.getField( "arg1" ) ;
       SDB_ASSERT( arg.isNumber(), "must be numeric" ) ;
 
-      if ( e.eoo() )
+      rc = mthSub( fieldName, e, arg, builder, flag ) ;
+      if ( SDB_OK != rc )
       {
-         goto done ;
+         PD_LOG( PDERROR, "mthSub failed:rc=%d", rc ) ;
+         goto error ;
       }
-      else if ( !e.isNumber() )
+      if ( strictDataMode && OSS_BIT_TEST( flag, MTH_OPERATION_FLAG_OVERFLOW ) )
       {
-         builder.appendNull( fieldName ) ;
+         rc = SDB_VALUE_OVERFLOW ;
+         PD_LOG( PDERROR, "overflow happened, field: %s, (%lld - %lld), rc = %d",
+                 fieldName, e.numberLong(), arg.numberLong(), rc ) ;
+         goto error ;
       }
-      else if ( NumberDouble == e.type() ||
-                NumberDouble == arg.type() )
-      {
-         FLOAT64 f = e.numberDouble() - arg.numberDouble() ;
-         builder.appendNumber( fieldName, f ) ;
-      }
-      else
-      {
-         INT64 i = e.numberLong() - arg.numberLong() ;
-         builder.appendIntOrLL( fieldName, i ) ;
-      }
+
    done:
       PD_TRACE_EXITRC( SDB__MTHSUBTRACTBUILD, rc ) ;
       return rc ;
+   error:
+      goto done ;
    }
 
    ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHSUBTRACTGET, "mthSubtractGet" )
@@ -2179,42 +1248,40 @@ namespace engine
                          bson::BSONElement &out )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       PD_TRACE_ENTRY( SDB__MTHSUBTRACTGET ) ;
       BSONObjBuilder builder ;
       BSONObj obj ;
+      BOOLEAN strictDataMode = action->getStrictDataMode() ;
       BSONElement arg = action->getArg().getField( "arg1" ) ;
       SDB_ASSERT( arg.isNumber(), "must be numeric" ) ;
 
-      if ( in.eoo() )
+      rc = mthSub( fieldName, in, arg, builder, flag ) ;
+      if ( SDB_OK != rc )
       {
-         /// do nothing.   
+         PD_LOG( PDERROR, "mthSub failed:rc=%d", rc ) ;
+         goto error ;
       }
-      else if ( !in.isNumber() )
+      if ( strictDataMode && OSS_BIT_TEST( flag, MTH_OPERATION_FLAG_OVERFLOW ) )
       {
-         builder.appendNull( fieldName ) ;
-         obj = builder.obj() ;
-      }
-      else if ( NumberDouble == in.type() ||
-                NumberDouble == arg.type() )
-      {
-         FLOAT64 f = in.numberDouble() - arg.numberDouble() ;
-         builder.appendNumber( fieldName, f ) ;
-         obj = builder.obj() ;
-      }
-      else
-      {
-         INT64 l = in.numberLong() - arg.numberLong() ;
-         builder.appendIntOrLL( fieldName, l ) ;
-         obj = builder.obj() ;
+         rc = SDB_VALUE_OVERFLOW ;
+         PD_LOG( PDERROR, "overflow happened, field: %s, (%lld - %lld), rc = %d",
+                 fieldName, in.numberLong(), arg.numberLong(), rc ) ;
+         goto error ;
       }
 
+      obj = builder.obj() ;
       if ( !obj.isEmpty() )
       {
          action->setObj( obj ) ;
          out = action->getObj().getField( fieldName ) ;
       }
+
+   done:
       PD_TRACE_EXITRC( SDB__MTHSUBTRACTGET, rc ) ;
       return rc ;
+   error:
+      goto done ;
    }
 
    ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHMULTIPLYBUILD, "mthMultiplyBuild" )
@@ -2224,33 +1291,32 @@ namespace engine
                            bson::BSONObjBuilder &builder )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       PD_TRACE_ENTRY( SDB__MTHMULTIPLYBUILD ) ;
+      BOOLEAN strictDataMode = action->getStrictDataMode() ;
       const BSONObj &obj = action->getArg() ;
       BSONElement arg = obj.getField( "arg1" ) ;
       SDB_ASSERT( arg.isNumber(), "must be numeric" ) ;
 
-      if ( e.eoo() )
+      rc = mthMultiply( fieldName, e, arg, builder, flag ) ;
+      if ( SDB_OK != rc )
       {
-         goto done ;
+         PD_LOG( PDERROR, "mthMultiply failed:rc=%d", rc ) ;
+         goto error ;
       }
-      else if ( !e.isNumber() )
+      if ( strictDataMode && OSS_BIT_TEST( flag, MTH_OPERATION_FLAG_OVERFLOW ) )
       {
-         builder.appendNull( fieldName ) ;
+         rc = SDB_VALUE_OVERFLOW ;
+         PD_LOG( PDERROR, "overflow happened, field: %s, (%lld * %lld), rc = %d",
+                 fieldName, e.numberLong(), arg.numberLong(), rc ) ;
+         goto error ;
       }
-      else if ( NumberDouble == e.type() ||
-                NumberDouble == arg.type() )
-      {
-         FLOAT64 f = arg.numberDouble() * e.numberDouble() ;
-         builder.appendNumber( fieldName, f ) ;
-      }
-      else
-      {
-         INT64 i = arg.numberLong() * e.numberLong() ;
-         builder.appendIntOrLL( fieldName, i ) ;
-      }
+
    done:
       PD_TRACE_EXITRC( SDB__MTHMULTIPLYBUILD, rc ) ;
       return rc ;
+   error:
+      goto done ;
    }
 
    ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHMULTIPLYGET, "mthMultiplyGet" )
@@ -2260,42 +1326,40 @@ namespace engine
                          bson::BSONElement &out )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       PD_TRACE_ENTRY( SDB__MTHMULTIPLYGET ) ;
       BSONObjBuilder builder ;
       BSONObj obj ;
+      BOOLEAN strictDataMode = action->getStrictDataMode() ;
       BSONElement arg = action->getArg().getField( "arg1" ) ;
       SDB_ASSERT( arg.isNumber(), "must be numeric" ) ;
 
-      if ( in.eoo() )
+      rc = mthMultiply( fieldName, in, arg, builder, flag ) ;
+      if ( SDB_OK != rc )
       {
-         /// do nothing.
+         PD_LOG( PDERROR, "mthMultiply failed:rc=%d", rc ) ;
+         goto error ;
       }
-      else if ( !in.isNumber() )
+      if ( strictDataMode && OSS_BIT_TEST( flag, MTH_OPERATION_FLAG_OVERFLOW ) )
       {
-         builder.appendNull( fieldName ) ;
-         obj = builder.obj() ;
-      }
-      else if ( NumberDouble == in.type() ||
-                NumberDouble == arg.type() )
-      {
-         FLOAT64 f = in.numberDouble() * arg.numberDouble() ;
-         builder.appendNumber( fieldName, f ) ;
-         obj = builder.obj() ;
-      }
-      else
-      {
-         INT64 l = in.numberLong() * arg.numberLong() ;
-         builder.appendIntOrLL( fieldName, l ) ;
-         obj = builder.obj() ;
+         rc = SDB_VALUE_OVERFLOW ;
+         PD_LOG( PDERROR, "overflow happened, field: %s, (%lld * %lld), rc = %d",
+                 fieldName, in.numberLong(), arg.numberLong(), rc ) ;
+         goto error ;
       }
 
+      obj = builder.obj() ;
       if ( !obj.isEmpty() )
       {
          action->setObj( obj ) ;
          out = action->getObj().getField( fieldName ) ;
       }
+
+   done:
       PD_TRACE_EXITRC( SDB__MTHMULTIPLYGET, rc ) ;
       return rc ;
+   error:
+      goto done ;
    }
 
    ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHDIVIDEBUILD, "mthDivideBuild" )
@@ -2305,50 +1369,27 @@ namespace engine
                          bson::BSONObjBuilder &builder )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       PD_TRACE_ENTRY( SDB__MTHDIVIDEBUILD ) ;
+      BOOLEAN strictDataMode = action->getStrictDataMode() ;
       const BSONObj &obj = action->getArg() ;
       BSONElement arg = obj.getField( "arg1" ) ;
       SDB_ASSERT( arg.isNumber(), "must be numeric" ) ;
 
-      if ( e.eoo() )
+      rc = mthDivide( fieldName, e, arg, builder, flag ) ;
+      if ( SDB_OK != rc )
       {
-         goto done ;
+         PD_LOG( PDERROR, "mthDivide failed:rc=%d", rc ) ;
+         goto error ;
       }
-      else if ( !e.isNumber() )
+      if ( strictDataMode && OSS_BIT_TEST( flag, MTH_OPERATION_FLAG_OVERFLOW ) )
       {
-         builder.appendNull( fieldName ) ;
+         rc = SDB_VALUE_OVERFLOW ;
+         PD_LOG( PDERROR, "overflow happened, field: %s, (%lld / %lld), rc = %d",
+                 fieldName, e.numberLong(), arg.numberLong(), rc ) ;
+         goto error ;
       }
-      else if ( NumberDouble == e.type() ||
-                NumberDouble == arg.type() )
-      {
-         FLOAT64 r = arg.numberDouble() ;
-         if ( fabs(r) < OSS_EPSILON )
-         {
-            PD_LOG( PDERROR, "invalid argument:%f", r ) ;
-            rc = SDB_SYS ;
-            goto error ;
-         }
-         builder.appendNumber( fieldName, e.numberDouble() / r ) ;
-      }
-      else
-      {
-         INT64 l = e.numberLong() ;
-         INT64 r = arg.numberLong() ;
-         if ( 0 == r )
-         {
-            PD_LOG( PDERROR, "invalid argument:%lld", r ) ;
-            rc = SDB_SYS ; /// should not happen. so use sdb_sys.
-            goto error ;
-         }
-         else if ( 0 == l % r )
-         {
-            builder.appendIntOrLL( fieldName, l / r ) ;
-         }
-         else
-         {
-            builder.appendNumber( fieldName, l / ( FLOAT64 ) r ) ;
-         }
-      }
+
    done:
       PD_TRACE_EXITRC( SDB__MTHDIVIDEBUILD, rc ) ;
       return rc ;
@@ -2363,55 +1404,29 @@ namespace engine
                        bson::BSONElement &out )
    {
       INT32 rc = SDB_OK ;
+      INT32 flag = 0 ;
       PD_TRACE_ENTRY( SDB__MTHDIVIDEGET ) ;
       BSONObjBuilder builder ;
       BSONObj obj ;
+      BOOLEAN strictDataMode = action->getStrictDataMode() ;
       BSONElement arg = action->getArg().getField( "arg1" ) ;
       SDB_ASSERT( arg.isNumber(), "must be numeric" ) ;
 
-      if ( in.eoo() )
+      rc = mthDivide( fieldName, in, arg, builder, flag ) ;
+      if ( SDB_OK != rc )
       {
-         /// do nothing
+         PD_LOG( PDERROR, "mthDivide failed:rc=%d", rc ) ;
+         goto error ;
       }
-      else if ( !in.isNumber() || 0 == arg.Number() )
+      if ( strictDataMode && OSS_BIT_TEST( flag, MTH_OPERATION_FLAG_OVERFLOW ) )
       {
-         builder.appendNull( fieldName ) ;
-         obj = builder.obj() ;
-      }
-      else if ( NumberDouble == in.type() ||
-                NumberDouble == arg.type() )
-      {
-         FLOAT64 r = arg.numberDouble() ;
-         if ( fabs(r) < OSS_EPSILON )
-         {
-            PD_LOG( PDERROR, "invalid argument:%f", r ) ;
-            rc = SDB_SYS ;
-            goto error ;
-         }
-         builder.appendNumber( fieldName, in.numberDouble() / r ) ;
-         obj = builder.obj() ;
-      }
-      else
-      {
-         INT64 l = in.numberLong() ;
-         INT64 r = arg.numberLong() ;
-         if ( 0 == r )
-         {
-            PD_LOG( PDERROR, "invalid argument:%lld", r ) ;
-            rc = SDB_SYS ;
-            goto error ;
-         }
-         else if ( 0 == l % r )
-         {
-            builder.appendIntOrLL( fieldName, l / r ) ;
-         }
-         else
-         {
-            builder.appendNumber( fieldName, l / ( FLOAT64 ) r ) ;
-         }
-         obj = builder.obj() ;
+         rc = SDB_VALUE_OVERFLOW ;
+         PD_LOG( PDERROR, "overflow happened, field: %s, (%lld / %lld), rc = %d",
+                 fieldName, in.numberLong(), arg.numberLong(), rc ) ;
+         goto error ;
       }
 
+      obj = builder.obj() ;
       if ( !obj.isEmpty() )
       {
          action->setObj( obj ) ;
@@ -2424,5 +1439,102 @@ namespace engine
    error:
       goto done ;
    }
+
+   ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHSIZEBUILD, "mthSizeBuild" )
+   INT32 mthSizeBuild( const CHAR *fieldName, const bson::BSONElement &e,
+                       _mthSAction *action, bson::BSONObjBuilder &builder )
+   {
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY( SDB__MTHSIZEBUILD ) ;
+
+      rc = mthSize( fieldName, e, builder ) ;
+      PD_RC_CHECK( rc, PDERROR, "mthSize failed:rc=%d", rc ) ;
+
+   done:
+      PD_TRACE_EXITRC( SDB__MTHSIZEBUILD, rc ) ;
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHSIZEGET, "mthSizeGet" )
+   INT32 mthSizeGet( const CHAR *fieldName, const bson::BSONElement &in,
+                     _mthSAction *action, bson::BSONElement &out )
+   {
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY( SDB__MTHSIZEGET ) ;
+      BSONObjBuilder builder ;
+      BSONObj obj ;
+
+      rc = mthSize( fieldName, in, builder ) ;
+      PD_RC_CHECK( rc, PDERROR, "mthSize failed:rc=%d", rc ) ;
+
+      obj = builder.obj() ;
+      if ( !obj.isEmpty() )
+      {
+         action->setObj( obj ) ;
+         out = action->getObj().getField( fieldName ) ;
+      }
+
+   done:
+      PD_TRACE_EXITRC( SDB__MTHSIZEGET, rc ) ;
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHTYPEBUILD, "mthTypeBuild" )
+   INT32 mthTypeBuild( const CHAR *fieldName, const bson::BSONElement &e,
+                       _mthSAction *action, bson::BSONObjBuilder &builder )
+   {
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY( SDB__MTHTYPEBUILD ) ;
+      INT32 resultType = 1 ;
+      BSONElement arg = action->getArg().getField( "arg1" ) ;
+      SDB_ASSERT( arg.isNumber(), "must be numeric" ) ;
+
+      resultType = arg.numberInt() ;
+
+      rc = mthType( fieldName, resultType, e, builder ) ;
+      PD_RC_CHECK( rc, PDERROR, "mthType failed:rc=%d", rc ) ;
+
+   done:
+      PD_TRACE_EXITRC( SDB__MTHTYPEBUILD, rc ) ;
+      return rc ;
+   error:
+      goto done ;
+   }
+
+   ///PD_TRACE_DECLARE_FUNCTION ( SDB__MTHTYPEGET, "mthTypeGet" )
+   INT32 mthTypeGet( const CHAR *fieldName, const bson::BSONElement &in,
+                     _mthSAction *action, bson::BSONElement &out )
+   {
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY( SDB__MTHTYPEGET ) ;
+      BSONObjBuilder builder ;
+      BSONObj obj ;
+      INT32 resultType = 1 ;
+      BSONElement arg = action->getArg().getField( "arg1" ) ;
+      SDB_ASSERT( arg.isNumber(), "must be numeric" ) ;
+
+      resultType = arg.numberInt() ;
+
+      rc = mthType( fieldName, resultType, in, builder ) ;
+      PD_RC_CHECK( rc, PDERROR, "mthType failed:rc=%d", rc ) ;
+
+      obj = builder.obj() ;
+      if ( !obj.isEmpty() )
+      {
+         action->setObj( obj ) ;
+         out = action->getObj().getField( fieldName ) ;
+      }
+
+   done:
+      PD_TRACE_EXITRC( SDB__MTHTYPEGET, rc ) ;
+      return rc ;
+   error:
+      goto done ;
+   }
 }
+
 

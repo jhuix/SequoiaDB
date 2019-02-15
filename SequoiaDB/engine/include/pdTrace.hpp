@@ -37,15 +37,22 @@
 #define PDTRACE_HPP__
 
 #include "core.hpp"
-#include "ossUtil.hpp"
-#include "ossLatch.hpp"
-#include "ossAtomic.hpp"
 #include "oss.hpp"
-#include "pdTrace.h"
+#include "ossUtil.hpp"
+#include "ossAtomic.hpp"
+#include "sdbInterface.hpp"
+#include "ossIO.hpp"
 #include <list>
 #include <vector>
 
-#define PD_TRACE_MAX_BP_NUM         10
+#ifdef SDB_ENGINE
+#include "pdTrace.h"
+#include "ossLatch.hpp"
+#endif // SDB_ENGINE
+
+#define PD_TRACE_MAX_BP_NUM                  10
+#define PD_TRACE_MAX_MONITORED_THREAD_NUM    10
+
 /*
  * Slots and chunks
  *
@@ -59,21 +66,34 @@
  * Each log record start from one slot, and may sit in one slot or cross
  * multiple slots.
  */
-#define TRACE_CHUNK_SIZE      131072 /* bytes */
-#define TRACE_SLOT_SIZE       64     /* bytes */
-// ( 2048 slots per chunk )
-#define TRACE_SLOTS_PER_CHUNK (TRACE_CHUNK_SIZE/TRACE_SLOT_SIZE)
 
-#define TRACE_RECORD_MAX_SIZE TRACE_CHUNK_SIZE
+/*
+   TRACE_RECORD_MAX_SIZE must <= 65536 and
+                              <= TRACE_CHUNK_SIZE
+   TRACE_CHUNK_SIZE must <= 1048576 and
+                         >= 4096
+*/
+
+#define TRACE_CHUNK_SIZE      ( 65536 )      /* bytes */
+
+#if TRACE_CHUNK_SIZE > 1048576 || TRACE_CHUNK_SIZE < 4096
+   #error "TRACE_CHUNK_SIZE is invalid"
+#endif
+
+#define TRACE_RECORD_MAX_SIZE ( 65536 )      /* bytes */
+
+#if TRACE_RECORD_MAX_SIZE > TRACE_CHUNK_SIZE || TRACE_RECORD_MAX_SIZE > 65536
+   #error "TRACE_RECORD_MAX_SIZE can't more than TRACE_CHUNK_SIZE"
+#endif
 
 /*
  * Trace buffer should always be power of 2 and multiple of chunk size
  * Even thou there's no physical limitation of upper limit of buffer size, but
  * we should still limit it to a practical number, let's say 1GB
  */
-#define TRACE_MIN_BUFFER_SIZE (4*TRACE_CHUNK_SIZE)  /* bytes */
-#define TRACE_MAX_BUFFER_SIZE ( 1*1024*1024*1024 )  /* bytes */
-#define TRACE_DFT_BUFFER_SIZE ( 256*1024*1024 )     /* bytes */
+#define TRACE_MIN_BUFFER_SIZE ( 1 )                   /* mega bytes */
+#define TRACE_MAX_BUFFER_SIZE ( 1 * 1024 )            /* mega bytes */
+#define TRACE_DFT_BUFFER_SIZE ( 256 )                 /* mega bytes */
 
 /*
  * Put \n ( newline ) as eye catcher. We put this one in trace file header,
@@ -82,87 +102,59 @@
  * be corrupted so that we can easily detect whether a trace file is valid or
  * not
  */
-#define TRACE_EYE_CATCHER_SIZE     8
-#if defined (_LINUX) || defined (_AIX)
-#define TRACE_EYE_CATCHER          "TRACE\n  "
-#define TRACECB_EYE_CATCHER        "@TRACE\n "
-#elif defined (_WINDOWS)
-#define TRACE_EYE_CATCHER          "TRACE\r\n "
-#define TRACECB_EYE_CATCHER        "@TRACE\r\n"
-#endif
 
+#define TRACE_EYE_CATCHER           "TR"
+#define TRACECB_EYE_CATCHER         "TB"
+#define TRACE_EYE_CATCHER_SIZE      ( 2 )
+#define TRACECB_EYE_CATCHER_SIZE    ( 2 )
+
+/*
+   Max component number
+*/
 const INT32 _pdTraceComponentNum = 28 ;
 
-// component masks
-// authentication
 #define PD_TRACE_COMPONENT_AUTH    0x00000001
-// bufferpool service
 #define PD_TRACE_COMPONENT_BPS     0x00000002
-// catalog service
 #define PD_TRACE_COMPONENT_CAT     0x00000004
-// cluster service
 #define PD_TRACE_COMPONENT_CLS     0x00000008
-// data protection service
 #define PD_TRACE_COMPONENT_DPS     0x00000010
-// migration services
 #define PD_TRACE_COMPONENT_MIG     0x00000020
-// messages
 #define PD_TRACE_COMPONENT_MSG     0x00000040
-// network
 #define PD_TRACE_COMPONENT_NET     0x00000080
-// operating system services
 #define PD_TRACE_COMPONENT_OSS     0x00000100
-// problem determination
 #define PD_TRACE_COMPONENT_PD      0x00000200
-// runtime
 #define PD_TRACE_COMPONENT_RTN     0x00000400
-// sql
 #define PD_TRACE_COMPONENT_SQL     0x00000800
-// tools
 #define PD_TRACE_COMPONENT_TOOL    0x00001000
-// backup recovery
 #define PD_TRACE_COMPONENT_BAR     0x00002000
-// client
 #define PD_TRACE_COMPONENT_CLIENT  0x00004000
-// coord services
 #define PD_TRACE_COMPONENT_COORD   0x00008000
-// data management services
 #define PD_TRACE_COMPONENT_DMS     0x00010000
-// index management services
 #define PD_TRACE_COMPONENT_IXM     0x00020000
-// monitoring
 #define PD_TRACE_COMPONENT_MON     0x00040000
-// methods
 #define PD_TRACE_COMPONENT_MTH     0x00080000
-// optimizer
 #define PD_TRACE_COMPONENT_OPT     0x00100000
-// process model
 #define PD_TRACE_COMPONENT_PMD     0x00200000
-// REST
 #define PD_TRACE_COMPONENT_REST    0x00400000
-// scripting
 #define PD_TRACE_COMPONENT_SPT     0x00800000
-// utilities
 #define PD_TRACE_COMPONENT_UTIL    0x01000000
-// aggregation
 #define PD_TRACE_COMPONENT_AGGR    0x02000000
-// stored procedure
 #define PD_TRACE_COMPONENT_SPD     0x04000000
-// query graph manger
 #define PD_TRACE_COMPONENT_QGM     0x08000000
 
-// dummy macro declare, this just defines an macro perform nothing activities.
-// The autogen component will scan all .C/.cpp/.h/.hpp and pickup this keyword
-// and generate unique id for each function
-#define PD_TRACE_DECLARE_FUNCTION(x,y) \
-
+/*
+   _pdTraceFormatType define
+*/
 enum _pdTraceFormatType
 {
    PD_TRACE_FORMAT_TYPE_FLOW = 0,
-   PD_TRACE_FORMAT_TYPE_FORMAT,
-   PD_TRACE_FORMAT_TYPE_FLOW_PREPARE
+   PD_TRACE_FORMAT_TYPE_FORMAT
 } ;
+typedef _pdTraceFormatType pdTraceFormatType ;
 
+/*
+   _pdTraceArgumentType define
+*/
 enum _pdTraceArgumentType
 {
    PD_TRACE_ARGTYPE_NONE = 0,
@@ -178,139 +170,389 @@ enum _pdTraceArgumentType
    PD_TRACE_ARGTYPE_FLOAT,
    PD_TRACE_ARGTYPE_DOUBLE,
    PD_TRACE_ARGTYPE_STRING,
-   PD_TRACE_ARGTYPE_RAW
+   PD_TRACE_ARGTYPE_RAW,
+   PD_TRACE_ARGTYPE_BSONRAW
 } ;
+typedef _pdTraceArgumentType pdTraceArgumentType ;
 
-// each argument got 8 bytes header for size and type
+#pragma pack(4)
+
 class _pdTraceArgument : public SDBObject
 {
-public :
-   _pdTraceArgumentType _argumentType ;
-   UINT32               _argumentSize ;
+private :
+   UINT8                _argumentType ;
+   UINT8                _pad ;
+   UINT16               _argumentSize ;
+
+public:
+   _pdTraceArgument()
+   {
+      _argumentType = 0 ;
+      _pad = 0 ;
+      _argumentSize = sizeof( _pdTraceArgument ) ;
+   }
+
+   CHAR* argData()
+   {
+      return ( CHAR* )this + sizeof( _pdTraceArgument ) ;
+   }
+
+   UINT16 dataSize() const
+   {
+      return _argumentSize - sizeof( _pdTraceArgument ) ;
+   }
+
+   void setDataSize( UINT16 size )
+   {
+      _argumentSize = sizeof( _pdTraceArgument ) + size ;
+   }
+
+   UINT16 argSize() const
+   {
+      return _argumentSize ;
+   }
+
+   UINT16 headerSize() const
+   {
+      return sizeof( _pdTraceArgument ) ;
+   }
+
+   pdTraceArgumentType getType() const
+   {
+      return ( pdTraceArgumentType )_argumentType ;
+   }
+
+   void setType( pdTraceArgumentType type )
+   {
+      _argumentType = (UINT8)type ;
+   }
 } ;
 typedef class _pdTraceArgument pdTraceArgument ;
 
+/*
+   PD record flag define
+*/
 #define PD_TRACE_RECORD_FLAG_NORMAL 0
 #define PD_TRACE_RECORD_FLAG_ENTRY  1
 #define PD_TRACE_RECORD_FLAG_EXIT   2
 
-class _pdTraceRecord : public SDBObject
-{
-public :
-   CHAR          _eyeCatcher [ TRACE_EYE_CATCHER_SIZE ] ;
-   UINT32        _recordSize ;
-   UINT32        _functionID ;
-   UINT32        _flag ;
-   UINT32        _tid ;
-   UINT32        _line ;
-   UINT32        _numArgs ;
-   ossTimestamp  _timestamp ;
-} ;
-typedef class _pdTraceRecord pdTraceRecord ;
+/*
+   Max argument number
+*/
+#define PD_TRACE_MAX_ARG_NUM        9
 
-namespace engine
+/*
+   _pdTraceRecord define
+*/
+struct _pdTraceRecord 
 {
-   class _pmdEDUCB ;
-}
-// Make sure that traceCB does NOT include any variables may refer pointer
-// When we dump trace header, we simply dump the entire pdTraceCB into the file
+   CHAR           _eyeCatcher[ TRACE_EYE_CATCHER_SIZE ] ;
+   UINT8          _flag ;
+   UINT8          _numArgs ;
+   UINT32         _functionID ;
+   UINT32         _tid ;
+   UINT16         _line ;
+   UINT16         _recordSize ;
+   UINT64         _timestamp ;
+
+   _pdTraceRecord()
+   {
+      ossMemset( this, 0, sizeof( _pdTraceRecord ) ) ;
+      ossMemcpy( _eyeCatcher, TRACE_EYE_CATCHER, TRACE_EYE_CATCHER_SIZE ) ;
+      _flag                = PD_TRACE_RECORD_FLAG_NORMAL ;
+      _recordSize          = sizeof( _pdTraceRecord ) ;
+   }
+
+   void saveCurTime()
+   {
+      ossTimestamp tmp ;
+      ossGetCurrentTime( tmp ) ;
+      _timestamp = tmp.time * 1000000L + tmp.microtm ;
+   }
+
+   ossTimestamp getCurTime() const
+   {
+      ossTimestamp tm ;
+      tm.time = _timestamp / 1000000 ;
+      tm.microtm = _timestamp % 1000000 ;
+      return tm ;
+   }
+
+   pdTraceArgument* getArg( UINT32 id ) const
+   {
+      CHAR *pArg = NULL ;
+
+      pArg = ( CHAR* )this + sizeof( _pdTraceRecord ) ;
+
+      while ( id > 0 )
+      {
+         pArg = pArg + ( ( pdTraceArgument* )pArg )->argSize() ;
+         --id ;
+      }
+
+      return ( pdTraceArgument* )pArg ;
+   }
+} ;
+typedef struct _pdTraceRecord pdTraceRecord ;
+
+/*
+   Current Version
+*/
+#define PD_TRACE_VERSION_CUR        1
+
+/*
+   _pdTraceHeader define
+*/
+struct _pdTraceHeader
+{
+   CHAR     _eyeCatcher[ TRACECB_EYE_CATCHER_SIZE ] ;
+   UINT16   _headerSize ;      // size of header
+   UINT8    _version ;
+   UINT8    _pad[ 3 ] ;
+
+   UINT64   _bufSize ;
+   UINT64   _bufHeader ;
+   UINT64   _bufTail ;
+
+   UINT32   _pad1[ 10 ] ;
+
+   _pdTraceHeader()
+   {
+      reset() ;
+   }
+
+   void savePosition( UINT64 current, UINT64 bufSize )
+   {
+      _bufTail = current % bufSize ;
+
+      if ( current > bufSize )
+      {
+         _bufSize = bufSize ;
+         _bufHeader = ( ( ( ( current + TRACE_CHUNK_SIZE - 1 ) /
+                          TRACE_CHUNK_SIZE ) *
+                        TRACE_CHUNK_SIZE ) % _bufSize ) ;
+         
+      }
+      else
+      {
+         _bufHeader = 0 ;
+         _bufSize = _bufTail ;
+         _bufSize = ossRoundUpToMultipleX ( _bufSize, TRACE_CHUNK_SIZE ) ;
+      }
+   }
+
+   void reset()
+   {
+      ossMemset( this, 0, sizeof( _pdTraceHeader ) ) ;
+      ossMemcpy( _eyeCatcher, TRACECB_EYE_CATCHER, TRACECB_EYE_CATCHER_SIZE ) ;
+      _headerSize    = sizeof( _pdTraceHeader ) ;
+      _version       = PD_TRACE_VERSION_CUR ;
+   }
+
+} ;
+typedef struct _pdTraceHeader pdTraceHeader ;
+
+/*
+   _pdAllocPair define
+*/
+struct _pdAllocPair
+{
+   ossAtomic64       _b ;
+   volatile UINT64   _e ;
+
+   _pdAllocPair()
+   :_b( 0 ), _e( TRACE_CHUNK_SIZE )
+   {
+   }
+   void reset()
+   {
+      _b.swap( 0 ) ;
+      _e = TRACE_CHUNK_SIZE ;
+   }
+} ;
+typedef _pdAllocPair pdAllocPair ;
+
+/*
+   _pdTraceCB define
+*/
 class _pdTraceCB : public SDBObject
 {
-public :
-   CHAR          _eyeCatcher [ TRACE_EYE_CATCHER_SIZE ] ;
-   // size of header
-   UINT32        _headerSize ;
-   // whether trace is started or not
-   ossAtomic32   _traceStarted ;
-   // the slot that we are going to write next, note this number is logical and
-   // increment only. the physical slot need to be calculated by _currentSlot &
-   // _totalSlots
-   ossAtomic64   _currentSlot ;
-   // number of sessions that currently writing into trace buffer
-   ossAtomic32   _currentWriter ;
-   // each bit represent one component
-   UINT32        _componentMask ;
-   // total number of chunks
-   UINT32        _totalChunks ;
-   // total number of slots
-   UINT32        _totalSlots ;
-   // trace memory
-   CHAR         *_pBuffer ;
+public:
+   _pdTraceCB() ;
+   ~_pdTraceCB() ;
+
+   CHAR*          reserveMemory( UINT32 size ) ;
+   CHAR*          fillIn ( CHAR *pPos, const CHAR *pInput, INT32 size ) ;
+
+   void           startWrite() ;
+   void           finishWrite() ;
+
+   void           setMask( UINT32 mask ) ;
+   UINT32         getMask() const { return _componentMask ; }
+
+   INT32          start ( UINT64 size,
+                          UINT32 mask,
+                          std::vector<UINT64> *funcCode,
+                          std::vector<UINT32> *tids ) ;
+
+   INT32          start ( UINT64 size, UINT32 mask ) ;
+   INT32          start ( UINT64 size ) ; // size for trace buffer size on bytes
+   void           stop () ; // stop trace but keep memory available
+
+   INT32          dump ( OSSFILE *outFile ) ;
+   void           destroy () ; // stop trace and destroy memory
+
+   void           resumePausedEDUs() ;
+   void           addPausedEDU( engine::IExecutor *cb ) ;
+   void           pause ( UINT64 funcCode ) ;
+
+   const UINT64*  getBPList() const { return _bpList ; }
+   UINT32         getBPNum() const { return _numBP ; }
+
+   UINT32         getThreadFilterNum() const { return _nMonitoredNum ; }
+   const UINT32*  getThreadFilterList() const { return _monitoredThreads ; }
+
+   BOOLEAN        isWrapped() ;
+
+   UINT64         getSize() const { return _size ; }
+   BOOLEAN        isStarted() const { return _traceStarted ; }
+
+   BOOLEAN        checkMask( UINT64 funcCode ) const
+   {
+      UINT32 component = (UINT32)( funcCode >> 32 ) ;
+      return ( component & _componentMask ) ? TRUE : FALSE ;
+   }
+
+   BOOLEAN        checkThread( UINT32 tid ) const
+   {
+      BOOLEAN result = FALSE ;
+      if ( _nMonitoredNum > 0 )
+      {
+         for ( UINT32 i = 0 ; i < _nMonitoredNum ; ++i )
+         {
+            if ( _monitoredThreads[ i ] == tid )
+            {
+               result = TRUE ;
+               break ;
+            }
+         }
+      }
+      else
+      {
+         result = TRUE ;
+      }
+      return result ;
+   }
+
+   void           removeAllBreakPoint() ;
+
+#ifdef _DEBUG
+   UINT64         getPadSize() { return _padSize.fetch() ; }
+#endif // _DEBUG
+
+   UINT64         getFreeSize() ;
+
+protected:
+   INT32          _addBreakPoint( UINT64 functionCode ) ;
+   INT32          _addTidFilter( UINT32 tid ) ;
+   void           _removeAllTidFilter() ;
+
+   void           _reset() ;
+
+private :
+   pdTraceHeader        _header ;
+
+   pdAllocPair          _info1 ;
+   pdAllocPair          _info2 ;
+   ossAtomicPtr         _ptr ;
+   pdAllocPair          *_ptr2 ;
+   ossAtomic32          _alloc ;
+   UINT64               _size ;
+   CHAR                 *_pBuffer ;
+
+#ifdef _DEBUG
+   ossAtomic64          _padSize ;
+#endif // _DEBUG
+
+   ossAtomic32          _metaOpr ;
+   volatile BOOLEAN     _traceStarted ; // whether trace is started or not
+   ossAtomic32          _currentWriter ;
+
+   UINT32               _componentMask ;   // each bit represent one component
+   UINT8                _nMonitoredNum ;
+   UINT32               _monitoredThreads[ PD_TRACE_MAX_MONITORED_THREAD_NUM ] ;
+   UINT32               _numBP ;    // num of break points
+   UINT64               _bpList [ PD_TRACE_MAX_BP_NUM ] ; // break point list
 
 #if defined (SDB_ENGINE)
-   // num of break points
-   UINT32   _numBP ;
-   // break point list
-   UINT64   _bpList [ PD_TRACE_MAX_BP_NUM ] ;
-   // paused EDU latch
-   ossSpinXLatch          _pmdEDUCBLatch ;
-   // EDU CB list that pause
-   std::list<engine::_pmdEDUCB*>  _pmdEDUCBList ;
-#endif
-
-   void         *reserveOneSlot () ;
-   void         *reserveSlots ( UINT32 numSlots ) ;
-   void         *fillIn ( void *pPos, const void *pInput, INT32 size ) ;
-   void          startWrite () ;
-   void          finishWrite () ;
-   void          setMask ( UINT32 mask ) ;
-   UINT32        getMask () ;
-   UINT32        getSlotNum () ;
-   UINT32        getChunkNum () ;
-   INT32         start ( UINT64 size, UINT32 mask,
-                         std::vector<UINT64> *funcCode ) ;
-   INT32         start ( UINT64 size, UINT32 mask ) ;
-   INT32         start ( UINT64 size ) ; // size for trace buffer size on bytes
-   void          stop () ; // stop trace but keep memory available
-   static INT32  format ( const CHAR *pInputFileName,
-                          const CHAR *pOutputFileName,
-                          _pdTraceFormatType type ) ;
-   INT32         dump ( const CHAR *pFileName ) ;
-   void          destroy () ; // stop trace and destroy memory
-   void          reset () ;
-#if defined (SDB_ENGINE)
-   INT32 addBreakPoint( UINT64 functionCode );
-   void removeAllBreakPoint();
-   void addPausedEDU ( engine::_pmdEDUCB *cb ) ;
-   void resumePausedEDUs () ;
-   void pause ( UINT64 funcCode ) ;
-   const UINT64 *getBPList ()
-   {
-      return _bpList ;
-   }
-   INT32 getBPNum ()
-   {
-      return _numBP ;
-   }
+   ossSpinXLatch                 _pmdEDUCBLatch ;     // paused EDU latch
+   std::list<engine::IExecutor*> _pmdEDUCBList ;      // EDU CB list that pause
 #endif // SDB_ENGINE
-   _pdTraceCB () ;
-   ~_pdTraceCB () ;
 
 } ;
 typedef class _pdTraceCB pdTraceCB ;
 
+/*
+   _pdTraceArgTuple define
+*/
 struct _pdTraceArgTuple
 {
-   _pdTraceArgumentType x ;
+   pdTraceArgument _arg ;
    const void *y ;
-   INT32 z ;
    _pdTraceArgTuple ( _pdTraceArgumentType a,
                       const void *b, INT32 c )
    {
-      x = a ;
+      _arg.setType( a );
+      _arg.setDataSize( (UINT16)c ) ;
       y = b ;
-      z = c+sizeof(pdTraceArgument) ;
    }
    _pdTraceArgTuple () {}
    _pdTraceArgTuple &operator=(const _pdTraceArgTuple &right)
    {
-      this->x = right.x ;
-      this->y = right.y ;
-      this->z = right.z ;
+      _arg.setType( right._arg.getType() ) ;
+      _arg.setDataSize( right._arg.dataSize() ) ;
+      y = right.y ;
       return *this ;
    }
 } ;
 typedef struct _pdTraceArgTuple pdTraceArgTuple ;
+
+#pragma pack()
+
+#ifndef SDB_ENGINE
+
+#define PD_TRACE_DECLARE_FUNCTION(x,y) 
+#define PD_TRACE_ENTRY(funcCode) 
+#define PD_TRACE_EXIT(funcCode) 
+#define PD_TRACE_EXITRC(funcCode,rc) 
+#define PD_TRACE1(funcCode,pack0) 
+#define PD_TRACE2(funcCode,pack0,pack1) 
+#define PD_TRACE3(funcCode,pack0,pack1,pack2) 
+#define PD_TRACE4(funcCode,pack0,pack1,pack2,pack3) 
+#define PD_TRACE5(funcCode,pack0,pack1,pack2,pack3,pack4) 
+#define PD_TRACE6(funcCode,pack0,pack1,pack2,pack3,pack4,pack5) 
+#define PD_TRACE7(funcCode,pack0,pack1,pack2,pack3,pack4,pack5,pack6) 
+#define PD_TRACE8(funcCode,pack0,pack1,pack2,pack3,pack4,pack5,pack6,pack7) 
+#define PD_TRACE9(funcCode,pack0,pack1,pack2,pack3,pack4,pack5,pack6,pack7,pack8) 
+
+#define PD_PACK_NONE 
+#define PD_PACK_NULL 
+#define PD_PACK_CHAR(x) 
+#define PD_PACK_BYTE(x) 
+#define PD_PACK_SHORT(x) 
+#define PD_PACK_USHORT(x) 
+#define PD_PACK_INT(x) 
+#define PD_PACK_UINT(x) 
+#define PD_PACK_LONG(x) 
+#define PD_PACK_ULONG(x) 
+#define PD_PACK_FLOAT(x) 
+#define PD_PACK_DOUBLE(x) 
+#define PD_PACK_STRING(x) 
+#define PD_PACK_BSON(x) 
+
+#else
+
+#define PD_TRACE_DECLARE_FUNCTION(x,y) \
 
 #define PD_PACK_NONE      _pdTraceArgTuple ( PD_TRACE_ARGTYPE_NONE, NULL, 0 )
 #define PD_PACK_NULL      _pdTraceArgTuple ( PD_TRACE_ARGTYPE_NULL, NULL, 0 )
@@ -326,12 +568,13 @@ typedef struct _pdTraceArgTuple pdTraceArgTuple ;
 #define PD_PACK_DOUBLE(x) _pdTraceArgTuple ( PD_TRACE_ARGTYPE_DOUBLE, &x, 8 )
 #define PD_PACK_STRING(x) _pdTraceArgTuple ( PD_TRACE_ARGTYPE_STRING, x, ossStrlen(x)+1 )
 #define PD_PACK_RAW(x,y)  _pdTraceArgTuple ( PD_TRACE_ARGTYPE_RAW, x, y )
+#define PD_PACK_BSON(x)   _pdTraceArgTuple ( PD_TRACE_ARGTYPE_BSONRAW, x.objdata(), x.objsize() )
 
-#define PD_TRACE_MAX_ARG_NUM 9
+extern BOOLEAN g_isTraceStarted ;
 
 #define PD_TRACE_ENTRY(funcCode)                                    \
    do {                                                             \
-      if ( sdbGetPDTraceCB()->_traceStarted.compare(TRUE) )  \
+      if ( g_isTraceStarted )                                       \
       {                                                             \
          pdTraceArgTuple argTuple[PD_TRACE_MAX_ARG_NUM] ;           \
          ossMemset ( &argTuple[0], 0, sizeof(argTuple) ) ;          \
@@ -342,7 +585,7 @@ typedef struct _pdTraceArgTuple pdTraceArgTuple ;
 
 #define PD_TRACE_EXIT(funcCode)                                     \
    do {                                                             \
-      if ( sdbGetPDTraceCB()->_traceStarted.compare(TRUE) )  \
+      if ( g_isTraceStarted )                                       \
       {                                                             \
          pdTraceArgTuple argTuple[PD_TRACE_MAX_ARG_NUM] ;           \
          ossMemset ( &argTuple[0], 0, sizeof(argTuple) ) ;          \
@@ -353,7 +596,7 @@ typedef struct _pdTraceArgTuple pdTraceArgTuple ;
 
 #define PD_TRACE_EXITRC(funcCode,rc)                                \
    do {                                                             \
-      if ( sdbGetPDTraceCB()->_traceStarted.compare(TRUE) )  \
+      if ( g_isTraceStarted )                                       \
       {                                                             \
          pdTraceArgTuple argTuple[PD_TRACE_MAX_ARG_NUM] ;           \
          ossMemset ( &argTuple[0], 0, sizeof(argTuple) ) ;          \
@@ -365,7 +608,7 @@ typedef struct _pdTraceArgTuple pdTraceArgTuple ;
 
 #define PD_TRACE_FUNC(funcCode,file,line,pack0,pack1,pack2,pack3,pack4,pack5,pack6,pack7,pack8) \
    do {                                                             \
-      if ( sdbGetPDTraceCB()->_traceStarted.compare(TRUE) )  \
+      if ( g_isTraceStarted )                                       \
       {                                                             \
          pdTraceArgTuple argTuple[PD_TRACE_MAX_ARG_NUM] ;           \
          argTuple[0] = pack0 ;                                      \
@@ -522,6 +765,8 @@ typedef struct _pdTraceArgTuple pdTraceArgTuple ;
                       pack7,                              \
                       pack8 ) ;                           \
    } while ( FALSE )
+
+#endif // SDB_ENGINE
 
 const CHAR *pdGetTraceFunction ( UINT64 id ) ;
 const CHAR *pdGetTraceComponent ( UINT32 id ) ;

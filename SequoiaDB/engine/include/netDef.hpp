@@ -56,7 +56,6 @@ namespace engine
    typedef UINT32 NET_NODE_ID ;
    typedef UINT16 NET_SERVICE_ID ;
 
-   // invalid timer id
    #define NET_INVALID_TIMER_ID        ( 0 )
 
    /*
@@ -84,30 +83,35 @@ namespace engine
    class _netRouteNode : public SDBObject
    {
    public :
-      CHAR _host[OSS_MAX_HOSTNAME+1] ;
+      CHAR        _host[OSS_MAX_HOSTNAME+1] ;
       std::string _service[MSG_ROUTE_SERVICE_TYPE_MAX] ;
-      MsgRouteID _id ;
+      MsgRouteID  _id ;
+      BOOLEAN     _isActive ;
+      UINT8       _instanceID ;
 
    private:
       SINT32 _status;     // make sure the addr of _status is aligned 4 bytes,
-                          // so the assignment of _status is atomic
       UINT64 _faultTime ; // fault time
 
    public:
       _netRouteNode()
-      :_status( NET_NODE_STAT_NORMAL ),
-       _faultTime( 0 )
+      : _instanceID( NODE_INSTANCE_ID_UNKNOWN ),
+        _status( NET_NODE_STAT_NORMAL ),
+        _faultTime( 0 )
       {
          _id.value = MSG_INVALID_ROUTEID ;
+         _isActive = TRUE ;
          _host[0] = 0 ;
       }
       _netRouteNode( const _netRouteNode &node )
-      :_status( NET_NODE_STAT_NORMAL )
+      : _instanceID( node._instanceID ),
+        _status( NET_NODE_STAT_NORMAL )
       {
          SDB_ASSERT( (UINT64)&_status % 4 == 0,
                      "the addr of _status must be aligned 4 bytes!" );
          _id = node._id ;
-         ossMemcpy( _host, node._host, OSS_MAX_HOSTNAME+1 ) ;
+         _isActive = node._isActive ;
+         ossStrcpy( _host, node._host ) ;
          for ( UINT32 i = 0; i < MSG_ROUTE_SERVICE_TYPE_MAX; i++ )
          {
             _service[i] = node._service[i];
@@ -117,12 +121,14 @@ namespace engine
       const _netRouteNode &operator=(const _netRouteNode &node )
       {
          _id = node._id ;
+         _isActive = node._isActive ;
          _status = node._status ;
-         ossMemcpy( _host, node._host, OSS_MAX_HOSTNAME+1 ) ;
+         ossStrcpy( _host, node._host ) ;
          for ( UINT32 i = 0; i < MSG_ROUTE_SERVICE_TYPE_MAX; i++ )
          {
             _service[i] = node._service[i];
          }
+         _instanceID = node._instanceID ;
          return *this ;
       }
 
@@ -210,7 +216,6 @@ namespace engine
 
    typedef std::vector<netIOV> netIOVec ;
 
-   /// calc the netio vec len
    UINT32 netCalcIOVecSize( const netIOVec &ioVec ) ;
 
 }

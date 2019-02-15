@@ -47,7 +47,6 @@ using namespace bson ;
 
 namespace engine
 {
-   /// warning: any value can not be value-passed.
    INT32 dpsInsert2Record( const CHAR *fullName,
                            const BSONObj &obj,
                            const DPS_TRANS_ID &transID,
@@ -64,6 +63,8 @@ namespace engine
                            const BSONObj &oldObj,
                            const BSONObj &newMatch,
                            const BSONObj &newObj,
+                           const BSONObj &oldShardingKey,
+                           const BSONObj &newShardingKey,
                            const DPS_TRANS_ID &transID,
                            const DPS_LSN_OFFSET &preTransLsn,
                            const DPS_LSN_OFFSET &relatedLSN,
@@ -74,7 +75,9 @@ namespace engine
                            BSONObj &oldMatch,
                            BSONObj &oldObj,
                            BSONObj &newMatch,
-                           BSONObj &newObj ) ;
+                           BSONObj &newObj,
+                           BSONObj *oldShardingKey = NULL,
+                           BSONObj *newShardingKey = NULL ) ;
 
    INT32 dpsDelete2Record( const CHAR *fullName,
                            const BSONObj &oldObj,
@@ -87,15 +90,28 @@ namespace engine
                            const CHAR **fullName,
                            BSONObj &oldObj ) ;
 
+   INT32 dpsPop2Record( const CHAR *fullName,
+                        const dmsRecordID &firstRID,
+                        const INT64 &logicalID,
+                        const INT8 &direction,
+                        dpsLogRecord &record ) ;
+
+   INT32 dpsRecord2Pop( const CHAR *logRecord,
+                        const CHAR **fullName,
+                        INT64 &logicalID,
+                        INT8 &direction ) ;
+
    INT32 dpsCSCrt2Record( const CHAR *csName,
                           const INT32 &pageSize,
                           const INT32 &lobPageSize,
+                          const INT32 &type,
                           dpsLogRecord &record ) ;
 
    INT32 dpsRecord2CSCrt( const CHAR *logRecord,
                           const CHAR **csName,
                           INT32 &pageSize,
-                          INT32 &lobPageSize ) ;
+                          INT32 &lobPageSize,
+                          INT32 &type ) ;
 
    INT32 dpsCSDel2Record( const CHAR *csName,
                           dpsLogRecord &record ) ;
@@ -103,15 +119,25 @@ namespace engine
    INT32 dpsRecord2CSDel( const CHAR *logRecord,
                           const CHAR **csName ) ;
 
+   INT32 dpsCSRename2Record( const CHAR *csName,
+                             const CHAR *newCSName,
+                             dpsLogRecord &record ) ;
+
+   INT32 dpsRecord2CSRename( const CHAR *logRecord,
+                             const CHAR **csName,
+                             const CHAR **newCSName ) ;
+
    INT32 dpsCLCrt2Record( const CHAR *fullName,
                           const UINT32 &attribute,
-                          SINT8 &compressorType,
+                          const UINT8 &compressorType,
+                          const BSONObj *extOptions,
                           dpsLogRecord &record ) ;
 
    INT32 dpsRecord2CLCrt( const CHAR *logRecord,
                           const CHAR **fullName,
                           UINT32 &attribute,
-                          SINT8 &compressorType ) ;
+                          UINT8 &compressorType,
+                          BSONObj &extOptions ) ;
 
    INT32 dpsCLDel2Record( const CHAR *fullName,
                           dpsLogRecord &record ) ;
@@ -159,15 +185,16 @@ namespace engine
    INT32 dpsRecord2TransCommit( const CHAR *logRecord,
                                 DPS_TRANS_ID &transID ) ;
 
-//   INT32 dpsTransRollback2Record( const DPS_TRANS_ID &transID,
-//                                  const DPS_LSN_OFFSET &preTransLsn,
-//                                  dpsLogRecord &record ) ;
 
-   INT32 dpsInvalidCata2Record( const CHAR * clFullName,
+   INT32 dpsInvalidCata2Record( const UINT8 &type,
+                                const CHAR * clFullName,
+                                const CHAR * ixName,
                                 dpsLogRecord &record ) ;
 
    INT32 dpsRecord2InvalidCata( const CHAR *logRecord,
-                                const CHAR **clFullName ) ;
+                                UINT8 &type,
+                                const CHAR **clFullName,
+                                const CHAR **ixName ) ;
 
    INT32 dpsLobW2Record( const CHAR *fullName,
                          const bson::OID *oid,
@@ -176,6 +203,7 @@ namespace engine
                          const UINT32 &hash,
                          const UINT32 &len,
                          const CHAR *data,
+                         const UINT32 &pageSize,
                          const DMS_LOB_PAGEID &pageID,
                          const DPS_TRANS_ID &transID,
                          const DPS_LSN_OFFSET &preTransLsn,
@@ -190,7 +218,8 @@ namespace engine
                          UINT32 &len,
                          UINT32 &hash,
                          const CHAR **data,
-                         DMS_LOB_PAGEID &pageID ) ;
+                         DMS_LOB_PAGEID &pageID,
+                         UINT32* pageSize = NULL ) ;
 
    INT32 dpsLobU2Record(  const CHAR *fullName,
                           const bson::OID *oid,
@@ -201,6 +230,7 @@ namespace engine
                           const CHAR *data,
                           const UINT32 &oldLen,
                           const CHAR *oldData,
+                          const UINT32 &pageSize,
                           const DMS_LOB_PAGEID &pageID,
                           const DPS_TRANS_ID &transID,
                           const DPS_LSN_OFFSET &preTransLsn,
@@ -217,7 +247,8 @@ namespace engine
                          const CHAR **data,
                          UINT32 &oldLen,
                          const CHAR **oldData,
-                         DMS_LOB_PAGEID &pageID ) ;
+                         DMS_LOB_PAGEID &pageID,
+                         UINT32* pageSize = NULL ) ;
 
    INT32 dpsLobRm2Record( const CHAR *fullName,
                           const bson::OID *oid,
@@ -226,6 +257,7 @@ namespace engine
                           const UINT32 &hash,
                           const UINT32 &len,
                           const CHAR *data,
+                          const UINT32 &pageSize,
                           const DMS_LOB_PAGEID &page,
                           const DPS_TRANS_ID &transID,
                           const DPS_LSN_OFFSET &preTransLsn,
@@ -240,13 +272,15 @@ namespace engine
                           UINT32 &len,
                           UINT32 &hash,
                           const CHAR **data,
-                          DMS_LOB_PAGEID &page ) ;
+                          DMS_LOB_PAGEID &page,
+                          UINT32* pageSize = NULL ) ;
 
    INT32 dpsLobTruncate2Record( const CHAR *fullName,
                                 dpsLogRecord &record ) ;
 
    INT32 dpsRecord2LobTruncate( const CHAR *raw,
                                 const CHAR **fullName ) ;
+
 }
 
 #endif

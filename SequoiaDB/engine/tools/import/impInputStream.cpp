@@ -263,18 +263,14 @@ namespace import
          goto error;
       }
 
-      SDB_ASSERT(UTF8_BOM_SIZE == size, "must read same bytes with BOM" );
-
-      if (0 != ossMemcmp(UTF8_BOM, buf, UTF8_BOM_SIZE))
+      if (size < UTF8_BOM_SIZE || 0 != ossMemcmp(UTF8_BOM, buf, UTF8_BOM_SIZE))
       {
-         // not BOM, continue read
          buf += UTF8_BOM_SIZE;
          bufSize -= UTF8_BOM_SIZE;
          readSize = size;
       }
       else
       {
-         // has BOM, override it
          readSize = 0;
       }
 

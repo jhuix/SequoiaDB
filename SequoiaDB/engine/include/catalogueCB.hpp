@@ -67,6 +67,7 @@ namespace engine
 
       typedef std::map<UINT32, string>    GRP_ID_MAP;
       typedef std::map<UINT16, UINT16>    NODE_ID_MAP;
+      typedef std::vector<_catEventHandler *> VEC_EVENT_HANDLER ;
 
       public:
          sdbCatalogueCB() ;
@@ -85,13 +86,13 @@ namespace engine
          virtual void   onRegistered( const MsgRouteID &nodeID ) ;
          virtual void   onPrimaryChange( BOOLEAN primary,
                                          SDB_EVENT_OCCUR_TYPE occurType ) ;
-         virtual UINT32 getMask() const ;
 
          void     insertGroupID( UINT32 grpID, const string &name,
                                  BOOLEAN isActive = TRUE ) ;
          void     removeGroupID( UINT32 grpID ) ;
          void     insertNodeID( UINT16 nodeID ) ;
          void     activeGroup( UINT32 groupID ) ;
+         void     deactiveGroup( UINT32 groupID ) ;
          UINT32   allocGroupID() ;
          INT32    getAGroupRand( UINT32 &groupID) ;
          UINT16   allocNodeID() ;
@@ -104,7 +105,9 @@ namespace engine
          const CHAR* groupID2Name( UINT32 groupID ) ;
          UINT32      groupName2ID( const string &groupName ) ;
          INT32       getGroupsName( vector< string > &vecNames ) ;
-         INT32       getGroupsID( vector< UINT32 > &vecIDs ) ;
+         INT32       getGroupsID( vector< UINT32 > &vecIDs, BOOLEAN isActiveOnly ) ;
+         INT32       getGroupNameMap ( map<std::string, UINT32> & nameMap,
+                                       BOOLEAN isActiveOnly ) ;
 
          INT32       makeGroupsObj( BSONObjBuilder &builder,
                                     vector< string > &groups,
@@ -113,7 +116,7 @@ namespace engine
                                     vector< UINT32 > &groups,
                                     BOOLEAN ignoreErr = FALSE ) ;
 
-         INT16    majoritySize() ;
+         INT16    majoritySize( BOOLEAN needWaitSync = FALSE ) ;
          INT32    primaryCheck( _pmdEDUCB *cb, BOOLEAN canDelay,
                                 BOOLEAN &isDelay ) ;
          UINT16   getPrimaryNode() const { return _primaryID.columns.nodeID ; }
@@ -127,6 +130,7 @@ namespace engine
 
          BOOLEAN  delayCurOperation() ;
          BOOLEAN  isDelayed() const { return _catMainCtrl.isDelayed() ; }
+         void     addContext( const UINT32 &handle, UINT32 tid, INT64 contextID ) ;
 
          _netRouteAgent* netWork()
          {
@@ -153,6 +157,23 @@ namespace engine
             return &_levelLockMgr ;
          }
 
+         void regEventHandler ( _catEventHandler *pHandler ) ;
+         void unregEventHandler ( _catEventHandler *pHandler ) ;
+
+         INT32 onBeginCommand ( MsgHeader *pReqMsg ) ;
+         INT32 onEndCommand ( MsgHeader *pReqMsg, INT32 result ) ;
+         INT32 onSendReply ( MsgOpReply *pReply, INT32 result ) ;
+
+         INT32 sendReply ( const NET_HANDLE &handle,
+                           MsgOpReply *pReply,
+                           INT32 result,
+                           void *pReplyData = NULL,
+                           UINT32 replyDataLen = 0,
+                           BOOLEAN needSync = TRUE ) ;
+
+         void fillErrReply ( const MsgOpReply *pReply, MsgOpReply *pErrReply,
+                             INT32 rc ) ;
+
       private:
          _netRouteAgent       *_pNetWork ;
          _MsgRouteID          _routeID ;
@@ -173,6 +194,9 @@ namespace engine
          catLevelLockMgr      _levelLockMgr ;
 
          MsgRouteID           _primaryID ;
+         BOOLEAN              _isActived ;
+
+         VEC_EVENT_HANDLER    _vecEventHandler ;
    } ;
 
    /*

@@ -61,10 +61,13 @@ namespace engine
    /************************************************
    * node register request message
    * data is a BsonObject:
-   * {"Type":0, "Host":"vmsvr1",
-   *    "Service":[{"Type":"0","Name":"cat"},
-   *               {"Type":"1","Name":"repl"},
-   *               {"Type":"2", "Name":"shard"}]}
+   * {"Role":0, "Host":"vmsvr1", "dbpath":"...",
+   *    "Service":[{"Type":0,"Name":"cat"},
+   *               {"Type":1,"Name":"repl"},
+   *               {"Type":2,"Name":"shard"},
+   *               {"Type":3,"Name":"cata"}],
+   *    "IP":["xxxx",...,"127.0.0.1","localhost"]
+   * }
    ************************************************/
    class _MsgCatRegisterMessage : public SDBObject
    {
@@ -88,7 +91,8 @@ namespace engine
    /************************************************
    * response message of node register
    * the data is a BsonObject:
-   * {"Type":0, "Host":"vmsvr1","GroupID":00000001,"NodeID":00000001,
+   * {"Role":0, "GroupID":1000, "GroupName":"db1", "HostName":"xxx",
+   *  "NodeID":1000, "dbpath":"xxxx",
    *    "Service":[{"Type":0,"Name":"cat"},
    *               {"Type":1,"Name":"repl"},
    *               {"Type":2, "Name":"shard"}]}
@@ -112,10 +116,6 @@ namespace engine
    } ; */
    typedef MsgOpReply                  MsgCatRegisterRsp ;
 
-   /// download group info
-   /// may be :| -- _MsgCatGroupReq -- | -- char *name -- |
-   //  or : | -- _MsgCatGroupReq -- |
-   //  check msg len.
    class _MsgCatGroupReq : public SDBObject
    {
    public :
@@ -135,11 +135,6 @@ namespace engine
    } ;
    typedef _MsgCatGroupReq       MsgCatGroupReq ;
 
-   /// {"GroupID":2000, "Role":0,"Version":0, "PrimaryNode":1
-   ///  "Group":[{"NodeID":"001", "Host":"vmsrv1","Service":
-   ///                                            [{"Type":0, "Name":"repl1"},
-   ///                                             {"Type":1, "Name":"Shard1"},
-   ///                                             {"Type":2, "Name":"cat1"}]}]}
    /* class _MsgCatGroupResV0 : public SDBObject
    {
    public :
@@ -161,21 +156,21 @@ namespace engine
                               CLS_GROUP_VERSION &version,
                               string &groupName,
                               map<UINT64, _netRouteNode> &group,
-                              UINT32 *pPrimary = NULL ) ;
+                              UINT32 *pPrimary = NULL,
+                              UINT32 *pSecID = NULL ) ;
 
    INT32 msgParseCatGroupObj( const CHAR* objdata,
                               CLS_GROUP_VERSION &version,
                               UINT32 &groupID,
                               string &groupName,
                               map<UINT64, _netRouteNode> &group,
-                              UINT32 *pPrimary = NULL ) ;
+                              UINT32 *pPrimary = NULL,
+                              UINT32 *pSecID = NULL ) ;
 
-   const CHAR* getShardServiceName ( bson::BSONElement &beService ) ;
-   
-   std::string getServiceName ( bson::BSONElement &beService,
+   const CHAR* getServiceName ( const bson::BSONElement &beService,
                                 INT32 serviceType ) ;
+   const CHAR* getShardServiceName ( const bson::BSONElement &beService ) ;
 
-   //down catalog group info
    typedef MsgCatGroupReq        MsgCatCatGroupReq ;
    typedef MsgOpReply            MsgCatCatGroupRes ;
 
@@ -183,9 +178,7 @@ namespace engine
    {
    public :
       MsgHeader      header;
-//      DPS_LSN        newPrimaryLsn ;
       MsgRouteID     newPrimary ;
-//      DPS_LSN        oldPrimaryLsn ;
       MsgRouteID     oldPrimary ;
       _MsgCatPrimaryChange()
       {
@@ -223,12 +216,6 @@ namespace engine
 
    typedef MsgOpQuery   MsgCatQueryCatReq;
 
-   // the reply take a catalogue record which is a bson-obj:
-   // {  name: "SpaceName.CollectionName", Version: 1,
-   //    ShardingKey: { Key1: 1, Key2: -1 },
-   //    CataInfo:
-   //       [ { GroupID: 1000, LowBound:{"":MinKey,"":MaxKey }, UpBound:{"":Key1Value,"":Key2Value} },
-   //         { GroupID: 1001, LowBound:{"":Key1Value,"":Key2Value}, UpBound:{"":MaxKey,"":MinKey } } ]
    typedef MsgOpReply   MsgCatQueryCatRsp;
 
    enum SDB_CAT_GROUP_STATUS

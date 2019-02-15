@@ -52,7 +52,6 @@ const CHAR* serviceID2String( UINT32 serviceID ) ;
 string routeID2String( MsgRouteID routeID ) ;
 string routeID2String( UINT64 nodeID ) ;
 
-///  get the msg type string desp
 const CHAR* msgType2String( MSG_TYPE msgType, BOOLEAN isCommand = FALSE ) ;
 
 /*
@@ -80,6 +79,16 @@ typedef void (*EXPAND_MSG_2_STRING_FUNC)( stringstream &ss,
 void msgExpandComSessionInit2String( stringstream &ss,
                                      const MsgHeader *pMsg,
                                      UINT32 expandMask ) ;
+
+#define MSG_EXP_MASK_CLNAME            0x00000001
+#define MSG_EXP_MASK_MATCHER           0x00000002
+#define MSG_EXP_MASK_SELECTOR          0x00000004
+#define MSG_EXP_MASK_ORDERBY           0x00000008
+#define MSG_EXP_MASK_HINT              0x00000010
+#define MSG_EXP_MASK_OTHER             0x00000020
+void msgExpandBSQuery2String( stringstream &ss,
+                              const MsgHeader *pMsg,
+                              UINT32 expandMask ) ;
 
 #endif // MSGMESSAGE_FORMAT_HPP_
 

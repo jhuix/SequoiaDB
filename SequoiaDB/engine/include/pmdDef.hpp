@@ -79,7 +79,6 @@ namespace engine
    */
    union PMD_EVENT_MESSAGES
    {
-      // for PMD_EDU_EVENT_TIMEOUT
       struct timeoutMsg
       {
          UINT64   timerID ;
@@ -146,11 +145,11 @@ namespace engine
    */
    enum EDU_TYPES
    {
-      //System EDU Type
       EDU_TYPE_TCPLISTENER                = 0,
       EDU_TYPE_RESTLISTENER,
       EDU_TYPE_REPR,
       EDU_TYPE_LOGGW,
+      EDU_TYPE_LOGARCHIVEMGR,
       EDU_TYPE_DPSROLLBACK,
       EDU_TYPE_SHARDR,
       EDU_TYPE_CLUSTER,
@@ -159,17 +158,18 @@ namespace engine
       EDU_TYPE_CATMGR,
       EDU_TYPE_CATNETWORK,
       EDU_TYPE_COORDNETWORK,
+      EDU_TYPE_COORDMGR,
       EDU_TYPE_OMMGR,
       EDU_TYPE_OMNET,
       EDU_TYPE_SYNCCLOCK,
       EDU_TYPE_PIPESLISTENER,
       EDU_TYPE_FAPLISTENER,
       EDU_TYPE_DBMONITOR,
+      EDU_TYPE_RTNNETWORK,
 #if defined (_LINUX)
       EDU_TYPE_SIGNALTEST,
 #endif // _LINUX
 
-      // Agent EDU Type Begin
       EDU_TYPE_AGENT_BEGIN,
 
       EDU_TYPE_AGENT,
@@ -177,17 +177,23 @@ namespace engine
       EDU_TYPE_REPLAGENT,
       EDU_TYPE_RESTAGENT,
       EDU_TYPE_FAPAGENT,
+      EDU_TYPE_OMAAGENT,
 
-      // Agent EDU Type END
       EDU_TYPE_AGENT_END,
 
-      //background job EDU Type
       EDU_TYPE_BACKGROUND_JOB,
 
       EDU_TYPE_LOADWORKER,
       EDU_TYPE_PREFETCHER,
 
       EDU_TYPE_MAIN,
+
+      EDU_TYPE_SEADPTMGR,
+      EDU_TYPE_SE_SERVICE,
+      EDU_TYPE_SE_INDEXR,
+      EDU_TYPE_SE_INDEX,
+      EDU_TYPE_SE_AGENT,
+
       EDU_TYPE_UNKNOWN,
       EDU_TYPE_MAXIMUM = EDU_TYPE_UNKNOWN
    } ;
@@ -197,16 +203,11 @@ namespace engine
    */
    enum EDU_STATUS
    {
-      // EDU Manager initialize status to this
       PMD_EDU_CREATING = 0,
-      // EDU should change status to running when serve a request
       PMD_EDU_RUNNING,
-      // EDU should change to wait after request result send back
       PMD_EDU_WAITING,
-      // EDU should change status to idle when get into pool
       PMD_EDU_IDLE,
-      // Before terminating, EDU should set to destroy
-      PMD_EDU_DESTROY,
+
       PMD_EDU_UNKNOW,
       PMD_EDU_STATUS_MAXIMUM = PMD_EDU_UNKNOW
    } ;
@@ -215,7 +216,6 @@ namespace engine
    #define PMD_IS_EDU_RUNNING(x)       ( PMD_EDU_RUNNING  == x )
    #define PMD_IS_EDU_WAITING(x)       ( PMD_EDU_WAITING  == x )
    #define PMD_IS_EDU_IDLE(x)          ( PMD_EDU_IDLE     == x )
-   #define PMD_IS_EDU_DESTROY(x)       ( PMD_EDU_DESTROY  == x )
 
    /*
       SDB_TYPE_STR DEFINE
@@ -234,6 +234,13 @@ namespace engine
    #define SDB_DB_OFFLINE_BK_STR       "OfflineBackup"
 
    /*
+      SDB_DATA_STATUS_STR DEFINE
+   */
+   #define SDB_DATA_NORMAL_STR           "Normal"
+   #define SDB_DATA_REPAIR_STR           "Repairing"
+   #define SDB_DATA_FAULT_STR            "Fault"
+
+   /*
       SDB_DB_MODE_STR DEFINE
    */
    #define SDB_DB_MODE_READONLY_STR    "Readonly"
@@ -242,14 +249,18 @@ namespace engine
    /*
       define
    */
+   #define PMD_CONF_DIR_NAME           "conf"
+   #define PMD_RUN_DIR_NAME            "run"
    #define PMD_DFT_CONF                "sdb.conf"
    #define PMD_DFT_CAT                 "sdb.cat"
+   #define PMD_DFT_RUN                 "sdb.id"
    #define PMD_OPTION_DIAG_PATH        "diaglog"
    #define PMD_OPTION_AUDIT_PATH       PMD_OPTION_DIAG_PATH
    #define PMD_OPTION_LOG_PATH         "replicalog"
    #define PMD_OPTION_BK_PATH          "bakfile"
    #define PMD_OPTION_WWW_PATH_DIR     "web"
    #define PMD_OPTION_TMPBLK_PATH      "tmp"
+   #define PMD_OPTION_ARCHIVE_LOG_PATH "archivelog"
    #define PMD_CURRENT_PATH            "./"
 
    #define ENGINE_NPIPE_PREFIX         "sequoiadb_engine_"
@@ -273,12 +284,22 @@ namespace engine
    #define PMD_OPTION_STANDALONE       "standalone"      // for om
    #define PMD_OPTION_ALIVE_TIME       "alivetime"       // for om
    #define PMD_OPTION_FORCE            "force"
+   #define PMD_OPTION_IGNOREULIMIT     "ignoreulimit"
 
    /*
       SDB_RUN_MODE_TYPE_STR DEFINE
    */
    #define SDB_RUN_MODE_TYPE_LOCAL_STR  "local"
    #define SDB_RUN_MODE_TYPE_RUN_STR    "run"
+
+   /*
+      limits.conf
+   */
+   #define PMD_OPTION_LIMIT_CORE       "core_file_size"
+   #define PMD_OPTION_LIMIT_DATA       "data_seg_size"
+   #define PMD_OPTION_LIMIT_FILESIZE   "file_size"
+   #define PMD_OPTION_LIMIT_VM         "virtual_memory"
+   #define PMD_OPTION_LIMIT_FD         "open_files"
 
    /*
      SDBLIST_TYPE_STR

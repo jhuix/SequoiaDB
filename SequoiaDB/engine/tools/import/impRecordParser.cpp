@@ -30,9 +30,22 @@
 *******************************************************************************/
 #include "impRecordParser.hpp"
 #include "impCSVRecordParser.hpp"
-#include "jstobs.h"
 #include "pd.hpp"
 #include <iostream>
+
+void _impRecordParseLog( const CHAR *pFunc,
+                         const CHAR *pFile,
+                         UINT32 line,
+                         const CHAR *pFmt,
+                         ... )
+{
+   va_list ap ;
+   CHAR buffer[ PD_LOG_STRINGMAX + 1 ] = { 0 } ;
+   va_start( ap, pFmt ) ;
+   vsnprintf( buffer, PD_LOG_STRINGMAX, pFmt, ap ) ;
+   va_end( ap ) ;
+   pdLog( PDERROR, pFunc, pFile, line, buffer ) ;
+}
 
 namespace import
 {
@@ -65,7 +78,9 @@ namespace import
                                         options.autoCompletion(),
                                         options.hasHeaderLine(),
                                         options.cast(),
-                                        options.ignoreNull());
+                                        options.ignoreNull(),
+                                        options.force(),
+                                        options.strictFieldNum());
          if (NULL == csvParser)
          {
             rc = SDB_OOM;
@@ -85,7 +100,7 @@ namespace import
             const CHAR* str = options.fields().c_str();
             INT32 len = options.fields().length();
 
-            rc = csvParser->parseFields(str, len);
+            rc = csvParser->parseFields(str, len, FALSE);
             if (SDB_OK != rc)
             {
                std::cout << "failed to parse fields" << std::endl;
@@ -116,6 +131,14 @@ namespace import
             goto error;
          }
 
+         rc = jsonParser->init() ;
+         if( rc )
+         {
+            PD_LOG( PDERROR, "failed to call JSONRecordParser init, rc=%d",
+                    rc ) ;
+            goto error ;
+         }
+
          parser = jsonParser;
       }
 
@@ -135,10 +158,29 @@ namespace import
    JSONRecordParser::JSONRecordParser()
    : RecordParser("", "", FALSE, FALSE)
    {
+      _pMachine = NULL ;
+      JsonSetPrintfLog( _impRecordParseLog ) ;
    }
 
    JSONRecordParser::~JSONRecordParser()
    {
+      cJsonRelease( _pMachine ) ;
+   }
+
+   INT32 JSONRecordParser::init()
+   {
+      INT32 rc = SDB_OK ;
+      _pMachine = cJsonCreate() ;
+      if( _pMachine == NULL )
+      {
+         rc = SDB_OOM ;
+         PD_LOG( PDERROR, "Failed to call cJsonCreate" ) ;
+         goto error ;
+      }
+   done:
+      return rc ;
+   error:
+      goto done ;
    }
 
    INT32 JSONRecordParser::parseRecord(const CHAR* data, INT32 length, bson& obj)
@@ -151,7 +193,7 @@ namespace import
 
       bson_init(&obj);
 
-      result = jsonToBson2(&obj, data, FALSE, TRUE);
+      result = json2bson( data, _pMachine, CJSON_RIGOROUS_PARSE, FALSE, &obj ) ;
       if (!result)
       {
          rc = SDB_INVALIDARG;

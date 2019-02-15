@@ -87,7 +87,7 @@ namespace engine
             }
          }
       }
-      else if ( MSG_CLS_BALLOT_RES == (UINT32)header->opCode )
+      else if ( MSG_CLS_BALLOT_RES == header->opCode )
       {
          const _MsgClsElectionRes *msg = ( const _MsgClsElectionRes * )
                                          header ;
@@ -98,6 +98,7 @@ namespace engine
                if ( _info()->groupSize() <= ( ++_accepted() + 1 ) )
                {
                   next = CLS_ELECTION_STATUS_ANNOUNCE ;
+                  PD_LOG( PDEVENT, "Change to announce by all accept" ) ;
                }
                else
                {
@@ -131,9 +132,15 @@ namespace engine
       _timeout() += millisec ;
       if ( CLS_VOTE_CS_TIME <= _timeout() )
       {
-         if ( _isAccepted() )
+         if ( !pmdGetStartup().isOK() &&
+              _info()->isAllNodeAbnormal( 0 ) )
+         {
+            next = CLS_ELECTION_STATUS_SEC ;
+         }
+         else if ( _isAccepted() )
          {
             next = CLS_ELECTION_STATUS_ANNOUNCE ;
+            PD_LOG( PDEVENT, "Change to announce by timeout" ) ;
          }
          else
          {

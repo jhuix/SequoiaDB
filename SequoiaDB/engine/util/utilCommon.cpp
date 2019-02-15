@@ -234,6 +234,19 @@ namespace engine
       }
    }
 
+   const CHAR* utilDataStatusStr( BOOLEAN dataIsOK, SDB_DB_STATUS dbStatus )
+   {
+      if ( dataIsOK )
+      {
+         return SDB_DATA_NORMAL_STR ;
+      }
+      if ( SDB_DB_REBUILDING == dbStatus || SDB_DB_FULLSYNC == dbStatus )
+      {
+         return SDB_DATA_REPAIR_STR ;
+      }
+      return SDB_DATA_FAULT_STR ;
+   }
+
    std::string utilDBModeStr( UINT32 dbMode )
    {
       std::stringstream ss ;
@@ -278,52 +291,16 @@ namespace engine
       return modeFlag ;
    }
 
-   INT32 utilPrefReplStr2Enum( const CHAR * prefReplStr )
+   BOOLEAN utilCheckInstanceID ( UINT32 instanceID, BOOLEAN includeUnknown )
    {
-      INT32 enumPrefRepl = PREFER_REPL_ANYONE ;
-
-      if ( prefReplStr && *prefReplStr && !*(prefReplStr+1) )
+      if ( ( includeUnknown &&
+             NODE_INSTANCE_ID_UNKNOWN == instanceID ) ||
+           ( instanceID > NODE_INSTANCE_ID_MIN &&
+             instanceID < NODE_INSTANCE_ID_MAX ) )
       {
-         CHAR ch = *prefReplStr ;
-         if ( ch >= '1' && ch <= '7' )
-         {
-            enumPrefRepl = (INT32)( ch - '0' ) ;
-         }
-         else if ( 'M' == ch || 'm' == ch )
-         {
-            enumPrefRepl = PREFER_REPL_MASTER ;
-         }
-         else if ( 'S' == ch || 's' == ch )
-         {
-            enumPrefRepl = PREFER_REPL_SLAVE ;
-         }
+         return TRUE ;
       }
-      return enumPrefRepl ;
-   }
-
-   INT32 utilPrefReplEnum2Str( INT32 enumPrefRepl, CHAR * prefReplStr,
-                               UINT32 len )
-   {
-      ossMemset( prefReplStr, 0, len ) ;
-
-      if ( enumPrefRepl >= PREFER_REPL_NODE_1 &&
-           enumPrefRepl <= PREFER_REPL_NODE_7 )
-      {
-         ossSnprintf( prefReplStr, len-1, "%d", enumPrefRepl ) ;
-      }
-      else if ( enumPrefRepl == PREFER_REPL_MASTER )
-      {
-         ossSnprintf( prefReplStr, len-1, "%s", "M" ) ;
-      }
-      else if ( enumPrefRepl == PREFER_REPL_SLAVE )
-      {
-         ossSnprintf( prefReplStr, len-1, "%s", "S" ) ;
-      }
-      else if ( enumPrefRepl == PREFER_REPL_ANYONE )
-      {
-         ossSnprintf( prefReplStr, len-1, "%s", "A" ) ;
-      }
-      return SDB_OK ;
+      return FALSE ;
    }
 
    BSONObj utilGetErrorBson( INT32 flags, const CHAR *detail )
@@ -332,7 +309,6 @@ namespace engine
       static BOOLEAN _init = FALSE ;
       static ossSpinXLatch _lock ;
 
-      // init retobj
       if ( FALSE == _init )
       {
          _lock.get() ;
@@ -351,14 +327,12 @@ namespace engine
          _lock.release() ;
       }
 
-      // check flags
       if ( flags < -SDB_MAX_ERROR || flags > SDB_MAX_WARNING )
       {
          PD_LOG ( PDERROR, "Error code error[rc:%d]", flags ) ;
          flags = SDB_SYS ;
       }
 
-      // return new obj
       if ( detail && *detail != 0 )
       {
          BSONObjBuilder bb ;
@@ -367,7 +341,6 @@ namespace engine
          bb.append ( OP_ERR_DETAIL, detail ) ;
          return bb.obj() ;
       }
-      // return fix obj
       return _retObj[ SDB_MAX_ERROR + flags ] ;
    }
 
@@ -384,7 +357,6 @@ namespace engine
    utilShellRCItem* utilGetShellRCMap()
    {
       static utilShellRCItem s_srcMap[] = {
-         // map begin
          MAP_SHELL_RC_ITEM( SDB_SRC_SUC, SDB_OK )
          MAP_SHELL_RC_ITEM( SDB_SRC_IO, SDB_IO )
          MAP_SHELL_RC_ITEM( SDB_SRC_PERM, SDB_PERM )
@@ -398,7 +370,6 @@ namespace engine
          MAP_SHELL_RC_ITEM( SDB_SRC_CANNOT_LISTEN, SDB_NET_CANNOT_LISTEN )
          MAP_SHELL_RC_ITEM( SDB_SRC_CAT_AUTH_FAILED, SDB_CAT_AUTH_FAILED )
          MAP_SHELL_RC_ITEM( SDB_SRC_INVALIDARG, SDB_INVALIDARG )
-         // map end
          { 0, 0, 1 }
       } ;
       return &s_srcMap[0] ;

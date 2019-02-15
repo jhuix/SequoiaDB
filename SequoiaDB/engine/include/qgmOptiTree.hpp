@@ -68,7 +68,6 @@ namespace engine
       QGM_OPTI_TYPE_MTHMCHFILTER,
       QGM_OPTI_TYPE_SPLIT,
 
-      // must be the last
       QGM_OPTI_NODE_MAX
    } ;
 
@@ -224,6 +223,8 @@ namespace engine
 
       virtual string toString() const ;
 
+      string toTotalString() ;
+
       INT32 extend( _qgmOptiTreeNode *&exNode ) ;
 
       INT32 addChild( _qgmOptiTreeNode *child ) ;
@@ -246,6 +247,8 @@ namespace engine
       UINT32 _getSubAlias( vector< qgmField > &aliases ) const ;
       INT32  _onPushOprUnit( qgmOprUnit *oprUnit, PUSH_FROM from ) ;
       void   _upFields( qgmOPFieldVec &fields ) ;
+      void   _toTotalString( stringstream &ss, const string &fill,
+                             qgmOptiTreeNode *node ) ;
 
       virtual UINT32 _getFieldAlias( qgmOPFieldPtrVec &fieldAlias,
                                      BOOLEAN getAll ) ;

@@ -47,6 +47,7 @@ namespace import
       CSV_TYPE_LONG,
       CSV_TYPE_NUMBER,
       CSV_TYPE_DOUBLE,
+      CSV_TYPE_DECIMAL,
       CSV_TYPE_BOOL,
       CSV_TYPE_STRING,
       CSV_TYPE_TIMESTAMP,
@@ -96,6 +97,7 @@ namespace import
       INT32          intVal;
       INT64          longVal;
       FLOAT64        doubleVal;
+      bson_decimal   decimalVal;
       BOOLEAN        boolVal;
       CSVString      strVal;
       CSVTimestamp   timestampVal;
@@ -108,6 +110,48 @@ namespace import
       {
          ossMemset(this, 0, sizeof(CSVFieldValue));
       }
+
+      void reset( CSV_TYPE type, CSV_TYPE subType = CSV_TYPE_AUTO )
+      {
+         if (CSV_TYPE_BINARY == type)
+         {
+            SAFE_OSS_FREE(binaryVal.bin);
+            binaryVal.binLen = 0;
+         }
+         else if (CSV_TYPE_STRING == type)
+         {
+            if (strVal.escaped)
+            {
+               SAFE_OSS_FREE(strVal.str);
+            }
+         }
+         else if (CSV_TYPE_DECIMAL == type ||
+                  (CSV_TYPE_NUMBER == type && CSV_TYPE_DECIMAL == subType))
+         {
+            decimal_free(&decimalVal);
+         }
+         ossMemset(this, 0, sizeof(CSVFieldValue));
+      }
+   };
+
+   struct CSVDecimalOpt
+   {
+      INT32 precision;
+      INT32 scale;
+   };
+
+   struct CSVFieldOpt
+   {
+      BOOLEAN hasOpt;
+      union {
+         CSVDecimalOpt decimalOpt;
+      } opt;
+
+      CSVFieldOpt()
+      {
+         ossMemset(&opt, 0, sizeof(opt));
+         hasOpt = FALSE;
+      }
    };
 
    struct CSVField: public SDBObject
@@ -116,6 +160,7 @@ namespace import
       CSV_TYPE       type;
       CSV_TYPE       subType;
       string         name;
+      CSVFieldOpt    opt;
       BOOLEAN        hasDefault;
       CSVFieldValue  defaultValue;
 
@@ -132,18 +177,7 @@ namespace import
       {
          if (hasDefault)
          {
-            if (CSV_TYPE_BINARY == type)
-            {
-               SAFE_OSS_FREE(defaultValue.binaryVal.bin);
-               defaultValue.binaryVal.binLen = 0;
-            }
-            else if (CSV_TYPE_STRING == type)
-            {
-               if (defaultValue.strVal.escaped)
-               {
-                  SAFE_OSS_FREE(defaultValue.strVal.str);
-               }
-            }
+            defaultValue.reset( type, subType ) ;
          }
       }
    };
@@ -178,6 +212,11 @@ namespace import
             value.strVal.escaped = FALSE;
             value.strVal.length = 0;
          }
+         else if (CSV_TYPE_DECIMAL == type ||
+                  (CSV_TYPE_NUMBER == type && CSV_TYPE_DECIMAL == subType))
+         {
+            decimal_free(&(value.decimalVal));
+         }
 
          type = CSV_TYPE_AUTO;
       }
@@ -200,10 +239,12 @@ namespace import
                       BOOLEAN autoAddValue,
                       BOOLEAN hasHeaderLine,
                       BOOLEAN cast,
-                      BOOLEAN ignoreNull);
+                      BOOLEAN ignoreNull,
+                      BOOLEAN forceNotUTF8,
+                      BOOLEAN strictFieldNum);
       ~CSVRecordParser();
       INT32 parseRecord(const CHAR* data, INT32 length, bson& obj);
-      INT32 parseFields(const CHAR* data, INT32 length);
+      INT32 parseFields(const CHAR* data, INT32 length, BOOLEAN isHeaderline );
       void  printFieldsDef();
 
    private:
@@ -214,6 +255,7 @@ namespace import
       string            _fields;
       BOOLEAN           _hasHeaderLine;
       BOOLEAN           _hasId;
+      BOOLEAN           _strictFieldNum;
    };
 }
 

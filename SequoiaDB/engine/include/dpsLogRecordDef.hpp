@@ -50,11 +50,9 @@ namespace engine
       DPS_LOG_PUBLIC_TRANSID = 202,
       DPS_LOG_PUBLIC_PRETRANS = 203,
       DPS_LOG_PUBLIC_RELATED_TRANS = 204,    // only for rollback trans,
-                                             // mapping to really trans lsn
       DPS_LOG_PUBLIC_FIRSTTRANS = 205
    } ;
 
-/// number in public can not be used in definition !
 
    enum DPS_LOG_INSERT
    {
@@ -67,6 +65,8 @@ namespace engine
       DPS_LOG_UPDATE_OLDOBJ = 2,
       DPS_LOG_UPDATE_NEWMATCH = 3,
       DPS_LOG_UPDATE_NEWOBJ = 4,
+      DPS_LOG_UPDATE_OLDSHARDINGKEY = 5,
+      DPS_LOG_UPDATE_NEWSHARDINGKEY = 6
    } ;
 
    enum DPS_LOG_DELETE
@@ -74,11 +74,18 @@ namespace engine
       DPS_LOG_DELETE_OLDOBJ = 1,
    } ;
 
+   enum DPS_LOG_POP
+   {
+      DPS_LOG_POP_LID = 1,
+      DPS_LOG_POP_DIRECTION = 2
+   } ;
+
    enum DPS_LOG_CSCRT
    {
       DPS_LOG_CSCRT_CSNAME = 1,
       DPS_LOG_CSCRT_PAGESIZE = 2,
       DPS_LOG_CSCRT_LOBPAGESZ = 3,
+      DPS_LOG_CSCRT_CSTYPE = 4
    } ;
 
    enum DPS_LOG_CSDEL
@@ -86,10 +93,17 @@ namespace engine
       DPS_LOG_CSDEL_CSNAME = 1,
    } ;
 
+   enum DPS_LOG_CSRENAME
+   {
+      DPS_LOG_CSRENAME_CSNAME       = 1,
+      DPS_LOG_CSRENAME_NEWNAME      = 2
+   } ;
+
    enum DPS_LOG_CLCRT
    {
       DPS_LOG_CLCRT_ATTRIBUTE = 1,
-      DPS_LOG_CLCRT_COMPRESS_TYPE = 2
+      DPS_LOG_CLCRT_COMPRESS_TYPE = 2,
+      DPS_LOG_CLCRT_EXT_OPTIONS = 3
    } ;
 
    enum DPS_LOG_CLDEL
@@ -128,6 +142,8 @@ namespace engine
 
    enum DPS_LOG_INVALIDCATA
    {
+      DPS_LOG_INVALIDCATA_TYPE = 1,
+      DPS_LOG_INVALIDCATA_IXNAME
    } ;
 
    enum DPS_LOG_ROW
@@ -146,6 +162,15 @@ namespace engine
       DPS_LOG_LOB_PAGE,
       DPS_LOG_LOB_OLD_LEN,
       DPS_LOG_LOB_OLD_DATA,
+      DPS_LOG_LOB_PAGE_SIZE
+   } ;
+
+   enum DPS_LOG_ANALYZE
+   {
+      DPS_LOG_ANALYZE_CSNAME = 1,
+      DPS_LOG_ANALYZE_CLNAME,
+      DPS_LOG_ANALYZE_IXNAME,
+      DPS_LOG_ANALYZE_MODE
    } ;
 }
 

@@ -2,7 +2,6 @@
 
 import pysequoiadb
 from pysequoiadb import client
-from pysequoiadb import const
 from pysequoiadb.error import (SDBTypeError,
                                SDBBaseError,
                                SDBEndOfCursor)
@@ -45,5 +44,5 @@ if __name__ == "__main__":
 
       print("Success")
 
-   except (SDBTypeError, SDBBaseError), e:
-      pysequoiadb._print(e)
+   except (SDBTypeError, SDBBaseError) as e:
+      print(e)

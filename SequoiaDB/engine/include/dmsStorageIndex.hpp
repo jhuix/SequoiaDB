@@ -40,13 +40,16 @@
 
 #include "dmsStorageBase.hpp"
 #include "dpsLogWrapper.hpp"
+#include "dmsPageMap.hpp"
 
 using namespace bson ;
+
+#define DMS_DFT_TEXTINDEX_BUFF_SIZE             (30 * 1024 * 1024 * 1024LL)
 
 namespace engine
 {
 
-   class _dmsMBContext ;
+   class _dmsStorageDataCommon ;
    class _dmsStorageData ;
    class _pmdEDUCB ;
    class _ixmIndexCB ;
@@ -63,15 +66,19 @@ namespace engine
    {
       public:
          _dmsStorageIndex ( const CHAR *pSuFileName, dmsStorageInfo *pInfo,
-                            _dmsStorageData *pDataSu ) ;
+                            _dmsStorageDataCommon *pDataSu ) ;
          ~_dmsStorageIndex () ;
 
+         virtual void  syncMemToMmap() ;
+
+         dmsPageMapUnit*   getPageMapUnit() ;
+         dmsPageMap*       getPageMap( UINT16 mbID ) ;
+
       public:
-         // reserve a signal page
          INT32    reserveExtent ( UINT16 mbID, dmsExtentID &extentID,
-                                  dmsContext *context ) ;
-         // release a signal page
-         INT32    releaseExtent ( dmsExtentID extentID ) ;
+                                  _dmsContext *context ) ;
+         INT32    releaseExtent ( dmsExtentID extentID,
+                                  BOOLEAN setFlag = FALSE ) ;
 
          INT32    createIndex ( _dmsMBContext *context, const BSONObj &index,
                                 _pmdEDUCB *cb, SDB_DPSCB *dpscb,
@@ -96,23 +103,20 @@ namespace engine
          INT32    rebuildIndexes ( _dmsMBContext *context, _pmdEDUCB *cb,
                                    INT32 sortBufferSize = SDB_INDEX_SORT_BUFFER_DEFAULT_SIZE ) ;
 
-         // Caller must hold mb exclusive lock
          INT32    indexesInsert ( _dmsMBContext *context, dmsExtentID extLID,
                                   BSONObj &inputObj, const dmsRecordID &rid,
                                   _pmdEDUCB *cb ) ;
 
-         // Caller must hold mb exclusive lock
          INT32    indexesUpdate ( _dmsMBContext *context, dmsExtentID extLID,
                                   BSONObj &originalObj, BSONObj &newObj,
                                   const dmsRecordID &rid, _pmdEDUCB *cb,
                                   BOOLEAN isRollback ) ;
 
-         // Caller must hold mb exclusive lock
          INT32    indexesDelete ( _dmsMBContext *context, dmsExtentID extLID,
                                   BSONObj &inputObj, const dmsRecordID &rid,
                                   _pmdEDUCB *cb ) ;
 
-         INT32    truncateIndexes ( _dmsMBContext *context ) ;
+         INT32    truncateIndexes ( _dmsMBContext *context, _pmdEDUCB *cb ) ;
 
          INT32    getIndexCBExtent ( _dmsMBContext *context,
                                      const CHAR *indexName,
@@ -129,15 +133,19 @@ namespace engine
          void     addStatFreeSpace ( UINT16 mbID, UINT16 size ) ;
          void     decStatFreeSpace ( UINT16 mbID, UINT16 size ) ;
 
-         virtual INT32 tryToFlush( BOOLEAN ignoreTick, BOOLEAN &failed ) ;
-
       private:
+         INT32    _createIndex( _dmsMBContext *context,
+                                const BSONObj &index,
+                                _pmdEDUCB * cb,
+                                SDB_DPSCB *dpscb,
+                                BOOLEAN isSys,
+                                INT32 sortBufferSize ) ;
 
-         // if indexLID == DMS_INALID_EXTENT, it will get from index cb
          INT32    _rebuildIndex ( _dmsMBContext *context,
                                   dmsExtentID indexExtentID,
                                   _pmdEDUCB * cb,
-                                  INT32 sortBufferSize ) ;
+                                  INT32 sortBufferSize,
+                                  UINT16 indexType ) ;
 
          INT32    _indexInsert( _ixmIndexCB *indexCB,
                                  const _ixmKey &key, const dmsRecordID &rid,
@@ -168,15 +176,26 @@ namespace engine
          virtual INT32  _onMapMeta( UINT64 curOffSet ) ;
          virtual INT32  _onOpened() ;
          virtual void   _onClosed() ;
-         virtual BOOLEAN _keepInRam()const
-         {
-            return TRUE ;
-         }
 
-      protected:
+         virtual INT32  _onFlushDirty( BOOLEAN force, BOOLEAN sync ) ;
+
+         virtual INT32  _onMarkHeaderValid( UINT64 &lastLSN,
+                                            BOOLEAN sync,
+                                            UINT64 lastTime ) ;
+
+         virtual INT32  _onMarkHeaderInvalid( INT32 collectionID ) ;
+
+         virtual UINT64 _getOldestWriteTick() const ;
+
+         virtual void   _onRestore() ;
+
+         INT32 _allocateIdxID( _dmsMBContext *context,
+                               const BSONObj &index,
+                               INT32 &indexID ) ;
 
       private:
-         _dmsStorageData               *_pDataSu ;
+         _dmsStorageData         *_pDataSu ;
+         dmsPageMapUnit          _mbPageInfo ;
 
       friend class _dmsIndexBuilder ;
    };

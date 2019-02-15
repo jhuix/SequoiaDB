@@ -45,13 +45,16 @@
 #include "dms.hpp"
 #include "ossLatch.hpp"
 #include "monDMS.hpp"
-#include "dmsTempCB.hpp"
+#include "dmsTempSUMgr.hpp"
+#include "dmsStatSUMgr.hpp"
 #include "ossAtomic.hpp"
 #include "ossRWMutex.hpp"
 #include "dpsLogWrapper.hpp"
 #include "ossEvent.hpp"
 #include "sdbInterface.hpp"
 #include "dmsIxmKeySorter.hpp"
+#include "utilMap.hpp"
+#include "dmsStorageJob.hpp"
 #include <map>
 #include <set>
 
@@ -63,13 +66,9 @@ namespace engine
    class _pmdEDUCB ;
    class _dmsStorageUnit ;
 
-   // for each collection space, there is one CSCB associate with it
    class _SDB_DMS_CSCB : public SDBObject
    {
    public:
-      //ossSpinSLatch _mutex ;
-      // maximum sequence id for the collection space
-      // currently 1 sequence per collection space
       UINT32 _topSequence ;
       CHAR   _name [ DMS_COLLECTION_SPACE_NAME_SZ + 1 ] ;
       _dmsStorageUnit *_su ;
@@ -88,10 +87,47 @@ namespace engine
 
    #define DMS_MAX_CS_NUM 4096
    #define DMS_INVALID_CS DMS_INVALID_SUID
-   #define DMS_STATE_NORMAL  0
-   #define DMS_STATE_BACKUP  1
-   #define DMS_STATE_REBUILD 2
-   #define DMS_CHANGESTATE_WAIT_LOOP 500
+
+   /*
+      DMS_STATE DEFINE
+   */
+   #define DMS_STATE_NORMAL            0
+   #define DMS_STATE_READONLY          1
+   #define DMS_STATE_ONLINE_BACKUP     2
+   #define DMS_STATE_FULLSYNC          3
+
+   /*
+      OTHER DEFINE
+   */
+   #define DMS_CHANGESTATE_WAIT_LOOP   100
+
+   struct _dmsDictJob
+   {
+      dmsStorageUnitID _suID ;
+      UINT32 _suLID ;
+      UINT16 _clID ;
+      UINT32 _clLID ;
+      UINT64 _createTime ;
+
+      _dmsDictJob()
+      : _suID( DMS_INVALID_SUID ),
+        _suLID( DMS_INVALID_SUID ),
+        _clID( DMS_INVALID_CLID ),
+        _clLID( DMS_INVALID_CLID )
+      {
+      }
+
+      _dmsDictJob( dmsStorageUnitID suID, UINT32 suLID, UINT16 clID,
+                   UINT32 clLID )
+      : _suID( suID ),
+        _suLID( suLID ),
+        _clID( clID ),
+        _clLID( clLID ),
+        _createTime( 0 )
+      {
+      }
+   } ;
+   typedef _dmsDictJob dmsDictJob ;
 
    /*
       _SDB_DMSCB define
@@ -113,48 +149,62 @@ namespace engine
       std::vector<SDB_DMS_CSCB*>          _delCscbVec ;
       std::vector<ossRWMutex*>            _latchVec ;
       std::vector<dmsStorageUnitID>       _freeList ;
+      std::vector< ossSpinRecursiveXLatch* >  _vecCSMutex ;
 
-      // collection spaces mutex in create and drop operations
-      std::vector< ossSpinXLatch* >       _vecCSMutex ;
-
-      // represent the last page clean timestamp for a given storage unit
-      typedef std::pair<ossTick,dmsStorageUnitID>  _pageCleanHistory ;
-      // stores a list of page clean history
-      std::list<_pageCleanHistory>                 _pageCleanHistoryList ;
-      std::set<dmsStorageUnitID>                   _pageCleanHistorySet ;
+#if defined (_WINDOWS)
+      typedef std::map<const CHAR*,
+                       dmsStorageUnitID,
+                       cmp_cscb>::const_iterator CSCB_MAP_CONST_ITER ;
+      typedef std::map<const CHAR*,
+                       dmsStorageUnitID,
+                       cmp_cscb>::iterator CSCB_MAP_ITER ;
+#elif defined (_LINUX)
+      typedef std::map<const CHAR*,
+                       dmsStorageUnitID>::const_iterator CSCB_MAP_CONST_ITER ;
+      typedef std::map<const CHAR*,
+                       dmsStorageUnitID>::iterator CSCB_MAP_ITER ;
+#endif
 
       /*
-       * List of collections which are waitting for dictionaies creation.
+       * Queue of collections which are waitting for dictionaies creation.
        * Here we store the storage unit id and mb ID of the collection.
        * One concern here is the reuse of these two IDs, but that's ok. I'll
        * just check with these IDs to see if dictionary creation is needed for
        * the CURRENT corresponding collection. If they have been reused, then
        * the original collection has been dropped. So we just ignore that.
-       * If the IDs have been reused, and added to the list again, it's also ok.
+       * If the IDs have been reused, and added to the queue again, it's also
+       * ok.
        * Everytime we are about to create a dictionary, we should check if a
-       * dictionary is there already. If yes, just remove the item from the list.
+       * dictionary is there already. If yes, just remove the item from the
+       * queue.
        */
-      typedef std::pair<dmsStorageUnitID, UINT16>  _dictWaitCl ;
-      std::list<_dictWaitCl>                       _dictWaitClList ;
-      std::list<_dictWaitCl>                       _dictWaitClListTrans ;
+      ossQueue<dmsDictJob>    _dictWaitQue ;
 
       ossSpinXLatch           _stateMtx;
-      ossEvent                _backEvent ;
+      ossEvent                _blockEvent ;
       SINT64                  _writeCounter;
       UINT8                   _dmsCBState;
       UINT32                  _logicalSUID ;
 
-      dmsTempCB               _tempCB ;
+      dmsTempSUMgr            _tempSUMgr ;
+      dmsStatSUMgr            _statSUMgr ;
 
       dmsIxmKeySorterCreator* _ixmKeySorterCreator ;
 
+      dmsPageMappingDispatcher   _pageMapDispatcher ;
+
    private:
       void  _logCSCBNameMap () ;
+
       INT32 _CSCBNameInsert ( const CHAR *pName, UINT32 topSequence,
                               _dmsStorageUnit *su,
                               dmsStorageUnitID &suID ) ;
+
       INT32 _CSCBNameLookup ( const CHAR *pName,
-                              SDB_DMS_CSCB **cscb ) ;
+                              SDB_DMS_CSCB **cscb,
+                              dmsStorageUnitID *suID = NULL,
+                              BOOLEAN exceptDeleting = TRUE ) ;
+
       INT32 _CSCBNameLookupAndLock ( const CHAR *pName,
                                      dmsStorageUnitID &suID,
                                      SDB_DMS_CSCB **cscb,
@@ -176,7 +226,11 @@ namespace engine
                                 SDB_DPSCB *dpsCB,
                                 SDB_DMS_CSCB *&pCSCB ) ;
       void _CSCBNameMapCleanup () ;
-      INT32 _joinPageCleanSU ( dmsStorageUnitID suID ) ;
+
+      INT32 _CSCBRename( const CHAR *pName,
+                         const CHAR *pNewName,
+                         _pmdEDUCB *cb,
+                         SDB_DPSCB *dpsCB ) ;
 
       INT32 _delCollectionSpace ( const CHAR *pName, _pmdEDUCB *cb,
                                   SDB_DPSCB *dpsCB, BOOLEAN removeFile,
@@ -193,9 +247,15 @@ namespace engine
       virtual INT32  active () ;
       virtual INT32  deactive () ;
       virtual INT32  fini () ;
+      virtual void   onConfigChange() ;
 
       INT32 nameToSUAndLock ( const CHAR *pName, dmsStorageUnitID &suID,
                               _dmsStorageUnit **su,
+                              OSS_LATCH_MODE lockType = SHARED,
+                              INT32 millisec = -1 ) ;
+
+      INT32 verifySUAndLock ( const dmsEventSUItem *pSUItem,
+                              _dmsStorageUnit **ppSU,
                               OSS_LATCH_MODE lockType = SHARED,
                               INT32 millisec = -1 ) ;
 
@@ -205,28 +265,47 @@ namespace engine
 
       INT32 addCollectionSpace ( const CHAR *pName, UINT32 topSequence,
                                  _dmsStorageUnit *su, _pmdEDUCB *cb,
-                                 SDB_DPSCB *dpsCB ) ;
+                                 SDB_DPSCB *dpsCB, BOOLEAN isCreate ) ;
       INT32 dropCollectionSpace ( const CHAR *pName, _pmdEDUCB *cb,
                                   SDB_DPSCB *dpsCB ) ;
       INT32 dropEmptyCollectionSpace( const CHAR *pName, _pmdEDUCB *cb,
                                       SDB_DPSCB *dpsCB ) ;
       INT32 unloadCollectonSpace( const CHAR *pName, _pmdEDUCB *cb ) ;
 
-      void dumpInfo ( std::set<monCLSimple> &collectionList,
-                      BOOLEAN sys = FALSE ) ;
-      void dumpInfo ( std::set<monCSSimple> &csList,
-                      BOOLEAN sys = FALSE ) ;
+      INT32 renameCollectionSpace( const CHAR *pName,
+                                   const CHAR *pNewName,
+                                   _pmdEDUCB *cb,
+                                   SDB_DPSCB *dpsCB ) ;
 
-      void dumpInfo ( std::set<monCollection> &collectionList,
+      void dumpInfo ( MON_CL_SIM_LIST &collectionList,
                       BOOLEAN sys = FALSE ) ;
-      void dumpInfo ( std::set<monCollectionSpace> &csList,
+      void dumpInfo ( MON_CS_SIM_LIST &csList,
+                      BOOLEAN sys = FALSE,
+                      BOOLEAN dumpCL = FALSE,
+                      BOOLEAN dumpIdx = FALSE ) ;
+
+      void dumpInfo ( MON_CL_LIST &collectionList,
                       BOOLEAN sys = FALSE ) ;
-      void dumpInfo ( std::set<monStorageUnit> &storageUnitList,
+      void dumpInfo ( MON_CS_LIST &csList,
+                      BOOLEAN sys = FALSE ) ;
+      void dumpInfo ( MON_SU_LIST &storageUnitList,
                       BOOLEAN sys = FALSE ) ;
 
       void dumpInfo ( INT64 &totalFileSize );
 
-      dmsTempCB *getTempCB () ;
+      void dumpPageMapCSInfo( MON_CSNAME_VEC &vecCS ) ;
+
+      dmsTempSUMgr *getTempSUMgr () ;
+
+      dmsStatSUMgr *getStatSUMgr () ;
+
+      void clearSUCaches ( UINT32 mask ) ;
+
+      void clearSUCaches ( const MON_CS_SIM_LIST &monCSList, UINT32 mask ) ;
+
+      void changeSUCaches ( UINT32 mask ) ;
+
+      void changeSUCaches ( const MON_CS_SIM_LIST &monCSList, UINT32 mask ) ;
 
       INT32 dropCollectionSpaceP1 ( const CHAR *pName, _pmdEDUCB *cb,
                                     SDB_DPSCB *dpsCB );
@@ -235,17 +314,10 @@ namespace engine
                                           SDB_DPSCB *dpsCB );
 
       INT32 dropCollectionSpaceP2 ( const CHAR *pName, _pmdEDUCB *cb,
-                                    SDB_DPSCB *dpsCB );
+                                    SDB_DPSCB *dpsCB ) ;
 
-      _dmsStorageUnit *dispatchPageCleanSU ( dmsStorageUnitID *suID ) ;
-      void dispatchDictCreateCL ( BOOLEAN &empty, dmsStorageUnitID &suID,
-                                  UINT16 &mbID ) ;
-      void dictCreateResumeWaitCL() ;
-      void pushToDictCreateCLList( dmsStorageUnitID suID, UINT16 mbID ) ;
-      void popFromDictCreateCLList() ;
-      void skipCurrentDictCreateCL() ;
-
-      INT32 joinPageCleanSU ( dmsStorageUnitID suID ) ;
+      BOOLEAN dispatchDictJob( dmsDictJob &job ) ;
+      void pushDictJob( dmsDictJob job ) ;
 
       void setIxmKeySorterCreator( dmsIxmKeySorterCreator* creator ) ;
       dmsIxmKeySorterCreator* getIxmKeySorterCreator() ;
@@ -268,11 +340,18 @@ namespace engine
       INT32 writable( _pmdEDUCB * cb ) ;
       void  writeDown( _pmdEDUCB * cb ) ;
 
-      INT32 registerBackup( _pmdEDUCB *cb ) ;
+      INT32 blockWrite( _pmdEDUCB *cb,
+                        SDB_DB_STATUS byStatus = SDB_DB_NORMAL ) ;
+      void  unblockWrite( _pmdEDUCB *cb ) ;
+
+      INT32 registerBackup( _pmdEDUCB *cb, BOOLEAN offline = TRUE ) ;
       void  backupDown( _pmdEDUCB *cb ) ;
 
       INT32 registerRebuild( _pmdEDUCB *cb ) ;
       void  rebuildDown( _pmdEDUCB *cb ) ;
+
+      INT32 registerFullSync( _pmdEDUCB *cb ) ;
+      void  fullSyncDown( _pmdEDUCB *cb ) ;
 
       OSS_INLINE UINT8 getCBState () const
       {
@@ -283,6 +362,21 @@ namespace engine
       void  releaseCSMutex( const CHAR *pCSName ) ;
    } ;
    typedef class _SDB_DMSCB SDB_DMSCB ;
+
+   /*
+      _dmsCSMutexScope define
+   */
+   class _dmsCSMutexScope
+   {
+      public:
+         _dmsCSMutexScope( SDB_DMSCB *pDMSCB, const CHAR *pName ) ;
+         ~_dmsCSMutexScope() ;
+
+      private:
+         SDB_DMSCB            *_pDMSCB ;
+         const CHAR           *_pName ;
+   } ;
+   typedef _dmsCSMutexScope dmsCSMutexScope ;
 
    /*
       get global SDB_DMSCB

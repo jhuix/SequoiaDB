@@ -35,7 +35,7 @@ namespace SequoiaDB.Bson.IO
         private bool _indent = false;
         private string _indentChars = "  ";
         private string _newLineChars = "\r\n";
-        private JsonOutputMode _outputMode = JsonOutputMode.Shell;
+        private JsonOutputMode _outputMode = JsonOutputMode.Strict;
         private Version _shellVersion = new Version(2, 0, 0);
 
         // constructors

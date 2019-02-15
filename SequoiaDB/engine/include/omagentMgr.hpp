@@ -81,6 +81,7 @@ namespace engine
          INT32       getRestartInterval() const { return _restartInterval ; }
          BOOLEAN     isAutoStart() const { return _autoStart && !_useStandAlone ; }
          BOOLEAN     isGeneralAgent() const { return _isGeneralAgent && !_useStandAlone ; }
+         BOOLEAN     isEnableWatch() const { return _enableWatch ; }
          PDLEVEL     getDiagLevel() const ;
 
          vector< _pmdAddrPair > omAddrs() const
@@ -109,7 +110,7 @@ namespace engine
 
       protected:
          virtual INT32 doDataExchange( pmdCfgExchange *pEX ) ;
-         virtual INT32 postLoaded() ;
+         virtual INT32 postLoaded( PMD_CFG_STEP step ) ;
          virtual INT32 preSaving() ;
 
       private:
@@ -117,17 +118,13 @@ namespace engine
 
          CHAR                       _dftSvcName[ OSS_MAX_SERVICENAME + 1 ] ;
          CHAR                       _cmServiceName[ OSS_MAX_SERVICENAME + 1 ] ;
-         // -1: always restart, 0: nerver restart
          INT32                      _restartCount ;
-         // restart time interval ( minute ), ignore this if <= 0
          INT32                      _restartInterval ;
-         // TRUE: start all nodes while CM start.
          BOOLEAN                    _autoStart ;
          INT32                      _diagLevel ;
-         // om address, ex: 192.168.20.106:8000,192.168.21.106:8000
          CHAR                       _omAddress[ OSS_MAX_PATHSIZE + 1 ] ;
-         // is general agent, default FALSE
          BOOLEAN                    _isGeneralAgent ;
+         BOOLEAN                    _enableWatch ;
 
          CHAR                       _cfgFileName[ OSS_MAX_PATHSIZE + 1 ] ;
          CHAR                       _localCfgPath[ OSS_MAX_PATHSIZE + 1 ] ;
@@ -161,6 +158,13 @@ namespace engine
          virtual UINT64       makeSessionID( const NET_HANDLE &handle,
                                              const MsgHeader *header ) ;
 
+
+         virtual INT32        onErrorHanding( INT32 rc,
+                                              const MsgHeader *pReq,
+                                              const NET_HANDLE &handle,
+                                              UINT64 sessionID,
+                                              pmdAsyncSession *pSession ) ;
+
       protected:
          /*
             Parse the session type
@@ -171,9 +175,7 @@ namespace engine
 
          virtual BOOLEAN      _canReuse( SDB_SESSION_TYPE sessionType ) ;
          virtual UINT32       _maxCacheSize() const ;
-         virtual void         _onPushMsgFailed( INT32 rc, const MsgHeader *pReq,
-                                                const NET_HANDLE &handle,
-                                                pmdAsyncSession *pSession ) ;
+
          /*
             Create session
          */
@@ -195,6 +197,7 @@ namespace engine
       typedef std::map<UINT64, BSONObj>         MAPTASKQUERY ;
       typedef std::map<UINT64, omaTaskPtr >     MAP_TASKINFO ;
       typedef std::map<UINT64, ossAutoEvent*>   MAP_TASKEVENT ;
+      typedef std::map<UINT32, sptScope*>       MAP_SCOPE ;
 
       public:
          _omAgentMgr() ;
@@ -224,6 +227,9 @@ namespace engine
          sptScope*       getScope() ;
          void            releaseScope( sptScope *pScope ) ;
 
+         sptScope*       getScopeBySession() ;
+         void            clearScopeBySession() ;
+
          void            incSession() ;
          void            decSession() ;
          void            resetNoMsgTimeCounter() ;
@@ -235,7 +241,7 @@ namespace engine
 
          BOOLEAN         isTaskInfoExist( UINT64 taskID ) ;
          void            registerTaskInfo( UINT64 taskID, omaTaskPtr &taskPtr ) ;
-         INT32           getTaskInfo( UINT64 taskID, _omaTask **pTask ) ;
+         INT32           getTaskInfo( UINT64 taskID, omaTaskPtr &taskPtr ) ;
          void            submitTaskInfo( UINT64 taskID ) ;
          UINT64          getRequestID() ;
          void            registerTaskEvent( UINT64 reqID, ossAutoEvent *pEvent ) ;
@@ -257,6 +263,8 @@ namespace engine
       private:
          INT32           _getTaskType( const BSONObj &obj, OMA_TASK_TYPE *type ) ;
          INT32           _startTask( const BSONObj &obj ) ;
+         INT32           _runStartPluginTask() ;
+         INT32           _runStopPluginTask() ;
 
       private:
          omAgentOptions             _options ;
@@ -287,6 +295,9 @@ namespace engine
          MAPTASKQUERY               _mapTaskQuery ;
          MAP_TASKINFO               _mapTaskInfo ;
          MAP_TASKEVENT              _mapTaskEvent ;
+
+         MAP_SCOPE                  _mapScopes ;
+         ossSpinXLatch              _scopeLatch ;
 
    } ;
 

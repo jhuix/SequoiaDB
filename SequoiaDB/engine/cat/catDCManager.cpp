@@ -113,16 +113,29 @@ namespace engine
       PD_RC_CHECK( rc, PDERROR, "Init system log manager failed, rc: %d",
                    rc ) ;
 
+      _pCatCB->regEventHandler( this ) ;
+
    done:
       return rc ;
    error:
       goto done ;
    }
 
+   INT32 _catDCManager::fini ()
+   {
+      if ( _pCatCB )
+      {
+         _pCatCB->unregEventHandler( this ) ;
+      }
+      return SDB_OK ;
+   }
+
    void _catDCManager::attachCB( pmdEDUCB * cb )
    {
       _pEduCB = cb ;
       _pLogMgr->attachCB( cb ) ;
+
+      _mapData2DCMgr( _pDCMgr ) ;
    }
 
    void _catDCManager::detachCB( pmdEDUCB * cb )
@@ -133,13 +146,13 @@ namespace engine
 
    INT32 _catDCManager::updateGlobalAddr()
    {
-      // not primary
       if ( !pmdIsPrimary() )
       {
          return SDB_CLS_NOT_PRIMARY ;
       }
+      pmdEDUCB *cb = pmdGetThreadEDUCB() ;
       return catUpdateBaseInfoAddr( pmdGetOptionCB()->getCatAddr().c_str(),
-                                    TRUE, _pEduCB, 1 ) ;
+                                    TRUE, cb, 1 ) ;
    }
 
    BOOLEAN _catDCManager::isDCActivated() const
@@ -187,13 +200,15 @@ namespace engine
       return groupInImage( _pCatCB->groupID2Name( groupID ) ) ;
    }
 
-   void _catDCManager::onCommandBegin( MsgHeader *pMsg )
+   INT32 _catDCManager::onBeginCommand ( MsgHeader *pMsg )
    {
       setWritedCommand( FALSE ) ;
       _lsn = _pDpsCB->expectLsn() ;
+
+      return SDB_OK ;
    }
 
-   void _catDCManager::onCommandEnd( MsgHeader *pMsg, INT32 result )
+   INT32 _catDCManager::onEndCommand ( MsgHeader *pMsg, INT32 result )
    {
       INT32 rc = SDB_OK ;
       DPS_LSN expectLSN = _pDpsCB->expectLsn() ;
@@ -203,12 +218,11 @@ namespace engine
          goto done ;
       }
 
-      // read lsn to expect lsn
       while( !expectLSN.invalid() &&
              _lsn.compareOffset( expectLSN.offset ) < 0 )
       {
          _mb.clear() ;
-         rc = _pDpsCB->search( _lsn, &_mb, DPS_SERCAH_ALL ) ;
+         rc = _pDpsCB->search( _lsn, &_mb, DPS_SEARCH_ALL ) ;
          if ( rc )
          {
             PD_LOG( PDERROR, "Search dps log[%d.%lld] failed, expect "
@@ -223,7 +237,6 @@ namespace engine
             _lsn.offset += header->_length ;
             _lsn.version = header->_version ;
 
-            // save to log
             rc = _pLogMgr->saveSysLog( header ) ;
             if ( rc )
             {
@@ -235,35 +248,35 @@ namespace engine
       }
 
    done:
-      return ;
+      return rc ;
    shutdown:
       PD_LOG( PDSEVERE, "Stop program because save system log, rc: %d", rc ) ;
       PMD_RESTART_DB( rc ) ;
       goto done ;
    }
 
+   INT32 _catDCManager::onSendReply ( MsgOpReply *pReply, INT32 result )
+   {
+      return SDB_OK ;
+   }
+
    INT32 _catDCManager::active()
    {
       INT32 rc = SDB_OK;
 
-      // update global info
       rc = _updateGlobalInfo() ;
       PD_RC_CHECK( rc, PDERROR, "Failed to update global info, rc: %d", rc ) ;
 
-      // update imange info
       rc = _updateImageInfo() ;
       if ( rc )
       {
          PD_LOG( PDWARNING, "Update image info failed, rc: %d", rc ) ;
-         // when update image info failed, ignore
          rc = SDB_OK ;
       }
 
-      // update dc base info
       rc = _mapData2DCMgr( _pDCMgr ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to map dc base info, rc: %d", rc ) ;
 
-      // restore log manager
       rc = _pLogMgr->restore() ;
       PD_RC_CHECK( rc, PDERROR, "Restore system log failed, rc: %d", rc ) ;
 
@@ -291,7 +304,6 @@ namespace engine
 
       switch ( pMsg->opCode )
       {
-      // command message entry, should dispatch in the entry function
       case MSG_CAT_ALTER_IMAGE_REQ :
          rc = processCommandMsg( handle, pMsg, TRUE ) ;
          break ;
@@ -325,7 +337,6 @@ namespace engine
       CHAR *pOrderBy = NULL ;
       CHAR *pHint = NULL ;
 
-      // init reply msg
       replyHeader.header.messageLength = sizeof( MsgOpReply ) ;
       replyHeader.contextID = -1 ;
       replyHeader.flags = SDB_OK ;
@@ -333,7 +344,6 @@ namespace engine
       replyHeader.startFrom = 0 ;
       _fillRspHeader( &(replyHeader.header), &(pQueryReq->header) ) ;
 
-      // extract msg
       rc = msgExtractQuery( (CHAR*)pMsg, &flag, &pCMDName, &numToSkip,
                             &numToReturn, &pQuery, &pFieldSelector,
                             &pOrderBy, &pHint ) ;
@@ -356,7 +366,6 @@ namespace engine
          }
       }
 
-      // the second dispatch msg
       switch ( pQueryReq->header.opCode )
       {
          case MSG_CAT_ALTER_IMAGE_REQ :
@@ -373,21 +382,18 @@ namespace engine
                    "rc: %d", pCMDName, pQueryReq->header.opCode, rc ) ;
 
    done:
-      // send reply
       if ( !_pCatCB->isDelayed() )
       {
          if ( 0 == ctxBuff.size() )
          {
-            rc = _pCatCB->netWork()->syncSend( handle, (void*)&replyHeader ) ;
+            rc = _pCatCB->sendReply( handle, &replyHeader, rc ) ;
          }
          else
          {
             replyHeader.header.messageLength += ctxBuff.size() ;
             replyHeader.numReturned = ctxBuff.recordNum() ;
-            rc = _pCatCB->netWork()->syncSend( handle,
-                                               &(replyHeader.header),
-                                               (void*)ctxBuff.data(),
-                                               ctxBuff.size() ) ;
+            rc = _pCatCB->sendReply( handle, &replyHeader, rc,
+                                     (void *)ctxBuff.data(), ctxBuff.size() ) ;
          }
       }
       return rc ;
@@ -488,7 +494,6 @@ namespace engine
             goto error ;
          }
 
-         // need to update dc base info
          _mapData2DCMgr( _pDCMgr ) ;
       }
       catch( std::exception &e )
@@ -509,7 +514,6 @@ namespace engine
             _pCatCB->makeGroupsObj( tmpBuild, tmpGroup ) ;
             retObj = tmpBuild.obj() ;
          }
-         // get return groups
          ctxBuff = rtnContextBuf( retObj ) ;
       }
 
@@ -565,19 +569,16 @@ namespace engine
          }
       }
 
-      // update image catalog
       rc = pDCMgr->updateImageCataGroup( _pEduCB ) ;
       PD_RC_CHECK( rc, PDERROR, "Update image catalog group failed, "
                    "rc: %d", rc ) ;
       address = pDCMgr->getImageCatAddr() ;
-      // check the address is self cluster
       if ( _isAddrConflict( address, pmdGetOptionCB()->catAddrs() ) )
       {
          rc = SDB_CAT_IMAGE_ADDR_CONFLICT ;
          goto error ;
       }
 
-      // update image dc base info
       rc = pDCMgr->updateImageDCBaseInfo( _pEduCB ) ;
       PD_RC_CHECK( rc, PDERROR, "Update image dc base info failed, "
                    "rc: %d", rc ) ;
@@ -586,7 +587,6 @@ namespace engine
       businessName = pDCMgr->getImageDCBaseInfo( _pEduCB,
                               FALSE )->getBusinessName() ;
 
-      // update info to collection
       {
          BSONObjBuilder builder ;
          if ( clusterName )
@@ -631,23 +631,19 @@ namespace engine
       clsDCBaseInfo *pBaseInfo = pDCMgr->getDCBaseInfo() ;
       vector< string > vecGroups ;
 
-      // not image
       if ( !pBaseInfo->hasImage() )
       {
          rc = SDB_CAT_IMAGE_NOT_CONFIG ;
          goto error ;
       }
 
-      // send to all groups
       _pCatCB->getGroupsName( vecGroups ) ;
       vecGroups.push_back( CATALOG_GROUPNAME ) ;
 
-      // make return obj
       rc = _pCatCB->makeGroupsObj( retObjBuilder, vecGroups ) ;
       PD_RC_CHECK( rc, PDERROR, "Make return groups object failed, rc: %d",
                    rc ) ;
 
-      // update info to collection
       {
          BSONObj updator = BSON( "$unset" << BSON( FIELD_NAME_IMAGE << 0 ) ) ;
          BSONObj matcher = BSON( FIELD_NAME_TYPE <<
@@ -687,13 +683,11 @@ namespace engine
          goto error ;
       }
 
-      // update image groups
       rc = pDCMgr->updateImageAllGroups( _pEduCB ) ;
       PD_RC_CHECK( rc, PDERROR, "Update image dc groups failed, rc: %d", rc ) ;
 
       pNodeAgent = pDCMgr->getImageNodeMgrAgent() ;
 
-      // analysis groups
       eleGroups = objQuery.getFieldDotted(
          FIELD_NAME_OPTIONS"."FIELD_NAME_GROUPS ) ;
       if ( Array == eleGroups.type() )
@@ -708,7 +702,6 @@ namespace engine
          rc = SDB_INVALIDARG ;
          goto error ;
       }
-      // if objGroups is empty, will map all groups by the same name
       if ( objGroups.isEmpty() || 0 == objGroups.nFields() )
       {
          UINT32 tmpID = 0 ;
@@ -722,7 +715,6 @@ namespace engine
                          allGroups[ i ].c_str(), rc ) ;
             if ( added )
             {
-               // check image group whether exist
                if ( SDB_OK != pNodeAgent->groupName2ID( allGroups[i].c_str(),
                                                         tmpID ) )
                {
@@ -753,18 +745,15 @@ namespace engine
          }
       }
 
-      // add catalog group
       pBaseInfo->addGroup( CATALOG_GROUPNAME, CATALOG_GROUPNAME, &added ) ;
       if ( added )
       {
          vecSourceGrp.push_back( CATALOG_GROUPNAME ) ;
       }
 
-      // construct return object
       rc = _pCatCB->makeGroupsObj( retObjBuilder, vecSourceGrp ) ;
       PD_RC_CHECK( rc, PDERROR, "Make groups obj failed, rc: %d", rc ) ;
 
-      // update info to collection
       {
          BSONObjBuilder builder ;
          _dcBaseInfoGroups2Obj( pBaseInfo, builder,
@@ -798,20 +787,17 @@ namespace engine
       BSONObj objGroups ;
       vector< string > vecGroups ;
 
-      // detach only when disable
       if ( pBaseInfo->imageIsEnabled() )
       {
          rc = SDB_CAT_IMAGE_IS_ENABLED ;
          goto error ;
       }
-      // not image
       else if ( !pBaseInfo->hasImage() )
       {
          rc = SDB_CAT_IMAGE_NOT_CONFIG ;
          goto error ;
       }
 
-      // analysis groups
       eleGroups = objQuery.getField( FIELD_NAME_OPTIONS"."FIELD_NAME_GROUPS ) ;
       if ( Array == eleGroups.type() )
       {
@@ -826,7 +812,6 @@ namespace engine
          goto error ;
       }
 
-      // if objGroups is empty, will detach all groups
       if ( objGroups.isEmpty() || 0 == objGroups.nFields() )
       {
          map<string, string> *pImgGrps = pBaseInfo->getImageGroups() ;
@@ -853,12 +838,10 @@ namespace engine
          }
       }
 
-      // make return obj
       rc = _pCatCB->makeGroupsObj( retObjBuilder, vecGroups ) ;
       PD_RC_CHECK( rc, PDERROR, "Make return groups object failed, rc: %d",
                    rc ) ;
 
-      // update info to collection
       {
          BSONObjBuilder builder ;
          _dcBaseInfoGroups2Obj( pBaseInfo, builder,
@@ -890,7 +873,6 @@ namespace engine
       clsDCBaseInfo *pBaseInfo = pDCMgr->getDCBaseInfo() ;
       vector< string > allGroups ;
 
-      // is already enable
       if ( pBaseInfo->imageIsEnabled() )
       {
          goto done ;
@@ -901,10 +883,8 @@ namespace engine
          goto error ;
       }
 
-      // check is dual writable
       if ( !pBaseInfo->isReadonly() )
       {
-         // check image wether is non-readonly
          rc = pDCMgr->updateImageDCBaseInfo( _pEduCB ) ;
          PD_RC_CHECK( rc, PDERROR, "Update image dc base info failed, rc: %d",
                       rc ) ;
@@ -915,7 +895,6 @@ namespace engine
          }
       }
 
-      // check image' all groups has image
       rc = pDCMgr->updateImageAllGroups( _pEduCB ) ;
       PD_RC_CHECK( rc, PDERROR, "Update image all groups failed, rc: %d",
                    rc ) ;
@@ -932,7 +911,6 @@ namespace engine
          }
       }
 
-      // check dc all groups has image
       _pCatCB->getGroupsName( allGroups ) ;
       allGroups.push_back( CATALOG_GROUPNAME ) ;
       for( UINT32 i = 0 ; i < allGroups.size() ; ++i )
@@ -947,16 +925,13 @@ namespace engine
          }
       }
 
-      // make return obj
       rc = _pCatCB->makeGroupsObj( retObjBuilder, allGroups ) ;
       PD_RC_CHECK( rc, PDERROR, "Make return groups object failed, rc: %d",
                    rc ) ;
 
-      // update "enable" to collection
       rc = catEnableImage( TRUE, _pEduCB, _majoritySize(), _pDmsCB, _pDpsCB ) ;
       if ( rc )
       {
-         // rollback
          catEnableImage( FALSE, _pEduCB, 1, _pDmsCB, _pDpsCB ) ;
          goto error ;
       }
@@ -994,17 +969,14 @@ namespace engine
             vecGroups.push_back( it->first ) ;
             ++it ;
          }
-         // make return obj
          rc = _pCatCB->makeGroupsObj( retObjBuilder, vecGroups ) ;
          PD_RC_CHECK( rc, PDERROR, "Make return groups object failed, rc: %d",
                       rc ) ;
 
-         // update to collection
          rc = catEnableImage( FALSE, _pEduCB, _majoritySize(), _pDmsCB,
                               _pDpsCB ) ;
          if ( rc )
          {
-            // rollback
             catEnableImage( TRUE, _pEduCB, 1, _pDmsCB, _pDpsCB ) ;
             goto error ;
          }
@@ -1028,19 +1000,16 @@ namespace engine
       _pCatCB->getGroupsName( vecGroups ) ;
       vecGroups.push_back( CATALOG_GROUPNAME ) ;
 
-      // make return obj
       rc = _pCatCB->makeGroupsObj( retObjBuilder, vecGroups ) ;
       PD_RC_CHECK( rc, PDERROR, "Make return groups object failed, rc: %d",
                    rc ) ;
 
       if ( !pBaseInfo->isActivated() )
       {
-         // update to collection
          rc = catUpdateDCStatus( FIELD_NAME_ACTIVATED, TRUE, _pEduCB,
                                  _majoritySize(), _pDmsCB, _pDpsCB ) ;
          if ( rc )
          {
-            // rollback
             catUpdateDCStatus( FIELD_NAME_ACTIVATED, FALSE, _pEduCB, 1,
                                _pDmsCB, _pDpsCB ) ;
             goto error ;
@@ -1065,19 +1034,16 @@ namespace engine
       _pCatCB->getGroupsName( vecGroups ) ;
       vecGroups.push_back( CATALOG_GROUPNAME ) ;
 
-      // make return obj
       rc = _pCatCB->makeGroupsObj( retObjBuilder, vecGroups ) ;
       PD_RC_CHECK( rc, PDERROR, "Make return groups object failed, rc: %d",
                    rc ) ;
 
       if ( pBaseInfo->isActivated() )
       {
-         // update to collection
          rc = catUpdateDCStatus( FIELD_NAME_ACTIVATED, FALSE, _pEduCB,
                                  _majoritySize(), _pDmsCB, _pDpsCB ) ;
          if ( rc )
          {
-            // rollback
             catUpdateDCStatus( FIELD_NAME_ACTIVATED, TRUE, _pEduCB, 1,
                                _pDmsCB, _pDpsCB ) ;
             goto error ;
@@ -1102,19 +1068,16 @@ namespace engine
       _pCatCB->getGroupsName( vecGroups ) ;
       vecGroups.push_back( CATALOG_GROUPNAME ) ;
 
-      // make return obj
       rc = _pCatCB->makeGroupsObj( retObjBuilder, vecGroups ) ;
       PD_RC_CHECK( rc, PDERROR, "Make return groups object failed, rc: %d",
                    rc ) ;
 
       if ( !pBaseInfo->isReadonly() )
       {
-         // update to collection
          rc = catUpdateDCStatus( FIELD_NAME_READONLY, TRUE, _pEduCB,
                                  _majoritySize(), _pDmsCB, _pDpsCB ) ;
          if ( rc )
          {
-            // rollback
             catUpdateDCStatus( FIELD_NAME_READONLY, FALSE, _pEduCB, 1,
                                _pDmsCB, _pDpsCB ) ;
             goto error ;
@@ -1139,7 +1102,6 @@ namespace engine
       _pCatCB->getGroupsName( vecGroups ) ;
       vecGroups.push_back( CATALOG_GROUPNAME ) ;
 
-      // make return obj
       rc = _pCatCB->makeGroupsObj( retObjBuilder, vecGroups ) ;
       PD_RC_CHECK( rc, PDERROR, "Make return groups object failed, rc: %d",
                    rc ) ;
@@ -1150,8 +1112,6 @@ namespace engine
          {
             if ( SDB_OK == pDCMgr->updateImageDCBaseInfo( _pEduCB ) )
             {
-               // if can update image's dc base info, need to check wether it
-               // is readonly
                if ( !pDCMgr->getImageDCBaseInfo( _pEduCB, FALSE )->isReadonly() )
                {
                   rc = SDB_CAT_DUAL_WRITABLE ;
@@ -1160,12 +1120,10 @@ namespace engine
             }
          }
 
-         // update to collection
          rc = catUpdateDCStatus( FIELD_NAME_READONLY, FALSE, _pEduCB,
                                  _majoritySize(), _pDmsCB, _pDpsCB ) ;
          if ( rc )
          {
-            // rollback
             catUpdateDCStatus( FIELD_NAME_READONLY, TRUE, _pEduCB, 1,
                                _pDmsCB, _pDpsCB ) ;
             goto error ;
@@ -1196,7 +1154,6 @@ namespace engine
       rc = pDCMgr->initialize() ;
       PD_RC_CHECK( rc, PDERROR, "Init dc manager failed, rc: %d", rc ) ;
 
-      // get data
       rc = catCheckBaseInfoExist( CAT_BASE_TYPE_GLOBAL_STR, exist,
                                   infoObj, _pEduCB ) ;
       PD_RC_CHECK( rc, PDERROR, "Check dc base info exist failed, "
@@ -1315,7 +1272,6 @@ namespace engine
 
       if ( !exist )
       {
-         // if the global info not exist, need to create
          infoObj = BSON( FIELD_NAME_TYPE << CAT_BASE_TYPE_GLOBAL_STR <<
                          FIELD_NAME_DATACENTER << BSON(
                            FIELD_NAME_CLUSTERNAME << clusterName <<
@@ -1336,7 +1292,6 @@ namespace engine
          string tmpBusName ;
          clsDCBaseInfo dcBaseInfo ;
 
-         // update dc base info
          rc = dcBaseInfo.updateFromBSON( infoObj, FALSE ) ;
          PD_RC_CHECK( rc, PDERROR, "Parse dc base info[%s] failed, rc: %d",
                       infoObj.toString().c_str() ) ;
@@ -1389,9 +1344,6 @@ namespace engine
 
       pBaseInfo = dcMgr.getDCBaseInfo() ;
 
-      // if has image, need to update image's cluster name, business name and
-      // cat address
-      // because catalog is a single thread, so don't lock_r
       if ( pBaseInfo->hasImage() )
       {
          BSONObjBuilder builder ;
@@ -1404,7 +1356,6 @@ namespace engine
          PD_RC_CHECK( rc, PDWARNING, "Update image catagroup failed, rc: %d",
                       rc ) ;
 
-         // if catalog address has update, need to reflush
          catAddr = dcMgr.getImageCatAddr() ;
          if ( 0 != ossStrcmp( catAddr.c_str(),
                               pBaseInfo->getImageAddress() ) )
@@ -1414,7 +1365,6 @@ namespace engine
                          "failed, rc: %d", rc ) ;
          }
 
-         // if image clustername or businessname has update, need to reflush
          rc = dcMgr.updateImageDCBaseInfo( _pEduCB ) ;
          PD_RC_CHECK( rc, PDWARNING, "Update image dc base info failed, "
                       "rc: %d", rc ) ;

@@ -8,7 +8,6 @@
 using namespace std ;
 using namespace bson ;
 
-// int
 TEST ( cpp_bson_base_type, int )
 {
    BSONObjBuilder ob ;
@@ -24,7 +23,6 @@ TEST ( cpp_bson_base_type, int )
    ASSERT_TRUE( obj1.toString() == "{ \"b\": 456 }" ) ;
 }
 
-// long
 TEST ( cpp_bson_base_type, long )
 {
    BSONObjBuilder ob1 ;
@@ -33,28 +31,23 @@ TEST ( cpp_bson_base_type, long )
    int num1 = 2147483647 ;
    int num2 = -2147483648 ;
 
-   // positive long
    obj = BSON( "positive_long"<<2147483647) ;
    cout<<obj.toString()<<endl ;
    ASSERT_TRUE( obj.toString() == "{ \"positive_long\": 2147483647 }" ) ;
-   // negative long
    obj = BSON( "negative_long"<<(int)-2147483648 ) ;
    cout<<obj.toString()<<endl ;
    ASSERT_TRUE( obj.toString() == "{ \"negative_long\": -2147483648 }" ) ;
 
-   // positive long
    ob1.append ( "positive_long", num1 ) ;
    obj = ob1.obj () ;
    cout<<obj.toString()<<endl ;
    ASSERT_TRUE( obj.toString() == "{ \"positive_long\": 2147483647 }" ) ;
-   // negative long
    ob2.append ( "negative_long", num2 ) ;
    obj = ob2.obj () ;
    cout<<obj.toString()<<endl ;
    ASSERT_TRUE( obj.toString() == "{ \"negative_long\": -2147483648 }" ) ;
 }
 
-// long long
 TEST ( cpp_bson_base_type, long_long )
 {
    BSONObjBuilder ob ;
@@ -68,10 +61,8 @@ TEST ( cpp_bson_base_type, long_long )
    long long num2 = 9223372036854775807ll ;
 #endif
 
-   // negative long long
    obj = BSON( "negative_long_long"<<(long long )-9223372036854775808ll ) ;
    ASSERT_TRUE( obj.toString() == "{ \"negative_long_long\": -9223372036854775808 }" );
-   // positive long long
    obj = BSON( "positive_long_long"<<9223372036854775807ll ) ;
    cout<<"num2 is: "<<num2<<endl ;
    ASSERT_TRUE( obj.toString() == "{ \"positive_long_long\": 9223372036854775807 }" );
@@ -87,7 +78,6 @@ TEST ( cpp_bson_base_type, long_long )
    ASSERT_TRUE( obj.toString() == "{ \"positive_long_long\": 9223372036854775807 }" );
 }
 
-// float
 TEST ( cpp_bson_base_type, float )
 {
    BSONObjBuilder ob ;
@@ -102,7 +92,6 @@ TEST ( cpp_bson_base_type, float )
    ASSERT_TRUE( obj.toString() == "{ \"pi\": 3.14159265359 }" ) ;
 }
 
-// string
 TEST ( cpp_bson_base_type, string )
 {
    BSONObjBuilder ob ;
@@ -117,7 +106,6 @@ TEST ( cpp_bson_base_type, string )
    ASSERT_TRUE( obj.toString() == "{ \"abc\": \"def\" }" ) ;
 }
 
-// OID
 TEST ( cpp_bson_base_type, OID )
 {
    BSONObjBuilder ob ;
@@ -144,7 +132,6 @@ TEST ( cpp_bson_base_type, OID )
    cout<<obj.toString()<<endl ;
 }
 
-// bool
 TEST ( cpp_bson_base_type, bool )
 {
    BSONObjBuilder ob ;
@@ -166,16 +153,12 @@ TEST ( cpp_bson_base_type, bool )
    ASSERT_TRUE( obj.toString() == "{ \"bool\": false }" ) ;
 }
 
-// date
 TEST ( cpp_bson_base_type, date )
 {
-//   obj = BSON( "" ) ??
    BSONObj obj ;
    BSONObjBuilder ob ;
-//   time_t s = time(NULL) ;
    time_t s = 1379404680 ;
    unsigned long long millis = s*1000 ;
-//   Date_t date ( time(NULL)*1000 ) ;
    Date_t date ( millis ) ;
    cout<<"date is: "<<date.toString ()<<endl ;
    ob.appendDate ( "date", date ) ;
@@ -183,17 +166,48 @@ TEST ( cpp_bson_base_type, date )
    cout<<obj.toString ()<<endl ;
    ASSERT_TRUE ( obj.toString()=="{ \"date\": {\"$date\": \"2013-09-17\"} }" ) ;
 
+   INT32 rc = SDB_OK ;
+   INT32 i = 0 ;
+
+   const CHAR* ppNormalDate[] = {
+      "{ \"myDate1\": { \"$date\": \"1900-01-01\" } }",
+      "{ \"myDate2\": { \"$date\": \"9999-12-31\" } }",
+      "{ \"myDate3\": { \"$date\": \"1900-01-01T00:00:00.000000Z\" } }",
+      "{ \"myDate4\": { \"$date\": \"9999-12-31T12:59:59.999999Z\" } }",
+      "{ \"myDate5\": { \"$date\": \"1900-01-01T00:00:00.000000-0100\" } }",
+      "{ \"myDate6\": { \"$date\": \"1900-01-01T00:00:00.000000+0100\" } }",
+      "{ \"myDate7\": { \"$date\": \"9999-12-31T23:59:59.999999-0100\" } }",
+      "{ \"myDate8\": { \"$date\": \"9999-12-31T12:59:59.999999+0100\" } }",
+      "{ \"myDate11\": { \"$date\": {\"$numberLong\":\"-30610339200000\" } } }", // 999-12-31
+      "{ \"myDate12\": { \"$date\": {\"$numberLong\":\"-30610252800000\" } } }", // 1000-01-01
+      "{ \"myDate13\": { \"$date\": {\"$numberLong\":\"-30610224000000\" } } }", // 1000-01-01T08:00:00:000000Z
+      "{ \"myDate14\": { \"$date\": {\"$numberLong\":\"-2209017600000\" } } }", // 1899-01-01
+      "{ \"myDate15\": { \"$date\": {\"$numberLong\":\"-2240553600000\" } } }", // 1900-01-01
+      "{ \"myDate16\": { \"$date\": {\"$numberLong\":\"-2208988800000\" } } }", // 1900-01-01T08:00:00:000000Z
+      "{ \"myDate17\": { \"$date\": {\"$numberLong\":\"0\" } } }", // 1970-01-01T08:00:00.000000Z
+      "{ \"myDate18\": { \"$date\": {\"$numberLong\":\"946656000000\" } } }", // 2000-01-01
+      "{ \"myDate19\": { \"$date\": {\"$numberLong\":\"253402185600000\" } } }", // 9999-12-31
+      "{ \"myDate20\": { \"$date\": {\"$numberLong\":\"253402275599000\" } } }" // 9999-12-31T00:00:00:000000Z
+   } ;
+
+
+
+   cout << "testing the normal date records: " << endl ;
+   for( i = 0; i < sizeof(ppNormalDate)/sizeof(const CHAR*); i++ )
+   {
+      BSONObj obj ;
+      cout << "the record is: " << ppNormalDate[i] << endl ;
+      rc = fromjson( ppNormalDate[i], obj ) ;
+      ASSERT_EQ( SDB_OK, rc ) ;
+      cout << "transform to : " << obj.toString(false,true) << endl ;
+   }
 }
 
-// timestamp
 TEST ( cpp_bson_base_type, timestamp )
 {
    BSONObj obj ;
    BSONObjBuilder ob ;
    BSONObjBuilder ob1 ;
-//   unsigned long long millisec = time(NULL)*1000 ;
-//   cout<<millisec<<endl ;
-//   ob.appendTimestamp ( "timestamp", millisec, 0 ) ;
    ob.appendTimestamp ( "timestamp", 1379323441000, 0 ) ;
    obj = ob.obj () ;
    cout<<"timestamp1 is: "<<obj.toString()<<endl ;
@@ -205,9 +219,32 @@ TEST ( cpp_bson_base_type, timestamp )
    obj = ob1.obj () ;
    cout<<"timestamp2 is: "<<obj.toString()<<endl ;
    ASSERT_TRUE ( obj.toString() == "{ \"timestamp\": {\"$timestamp\": \"2013-09-16-17.24.01.000001\"} }" ) ;
+
+   INT32 rc = SDB_OK ;
+   INT32 i  = 0 ;
+
+   const CHAR* ppNormalTimestamp[] = {
+      "{ \"myTimestamp1\": { \"$timestamp\": \"1902-01-01-00:00:00.000000\" } }",
+      "{ \"myTimestamp2\": { \"$timestamp\": \"1902-01-01T00:00:00.000000+0800\" } }",
+      "{ \"myTimestamp3\": { \"$timestamp\": \"1902-01-01T00:00:00.000000Z\" } }",
+      "{ \"myTimestamp4\": { \"$timestamp\": \"2037-12-31-23:59:59.999999\" } }",
+      "{ \"myTimestamp5\": { \"$timestamp\": \"2037-12-31T23:59:59.999999+0800\" } }",
+      "{ \"myTimestamp6\": { \"$timestamp\": \"2037-12-31T23:59:59.999999Z\" } }"
+   } ;
+
+
+   cout << "testing the normal timestamp records: " << endl ;
+   for( i = 0; i < sizeof(ppNormalTimestamp)/sizeof(const CHAR*); i++ )
+   {
+      BSONObj obj ;
+      cout << "the record is: " << ppNormalTimestamp[i] << endl ;
+      rc = fromjson( ppNormalTimestamp[i], obj ) ;
+      ASSERT_EQ( SDB_OK, rc ) ;
+      cout << "transform to : " << obj.toString(false,true) << endl ;
+   }
+
 }
 
-// binary
 TEST ( cpp_bson_base_type, binary )
 {
    int rc = 0 ;
@@ -223,45 +260,33 @@ TEST ( cpp_bson_base_type, binary )
    const char *str = "hello world" ;
    const char *str2 = "{ \"key\": { \"$binary\" : \"aGVsbG8gd29ybGQ=\", \"$type\": \"1\" } }" ;
 
-   // fromjson
    rc = fromjson( str2, temp ) ;
    ASSERT_TRUE ( rc == SDB_OK ) ;
    cout<<temp.toString(false,true)<<endl ;
    ASSERT_TRUE ( temp.toString(false,true) == "{ \"key\": { \"$binary\": \"aGVsbG8gd29ybGQ=\", \"$type\": \"1\" } }" ) ;
 
-   // BinDataGeneral
    ob6.appendBinData ( "binaryData", strlen(str),
                        BinDataGeneral, str ) ;
    obj = ob6.obj () ;
    cout<<obj.toString(false,true)<<endl ;
    ASSERT_TRUE ( obj.toString(false,true) == "{ \"binaryData\": { \"$binary\": \"aGVsbG8gd29ybGQ=\", \"$type\": \"0\" } }" ) ;
-   // Function
    ob1.appendBinData ( "binaryData", strlen(str),
                        Function, str ) ;
    obj = ob1.obj () ;
    cout<<obj.toString(false,true)<<endl ;
    ASSERT_TRUE ( obj.toString(false,true) == "{ \"binaryData\": { \"$binary\": \"aGVsbG8gd29ybGQ=\", \"$type\": \"1\" } }" ) ;
 
-//   // ByteArrayDeprecated
-//   ob2.appendBinData ( "binaryData", strlen(str),
-//                       ByteArrayDeprecated, str ) ;
-//   obj = ob2.obj () ;
-//   cout<<obj.toString(false,true)<<endl ;
-//   ASSERT_TRUE ( obj.toString(false,true) == "{ \"binaryData\": { \"$binary\": \"aGVsbG8gd29ybGQ=\", \"$type\": \"2\" } }" ) ;
 
-   // bdtUUID
    ob3.appendBinData ( "binaryData", strlen(str),
                        bdtUUID, str ) ;
    obj = ob3.obj () ;
    cout<<obj.toString(false,true)<<endl ;
    ASSERT_TRUE ( obj.toString(false,true) == "{ \"binaryData\": { \"$binary\": \"aGVsbG8gd29ybGQ=\", \"$type\": \"3\" } }" ) ;
-   // MD5Type
    ob4.appendBinData ( "binaryData", strlen(str),
                        MD5Type, str ) ;
    obj = ob4.obj () ;
    cout<<obj.toString(false,true)<<endl ;
    ASSERT_TRUE ( obj.toString(false,true) == "{ \"binaryData\": { \"$binary\": \"aGVsbG8gd29ybGQ=\", \"$type\": \"5\" } }" ) ;
-   // bdtCustom
    ob5.appendBinData ( "binaryData", strlen(str),
                        bdtCustom, str ) ;
    obj = ob5.obj () ;
@@ -269,7 +294,6 @@ TEST ( cpp_bson_base_type, binary )
    ASSERT_TRUE ( obj.toString(false,true) == "{ \"binaryData\": { \"$binary\": \"aGVsbG8gd29ybGQ=\", \"$type\": \"128\" } }" ) ;
 }
 
-// binary
 TEST ( cpp_bson_base_type, binary_fromjson )
 {
    int rc = 0 ;
@@ -289,7 +313,6 @@ TEST ( cpp_bson_base_type, binary_fromjson )
    const char *str4 = "{ \"key\": { \"$binary\" : \"aGVsbG8gd29ybGQ=\", \"$type\": \"255\" } }" ;
    const char *str5 = "{ \"key\": { \"$binary\" : \"aGVsbG8gd29ybGQ=\", \"$type\": \"256\" } }" ;
 
-   // fromjson
    rc = fromjson( str2, temp ) ;
    ASSERT_EQ ( SDB_INVALIDARG, rc ) ;
 
@@ -308,7 +331,6 @@ TEST ( cpp_bson_base_type, binary_fromjson )
 }
 
 
-// regex
 TEST ( cpp_bson_base_type, regex )
 {
    BSONObj obj1 ;
@@ -342,7 +364,6 @@ TEST ( cpp_bson_base_type, regex )
    cout<<"regex4 is: "<<obj4.toString()<<endl ;
 }
 
-// object
 TEST ( cpp_bson_base_type, object )
 {
    BSONObjBuilder ob ;
@@ -365,7 +386,6 @@ TEST ( cpp_bson_base_type, object )
    ASSERT_TRUE ( obj.toString() == "{ \"info\": { \"name\": \"sam\", \"age\": 19 }, \"home\": \"guangzhou\" }" ) ;
 }
 
-// array
 TEST ( cpp_bson_base_type, array )
 {
    BSONObjBuilder ob ;
@@ -389,19 +409,16 @@ TEST ( cpp_bson_base_type, array )
    ASSERT_TRUE ( obj.toString() == "{ \"array\": [ 1, \"hi!\", { \"c\": true } ] }" ) ;
 }
 
-// null
 TEST ( cpp_bson_base_type, null )
 {
    BSONObjBuilder ob ;
    BSONObj obj ;
-//   obj = BSON( "key" << null ) ; // ??
    ob.appendNull ( "key" ) ;
    obj = ob.obj() ;
    cout<<obj.toString()<<endl ;
    ASSERT_TRUE( obj.toString() == "{ \"key\": null }" ) ;
 }
 
-// object nest
 TEST ( cpp_bson_base_type, object_nest )
 {
    BSONObj obj ;
@@ -411,13 +428,11 @@ TEST ( cpp_bson_base_type, object_nest )
    sub.append ( "b", "hi!" ) ;
    sub.done () ;
    b.append ( "other", BSON("c"<<true) ) ;
-   // { "subobj": { "a": 1, "b": "hi!" }, "other": { "c": true } }
    obj = b.obj () ;
    cout<<obj.toString()<<endl ;
    ASSERT_TRUE ( obj.toString() == "{ \"subobj\": { \"a\": 1, \"b\": \"hi!\" }, \"other\": { \"c\": true } }" ) ;
 }
 
-// array nest
 TEST ( cpp_bson_base_type, array_nest )
 {
    BSONObj obj ;
@@ -429,12 +444,10 @@ TEST ( cpp_bson_base_type, array_nest )
    sub.done () ;
    ob.appendArray ( "other", BSON_ARRAY( "0"<<2<<"1"<<"hello!" ) ) ;
    obj = ob.obj () ;
-   // "{ \"subarray\": [ 1, \"hi!\", false ], \"other\": [ \"0\", 2, \"1\", \"hello!\" ] }"
    cout<<obj.toString()<<endl ;
    ASSERT_TRUE ( obj.toString() == "{ \"subarray\": [ 1, \"hi!\", false ], \"other\": [ \"0\", 2, \"1\", \"hello!\" ] }" ) ;
 }
 
-// other
 TEST ( cpp_bson_base_type, GT )
 {
    BSONObjBuilder ob ;
@@ -514,5 +527,38 @@ TEST ( cpp_bson_base_type, OR )
    ASSERT_TRUE( obj.toString() == "{ \"$or\": [ { \"a\": { \"$gt\": 99 } }, { \
 \"b\": { \"$gte\": 99 } }, { \"c\": { \"$lt\": 99 } }, { \"d\": { \"$lte\": 99 } }, \
 { \"e\": { \"$ne\": 99 } } ] }" ) ;
+}
+
+TEST(cpp_bson_base_type, bson_jsCompatibility_toString)
+{
+   const char *pExpect1 = "{ \"a\": 9223372036854775807, \"b\": -9223372036854775808, \"c\": 2147483648, \"d\": -2147483649, \"e\": 0 }";
+   const char *pExpect2 = "{ \"a\": { \"$numberLong\": \"9223372036854775807\" }, \"b\": { \"$numberLong\": \"-9223372036854775808\" }, \"c\": 2147483648, \"d\": -2147483649, \"e\": 0 }";
+
+   BSONObj obj;
+   BSONObjBuilder bob;
+
+   INT64 a = 9223372036854775807LL;
+   INT64 b = -9223372036854775808LL;
+   INT64 c = 2147483648LL;
+   INT64 d = -2147483649LL;
+   INT64 e = 0LL;
+
+   bob.append( "a", a );
+   bob.append( "b", b );
+   bob.append( "c", c );
+   bob.append( "d", d );
+   bob.append( "e", e );
+   obj = bob.obj() ;
+
+   cout << "disable js compatibility: " << endl << obj.toString(false, true).c_str() << endl;
+   ASSERT_EQ( 0, strncmp( obj.toString(false, true).c_str(), pExpect1, strlen(pExpect1) ) ) ;
+
+   BSONObj::setJSCompatibility( true ) ;
+   cout << "enable js compatibility: " << endl << obj.toString(false, true).c_str() << endl;
+   ASSERT_EQ( 0, strncmp( obj.toString(false, true).c_str(), pExpect2, strlen(pExpect2) ) ) ;
+
+   BSONObj::setJSCompatibility( false ) ;
+   cout << "disable js compatibility: " << endl << obj.toString(false, true).c_str() << endl;
+   ASSERT_EQ( 0, strncmp( obj.toString(false, true).c_str(), pExpect1, strlen(pExpect1) ) ) ;
 }
 

@@ -7,7 +7,6 @@
 #define COLLECTION_NAME       "testbar"
 #define COLLECTION_SPLIT      "split"
 #define COLLECTION_FULL_NAME  "testfoo.testbar"
-//#define RGNAME                ""
 
 
 #define INDEX_NAME            "testIndex"
@@ -28,10 +27,8 @@
 #define _DATAPATH2          "/home/users/tanzhaobo/data/node2"
 #define _DATAPATH3          "/home/users/tanzhaobo/data/node3"
 
-//#define HOST                "192.168.30.120"
-//#define SERVER              "50000"
-#define HOST                "localhost"
-#define SERVER              "11810"
+#define HOST                "192.168.20.42"
+#define SERVER              "50000"
 #define SERVER1             "58000"
 #define SERVER2             "58100"
 #define SERVER3             "58200"
@@ -48,7 +45,7 @@ using namespace bson ;
 
 
 /* get name have pid, add by xiaojun */
-void getUniqueName( const CHAR *modName, CHAR getName[] ) ;
+void getUniqueName( const CHAR *modName, CHAR *getName, INT32 len ) ;
 
 
 /* connect to a given database */
@@ -132,6 +129,8 @@ SINT64 getRecordNum ( sdbCursor &cursor ) ;
 /* display record */
 void displayRecord( sdbCursor &cursor ) ;
 
+INT32 delete_space( string &dest, const CHAR *src ) ;
+
 
 /******************************************************
  * The follow functions are use in cluster environment
@@ -144,7 +143,6 @@ INT32 getHostName ( CHAR *host, INT32 len ) ;
 void getDataPath ( CHAR *buffer, INT32 len, const CHAR *dp1, const CHAR *dp2 ) ;
 
 /* get name have pid, add by xiaojun */
-//void getUniqueName( const CHAR *modName, CHAR getName[] ) ;
 
 BOOLEAN isCluster( sdb &db ) ;
 

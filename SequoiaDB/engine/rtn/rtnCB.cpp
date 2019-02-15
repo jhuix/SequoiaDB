@@ -37,31 +37,44 @@
 #include "rtnCB.hpp"
 #include "pdTrace.hpp"
 #include "rtnTrace.hpp"
-#include "rtnContextSort.hpp"
-#include "rtnContextLob.hpp"
-#include "rtnContextShdOfLob.hpp"
-#include "rtnContextListLob.hpp"
 #include "dmsCB.hpp"
 #include "rtnIxmKeySorter.hpp"
-#include "../omsvc/omContextTransfer.hpp"
+
+#include "pmdController.hpp"
 
 using namespace std;
 namespace engine
 {
-
    _SDB_RTNCB::_SDB_RTNCB()
+      : _contextIdGenerator( 0 ),
+        _remoteMessenger( NULL ),
+        _textIdxVersion((INT64)RTN_INIT_TEXT_INDEX_VERSION)
    {
-      _contextHWM = 0 ;
    }
 
    _SDB_RTNCB::~_SDB_RTNCB()
    {
-      std::map<SINT64, rtnContext *>::const_iterator it ;
-      for ( it = _contextList.begin(); it != _contextList.end(); it++ )
+      FOR_EACH_CMAP_ELEMENT_S( RTN_CTX_MAP, _contextMap )
       {
          SDB_OSS_DEL ((*it).second) ;
       }
-      _contextList.clear() ;
+      FOR_EACH_CMAP_ELEMENT_END ;
+
+      _contextMap.clear() ;
+
+      if ( _remoteMessenger )
+      {
+         SDB_OSS_DEL _remoteMessenger ;
+      }
+   }
+
+   void* _SDB_RTNCB::queryInterface( SDB_INTERFACE_TYPE type )
+   {
+      if ( SDB_IF_CTXMGR == type )
+      {
+         return dynamic_cast<IContextMgr*>( this ) ;
+      }
+      return IControlBlock::queryInterface( type ) ;
    }
 
    INT32 _SDB_RTNCB::init ()
@@ -78,15 +91,59 @@ namespace engine
 
       sdbGetDMSCB()->setIxmKeySorterCreator( creator ) ;
 
+      if ( SDB_ROLE_DATA == pmdGetDBRole() )
+      {
+         _remoteMessenger = SDB_OSS_NEW rtnRemoteMessenger() ;
+         if ( !_remoteMessenger )
+         {
+            rc = SDB_OOM ;
+            PD_LOG( PDERROR, "Allocate memory for remote messenger failed, "
+                    "size[ %d ]", sizeof( rtnRemoteMessenger ) ) ;
+            goto error ;
+         }
+         rc = _remoteMessenger->init() ;
+         PD_RC_CHECK( rc, PDERROR, "Failed to initialize remote messenger, "
+                      "rc: %d", rc ) ;
+      }
+
+      _accessPlanManager.init(
+            ( SDB_ROLE_DATA == pmdGetDBRole() ||
+              SDB_ROLE_CATALOG == pmdGetDBRole() ||
+              SDB_ROLE_STANDALONE == pmdGetDBRole() ||
+              SDB_ROLE_OM == pmdGetDBRole() ) ?
+             pmdGetOptionCB()->getPlanBuckets() : 0,
+            (OPT_PLAN_CACHE_LEVEL) pmdGetOptionCB()->getPlanCacheLevel(),
+            pmdGetOptionCB()->getSortBufSize(),
+            pmdGetOptionCB()->getOptCostThreshold(),
+            pmdGetOptionCB()->isEnabledMixCmp() ) ;
+
    done:
       return rc ;
    error:
+      if ( _remoteMessenger )
+      {
+         SDB_OSS_DEL _remoteMessenger ;
+         _remoteMessenger = NULL ;
+      }
       goto done ;
    }
 
    INT32 _SDB_RTNCB::active ()
    {
-      return SDB_OK ;
+      INT32 rc = SDB_OK ;
+
+      if ( SDB_ROLE_DATA == pmdGetDBRole() )
+      {
+         SDB_ASSERT( _remoteMessenger, "Remote messenger should not be NULL" ) ;
+         rc = _remoteMessenger->active() ;
+         PD_RC_CHECK( rc, PDERROR, "Failed to active remote messenger, "
+                      "rc: %d", rc) ;
+      }
+
+   done:
+      return rc ;
+   error:
+      goto done ;
    }
 
    INT32 _SDB_RTNCB::deactive ()
@@ -96,6 +153,8 @@ namespace engine
 
    INT32 _SDB_RTNCB::fini ()
    {
+      _accessPlanManager.fini() ;
+
       dmsIxmKeySorterCreator* creator = sdbGetDMSCB()->getIxmKeySorterCreator() ;
       if ( NULL != creator )
       {
@@ -106,13 +165,45 @@ namespace engine
       return SDB_OK ;
    }
 
+   void _SDB_RTNCB::onConfigChange ()
+   {
+      _accessPlanManager.reinit(
+            ( SDB_ROLE_DATA == pmdGetDBRole() ||
+              SDB_ROLE_CATALOG == pmdGetDBRole() ||
+              SDB_ROLE_STANDALONE == pmdGetDBRole() ) ?
+            pmdGetOptionCB()->getPlanBuckets() : 0,
+            (OPT_PLAN_CACHE_LEVEL) pmdGetOptionCB()->getPlanCacheLevel(),
+            pmdGetOptionCB()->getSortBufSize(),
+            pmdGetOptionCB()->getOptCostThreshold(),
+            pmdGetOptionCB()->isEnabledMixCmp() ) ;
+   }
+
+   rtnContext* _SDB_RTNCB::contextFind ( SINT64 contextID, _pmdEDUCB *cb )
+   {
+      rtnContext *pContext = NULL ;
+      std::pair<rtnContext*, bool> ret = _contextMap.find( contextID ) ;
+      if ( ret.second )
+      {
+         if ( cb && !cb->contextFind( contextID ) )
+         {
+            PD_LOG ( PDWARNING, "Context %lld does not owned by "
+                     "current session", contextID ) ;
+         }
+         else
+         {
+            pContext = ret.first ;
+         }
+      }
+      return pContext ;
+   }
+
    // PD_TRACE_DECLARE_FUNCTION ( SDB__SDB_RTNCB_CONTEXTDEL, "_SDB_RTNCB::contextDelete" )
-   void _SDB_RTNCB::contextDelete ( SINT64 contextID, pmdEDUCB *cb )
+   void _SDB_RTNCB::contextDelete ( INT64 contextID, IExecutor *pExe )
    {
       PD_TRACE_ENTRY ( SDB__SDB_RTNCB_CONTEXTDEL ) ;
 
       rtnContext *pContext = NULL ;
-      std::map<SINT64, rtnContext*>::iterator it ;
+      pmdEDUCB *cb = ( pmdEDUCB* )pExe ;
 
       if ( cb )
       {
@@ -120,12 +211,11 @@ namespace engine
       }
 
       {
-         RTNCB_XLOCK
-         it = _contextList.find( contextID ) ;
-         if ( _contextList.end() != it )
+         pair<rtnContext*, bool> ret = _contextMap.find( contextID ) ;
+         if ( ret.second )
          {
-            pContext = it->second;
-            _contextList.erase( it ) ;
+            _contextMap.erase( contextID ) ;
+            pContext = ret.first ;
          }
       }
 
@@ -134,14 +224,13 @@ namespace engine
          INT32 reference = pContext->getReference() ;
          pContext->waitForPrefetch() ;
 
-         /// wait for sync
          if ( pContext->isWrite() && pContext->getDPSCB() &&
               pContext->getW() > 1 )
          {
             pContext->getDPSCB()->completeOpr( cb, pContext->getW() ) ;
          }
 
-         SDB_OSS_DEL pContext ;
+         sdbGetRTNContextBuilder()->release( pContext ) ;
          PD_LOG( PDDEBUG, "delete context(contextID=%lld, reference: %d)",
                  contextID, reference ) ;
       }
@@ -156,113 +245,33 @@ namespace engine
                                    _pmdEDUCB * pEDUCB )
    {
       SDB_ASSERT ( context, "context pointer can't be NULL" ) ;
+
+      if ( _contextIdGenerator.fetch() < 0 )
       {
-         RTNCB_XLOCK
-         // if hit max signed 64 bit integer?
-         if ( _contextHWM+1 < 0 )
-         {
-            return SDB_SYS ;
-         }
-
-         switch ( type )
-         {
-            case RTN_CONTEXT_DATA :
-               (*context) = SDB_OSS_NEW rtnContextData ( _contextHWM,
-                                                         pEDUCB->getID() ) ;
-               break ;
-            case RTN_CONTEXT_DUMP :
-               (*context) = SDB_OSS_NEW rtnContextDump ( _contextHWM,
-                                                         pEDUCB->getID() ) ;
-               break ;
-            case RTN_CONTEXT_COORD :
-               (*context) = SDB_OSS_NEW rtnContextCoord ( _contextHWM,
-                                                          pEDUCB->getID() ) ;
-               break ;
-            case RTN_CONTEXT_QGM :
-               (*context) = SDB_OSS_NEW rtnContextQGM ( _contextHWM,
-                                                        pEDUCB->getID() ) ;
-               break ;
-            case RTN_CONTEXT_TEMP :
-               (*context) = SDB_OSS_NEW rtnContextTemp ( _contextHWM,
-                                                         pEDUCB->getID() ) ;
-               break ;
-            case RTN_CONTEXT_SP :
-               (*context) = SDB_OSS_NEW rtnContextSP ( _contextHWM,
-                                                       pEDUCB->getID() ) ;
-               break ;
-            case RTN_CONTEXT_PARADATA :
-               (*context) = SDB_OSS_NEW rtnContextParaData( _contextHWM,
-                                                            pEDUCB->getID() ) ;
-               break ;
-            case RTN_CONTEXT_MAINCL :
-               (*context) = SDB_OSS_NEW rtnContextMainCL( _contextHWM,
-                                                         pEDUCB->getID() );
-               break;
-            case RTN_CONTEXT_SORT :
-               (*context) = SDB_OSS_NEW rtnContextSort( _contextHWM,
-                                                        pEDUCB->getID() ) ;
-               break ;
-            case RTN_CONTEXT_QGMSORT :
-               (*context) = SDB_OSS_NEW rtnContextQgmSort( _contextHWM,
-                                                            pEDUCB->getID() ) ;
-               break ;
-            case RTN_CONTEXT_DELCS :
-               (*context) = SDB_OSS_NEW rtnContextDelCS( _contextHWM,
-                                                            pEDUCB->getID() ) ;
-               break;
-            case RTN_CONTEXT_DELCL :
-               (*context) = SDB_OSS_NEW rtnContextDelCL( _contextHWM,
-                                                            pEDUCB->getID() ) ;
-               break;
-            case RTN_CONTEXT_DELMAINCL :
-               (*context) = SDB_OSS_NEW rtnContextDelMainCL( _contextHWM,
-                                                            pEDUCB->getID() ) ;
-               break;
-            case RTN_CONTEXT_EXPLAIN :
-                (*context) = SDB_OSS_NEW rtnContextExplain( _contextHWM,
-                                                            pEDUCB->getID() ) ;
-                break ;
-            case RTN_CONTEXT_LOB :
-                 (*context) = SDB_OSS_NEW rtnContextLob( _contextHWM,
-                                                         pEDUCB->getID() ) ;
-                break ;
-            case RTN_CONTEXT_SHARD_OF_LOB :
-                 (*context) = SDB_OSS_NEW rtnContextShdOfLob( _contextHWM,
-                                                              pEDUCB->getID() ) ;
-                break ;
-            case RTN_CONTEXT_LIST_LOB:
-                 (*context) = SDB_OSS_NEW rtnContextListLob( _contextHWM,
-                                                             pEDUCB->getID() ) ;
-                break ;
-            case RTN_CONTEXT_OM_TRANSFER:
-                 (*context) = SDB_OSS_NEW omContextTransfer( _contextHWM,
-                                                             pEDUCB->getID() ) ;
-                 break;
-            case RTN_CONTEXT_LOB_FETCHER:
-                 (*context) = SDB_OSS_NEW rtnContextLobFetcher( _contextHWM,
-                                                                pEDUCB->getID() ) ;
-                 break ;
-            case RTN_CONTEXT_TRANS_DUMP:
-                 (*context) = SDB_OSS_NEW _rtnContextTransDump( _contextHWM,
-                                                                pEDUCB->getID() ) ;
-                break ;
-            default :
-               PD_LOG( PDERROR, "Unknow context type: %d", type ) ;
-               return SDB_SYS ;
-         }
-
-         if ( !(*context) )
-         {
-            return SDB_OOM ;
-         }
-
-         _contextList[_contextHWM] = *context ;
-         pEDUCB->contextInsert( _contextHWM ) ;
-         contextID = _contextHWM ;
-         ++_contextHWM ;
+         return SDB_SYS ;
       }
+
+      INT64 _contextId = _contextIdGenerator.inc() ;
+      if ( _contextId < 0 )
+      {
+         return SDB_SYS ;
+      }
+
+      (*context) = sdbGetRTNContextBuilder()->create(
+                     type, _contextId, pEDUCB->getID() ) ;
+
+      if ( !(*context) )
+      {
+         return SDB_OOM ;
+      }
+
+      _contextMap.insert( _contextId, *context ) ;
+      pEDUCB->contextInsert( _contextId ) ;
+      contextID = _contextId ;
+
       PD_LOG ( PDDEBUG, "Create new context(contextID=%lld, type: %d[%s])",
                contextID, type, getContextTypeDesp(type) ) ;
+
       return SDB_OK ;
    }
 

@@ -50,6 +50,8 @@ namespace engine
 #define NAME_DROP_COLLECTION                 CMD_NAME_DROP_COLLECTION
 #define NAME_DROP_COLLECTIONSPACE            CMD_NAME_DROP_COLLECTIONSPACE
 #define NAME_DROP_INDEX                      CMD_NAME_DROP_INDEX
+#define NAME_LOAD_COLLECTIONSPACE            CMD_NAME_LOAD_COLLECTIONSPACE
+#define NAME_UNLOAD_COLLECTIONSPACE          CMD_NAME_UNLOAD_COLLECTIONSPACE
 #define NAME_GET_COUNT                       CMD_NAME_GET_COUNT
 #define NAME_GET_INDEXES                     CMD_NAME_GET_INDEXES
 #define NAME_GET_DATABLOCKS                  CMD_NAME_GET_DATABLOCKS
@@ -63,6 +65,7 @@ namespace engine
 #define NAME_LIST_STORAGEUNITS               CMD_NAME_LIST_STORAGEUNITS
 #define NAME_LIST_BACKUPS                    CMD_NAME_LIST_BACKUPS
 #define NAME_RENAME_COLLECTION               CMD_NAME_RENAME_COLLECTION
+#define NAME_RENAME_COLLECTIONSPACE          CMD_NAME_RENAME_COLLECTIONSPACE
 #define NAME_REORG_OFFLINE                   CMD_NAME_REORG_OFFLINE
 #define NAME_REORG_ONLINE                    CMD_NAME_REORG_ONLINE
 #define NAME_REORG_RECOVER                   CMD_NAME_REORG_RECOVER
@@ -78,10 +81,13 @@ namespace engine
 #define NAME_SNAPSHOT_COLLECTIONSPACES       CMD_NAME_SNAPSHOT_COLLECTIONSPACES
 #define NAME_SNAPSHOT_TRANSACTIONS_CUR       CMD_NAME_SNAPSHOT_TRANSACTIONS_CUR
 #define NAME_SNAPSHOT_TRANSACTIONS           CMD_NAME_SNAPSHOT_TRANSACTIONS
+#define NAME_SNAPSHOT_ACCESSPLANS            CMD_NAME_SNAPSHOT_ACCESSPLANS
+#define NAME_SNAPSHOT_HEALTH                 CMD_NAME_SNAPSHOT_HEALTH
 #define NAME_TEST_COLLECTION                 CMD_NAME_TEST_COLLECTION
 #define NAME_TEST_COLLECTIONSPACE            CMD_NAME_TEST_COLLECTIONSPACE
 #define NAME_SET_PDLEVEL                     CMD_NAME_SET_PDLEVEL
 #define NAME_SET_SESSIONATTR                 CMD_NAME_SETSESS_ATTR
+#define NAME_GET_SESSIONATTR                 CMD_NAME_GETSESS_ATTR
 #define NAME_SPLIT                           CMD_NAME_SPLIT
 #define NAME_TRACE_START                     CMD_NAME_TRACE_START
 #define NAME_TRACE_STOP                      CMD_NAME_TRACE_STOP
@@ -100,8 +106,10 @@ namespace engine
 #define NAME_ALTER_COLLECTION                CMD_NAME_ALTER_COLLECTION
 #define NAME_ALTER_DC                        CMD_NAME_ALTER_DC
 #define NAME_SYNC_DB                         CMD_NAME_SYNC_DB
+#define NAME_POP                             CMD_NAME_POP
+#define NAME_RELOAD_CONFIG                   CMD_NAME_RELOAD_CONFIG
+#define NAME_ANALYZE                         CMD_NAME_ANALYZE
 
-// the commands that does not supported by data nodes or standalone mode
 #define NAME_CREATE_GROUP                    CMD_NAME_CREATE_GROUP
 #define NAME_REMOVE_GROUP                    CMD_NAME_REMOVE_GROUP
 #define NAME_CREATE_NODE                     CMD_NAME_CREATE_NODE
@@ -117,6 +125,8 @@ namespace engine
 #define NAME_LIST_DOMAINS                    CMD_NAME_LIST_DOMAINS
 #define NAME_LIST_GROUPS                     CMD_NAME_LIST_GROUPS
 #define NAME_LIST_PROCEDURES                 CMD_NAME_LIST_PROCEDURES
+#define NAME_CREATE_PROCEDURE                CMD_NAME_CRT_PROCEDURE
+#define NAME_REMOVE_PROCEDURE                CMD_NAME_RM_PROCEDURE
 #define NAME_LIST_CS_IN_DOMAIN               CMD_NAME_LIST_CS_IN_DOMAIN
 #define NAME_LIST_CL_IN_DOMAIN               CMD_NAME_LIST_CL_IN_DOMAIN
 #define NAME_CREATE_CATAGROUP                CMD_NAME_CREATE_CATA_GROUP
@@ -145,6 +155,9 @@ namespace engine
       CMD_DROP_COLLECTIONSPACE               = 21,
       CMD_DROP_INDEX                         = 22,
 
+      CMD_LOAD_COLLECTIONSPACE               = 25,
+      CMD_UNLOAD_COLLECTIONSPACE             = 26,
+
       CMD_GET_COUNT                          = 30,
       CMD_GET_INDEXES                        = 31,
       CMD_GET_DATABLOCKS                     = 32,
@@ -166,8 +179,13 @@ namespace engine
       CMD_LIST_PROCEDURES                    = 52,
       CMD_LIST_CS_IN_DOMAIN                  = 53,
       CMD_LIST_CL_IN_DOMAIN                  = 54,
+      CMD_LIST_TRANS                         = 55,
+      CMD_LIST_TRANS_CURRENT                 = 56,
+      CMD_CREATE_PROCEDURE                   = 57,
+      CMD_REMOVE_PROCEDURE                   = 58,
 
       CMD_RENAME_COLLECTION                  = 60,
+      CMD_RENAME_COLLECTIONSPACE             = 61,
 
       CMD_REORG_OFFLINE                      = 70,
       CMD_REORG_ONLINE                       = 71,
@@ -175,6 +193,7 @@ namespace engine
 
       CMD_SHUTDOWN                           = 80,
 
+      CMD_SNAPSHOT_ALL                       = 89,
       CMD_SNAPSHOT_CONTEXTS                  = 90,
       CMD_SNAPSHOT_CONTEXTS_CURRENT          = 91,
       CMD_SNAPSHOT_DATABASE                  = 92,
@@ -187,12 +206,15 @@ namespace engine
       CMD_SNAPSHOT_CATA                      = 99,
       CMD_SNAPSHOT_TRANSACTIONS_CUR          = 100,
       CMD_SNAPSHOT_TRANSACTIONS              = 101,
+      CMD_SNAPSHOT_ACCESSPLANS               = 102,
+      CMD_SNAPSHOT_HEALTH                    = 103,
 
       CMD_TEST_COLLECTION                    = 110,
       CMD_TEST_COLLECTIONSPACE               = 111,
 
       CMD_SET_PDLEVEL                        = 120,
       CMD_SET_SESSIONATTR                    = 121,
+      CMD_GET_SESSIONATTR                    = 122,
 
       CMD_CREATE_GROUP                       = 130,
       CMD_CREATE_NODE                        = 131,
@@ -220,7 +242,6 @@ namespace engine
 
       CMD_ALTER_IMAGE                        = 155,
 
-      // trace commands
       CMD_TRACE_START                        = 160,
       CMD_TRACE_RESUME                       = 161,
       CMD_TRACE_STOP                         = 162,
@@ -229,6 +250,7 @@ namespace engine
       CMD_JSON_LOAD                          = 180,
 
       CMD_EXPORT_CONFIG                      = 200,
+      CMD_RELOAD_CONFIG                      = 201,
 
       CMD_REMOVE_BACKUP                      = 210,
 
@@ -239,6 +261,10 @@ namespace engine
       CMD_FORCE_STEP_UP                      = 224,
 
       CMD_SYNC_DB                            = 251,
+      CMD_POP                                = 252,
+
+      CMD_ANALYZE                            = 253,
+
       CMD_UNKNOW                             = 65535
    };
 

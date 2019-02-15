@@ -62,6 +62,12 @@ namespace engine
          goto error ;
       }
 
+      if ( !mthIsNumber1( e ) )
+      {
+         rc = SDB_INVALIDARG ;
+         PD_RC_CHECK( rc, PDERROR, "placeholder must be 1" ) ;
+      }
+
       action.setAttribute( MTH_S_ATTR_PROJECTION ) ;
       action.setFunc( &mthAbsBuild,
                       &mthAbsGet ) ;
@@ -96,6 +102,12 @@ namespace engine
          goto error ;
       }
 
+      if ( !mthIsNumber1( e ) )
+      {
+         rc = SDB_INVALIDARG ;
+         PD_RC_CHECK( rc, PDERROR, "placeholder must be 1" ) ;
+      }
+
       action.setAttribute( MTH_S_ATTR_PROJECTION ) ;
       action.setFunc( &mthCeilingBuild,
                       &mthCeilingGet ) ;
@@ -128,6 +140,12 @@ namespace engine
          PD_LOG( PDERROR, "invalid element" ) ;
          rc = SDB_INVALIDARG ;
          goto error ;
+      }
+
+      if ( !mthIsNumber1( e ) )
+      {
+         rc = SDB_INVALIDARG ;
+         PD_RC_CHECK( rc, PDERROR, "placeholder must be 1" ) ;
       }
 
       action.setAttribute( MTH_S_ATTR_PROJECTION ) ;
@@ -308,8 +326,7 @@ namespace engine
          goto error ;
       }
 #endif
-      if ( !e.isNumber() ||
-           0 == e.Number() )
+      if ( !e.isNumber() || mthIsZero(e) )
       {
          PD_LOG( PDERROR, "invalid element:%s",
                  e.toString( TRUE, TRUE ).c_str() ) ;

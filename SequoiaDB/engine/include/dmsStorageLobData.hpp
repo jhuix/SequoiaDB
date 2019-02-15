@@ -38,17 +38,76 @@
 #include "ossIO.hpp"
 #include "dmsStorageBase.hpp"
 #include "pmdEDU.hpp"
+#include "utilCache.hpp"
 
 namespace engine
 {
+   #define DMS_LOBD_FLAG_NULL       0x00000000
+   #define DMS_LOBD_FLAG_DIRECT     0x00000001
+   #define DMS_LOBD_FLAG_SPARSE     0x00000002
+
+   #define DMS_LOBD_EYECATCHER            "SDBLOBD"
+   #define DMS_LOBD_EYECATCHER_LEN        8
+
    /*
       _dmsStorageLobData define
    */
-   class _dmsStorageLobData : public SDBObject
+   class _dmsStorageLobData : public utilCachFileBase
    {
    public:
-      _dmsStorageLobData( const CHAR *fileName ) ;
+      _dmsStorageLobData( const CHAR *fileName,
+                          BOOLEAN enableSparse,
+                          BOOLEAN useDirectIO ) ;
       virtual ~_dmsStorageLobData() ;
+
+      void     enableSparse( BOOLEAN sparse ) ;
+
+   public:
+      virtual const CHAR*     getFileName() const ;
+
+      virtual INT32  prepareWrite( INT32 pageID,
+                                   const CHAR *pData,
+                                   UINT32 len,
+                                   UINT32 offset,
+                                   IExecutor *cb ) ;
+
+      virtual INT32  write( INT32 pageID, const CHAR *pData,
+                            UINT32 len, UINT32 offset,
+                            UINT32 newestMask,
+                            IExecutor *cb ) ;
+
+      virtual INT32  prepareRead( INT32 pageID,
+                                  CHAR *pData,
+                                  UINT32 len,
+                                  UINT32 offset,
+                                  IExecutor *cb ) ;
+
+      virtual INT32  read( INT32 pageID, CHAR *pData,
+                           UINT32 len, UINT32 offset,
+                           UINT32 &readLen,
+                           IExecutor *cb ) ;
+
+      virtual INT64 pageID2Offset( INT32 pageID,
+                                   UINT32 pageOffset = 0 ) const
+      {
+         return getSeek( pageID, pageOffset ) ;
+      }
+
+      virtual INT32  offset2PageID( INT64 offset,
+                                    UINT32 *pageOffset = NULL ) const
+      {
+         return getPageID( offset, pageOffset ) ;
+      }
+
+      virtual INT32  writeRaw( INT64 offset, const CHAR *pData,
+                               UINT32 len, IExecutor *cb,
+                               BOOLEAN isAligned,
+                               UINT32 newestMask = UTIL_WRITE_NEWEST_BOTH ) ;
+
+      virtual INT32  readRaw( INT64 offset, UINT32 len,
+                              CHAR *buf, UINT32 &readLen,
+                              IExecutor *cb,
+                              BOOLEAN isAligned ) ;
 
    public:
       OSS_INLINE INT64 getFileSz() const
@@ -61,9 +120,14 @@ namespace engine
          return getFileSz() - sizeof( _dmsStorageUnitHeader ) ;
       }
 
-      OSS_INLINE const std::string &getFileName() const
+      OSS_INLINE BOOLEAN isDirectIO() const
       {
-         return _fileName ;
+         return OSS_BIT_TEST( _flags, DMS_LOBD_FLAG_DIRECT ) ? TRUE : FALSE ;
+      }
+
+      OSS_INLINE BOOLEAN isEnableSparse() const
+      {
+         return OSS_BIT_TEST( _flags, DMS_LOBD_FLAG_SPARSE ) ? TRUE : FALSE ;
       }
 
       OSS_INLINE UINT32 pageSize() const { return _pageSz ; }
@@ -75,9 +139,13 @@ namespace engine
 
       INT32 open( const CHAR *path,
                   BOOLEAN createNew,
-                  BOOLEAN delWhenExist,
+                  UINT32 totalDataPages,
                   const dmsStorageInfo &info,
                   _pmdEDUCB *cb ) ;
+
+      INT32 rename( const CHAR *csName,
+                    const CHAR *suFileName,
+                    _pmdEDUCB *cb ) ;
 
       BOOLEAN isOpened() const ;
 
@@ -85,26 +153,7 @@ namespace engine
 
       INT32 remove() ;
 
-      INT32 write( DMS_LOB_PAGEID page,
-                   const CHAR *data,
-                   UINT32 len,
-                   UINT32 offset,
-                   _pmdEDUCB *cb ) ;
-
-      INT32 read( DMS_LOB_PAGEID page,
-                  UINT32 len,
-                  UINT32 offset,
-                  _pmdEDUCB *cb,
-                  CHAR *buf,
-                  UINT32 &readLen ) ;
-
       INT32 extend( INT64 len ) ;
-
-      INT32 readRaw( _pmdEDUCB *cb,
-                     UINT64 offset,
-                     UINT32 len,
-                     CHAR *buf,
-                     UINT32 &readLen ) ;
 
       INT32 flush() ;
 
@@ -118,24 +167,56 @@ namespace engine
       INT32 _getFileHeader( _dmsStorageUnitHeader &header,
                             _pmdEDUCB *cb ) ;
 
+      INT32 _writeFileHeader( const _dmsStorageUnitHeader &header,
+                              _pmdEDUCB *cb ) ;
+
       OSS_INLINE SINT64 getSeek( DMS_LOB_PAGEID page,
                                  UINT32 offset ) const
       {
-         INT64 seek = page ;
-         return ( seek << _logarithmic ) +
-                sizeof( _dmsStorageUnitHeader ) + offset ;
+         if ( page < 0 )
+         {
+            return (INT64)offset ;
+         }
+         else
+         {
+            INT64 seek = page ;
+            return ( seek << _logarithmic ) +
+                   sizeof( _dmsStorageUnitHeader ) + offset ;
+         }
       }
 
-      INT32 _reopen() ;
+      OSS_INLINE INT32  getPageID( INT64 offset,
+                                   UINT32 *pageOffset ) const
+      {
+         INT32 pageID = -1 ;
+         if ( offset < (INT64)sizeof( _dmsStorageUnitHeader ) )
+         {
+            if ( pageOffset )
+            {
+               *pageOffset = ( UINT32 )offset ;
+            }
+         }
+         else
+         {
+            offset -= sizeof( _dmsStorageUnitHeader ) ;
+            pageID = offset >> _logarithmic ;
+            if ( pageOffset )
+            {
+               *pageOffset = offset & ( _pageSz - 1 ) ;
+            }
+         }
+         return pageID ;
+      }
 
       INT32 _extend( INT64 len ) ;
+
+      INT32 _postOpen( INT32 cause ) ;
 
    private:
       std::string       _fileName ;
       CHAR              _fullPath[ OSS_MAX_PATHSIZE + 1 ] ;
       OSSFILE           _file ;
       INT64             _fileSz ;
-      INT64             _lastSz ;
       UINT32            _pageSz ;
       UINT32            _logarithmic ;
       UINT32            _flags ; 

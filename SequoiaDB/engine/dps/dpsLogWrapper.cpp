@@ -48,6 +48,8 @@
 
 namespace engine
 {
+   #define DPS_NO_WRITE_TIME                 ( 5000 )   // 5 seconds
+
    /*
       _dpsLogWrapper implement
    */
@@ -55,6 +57,12 @@ namespace engine
    {
       _initialized   = FALSE ;
       _dpslocal      = FALSE ;
+
+      _syncInterval  = 0 ;
+      _syncRecordNum = 0 ;
+      _writeReordNum = 0 ;
+      _lastWriteTick = 0 ;
+      _lastSyncTime  = 0 ;
    }
    _dpsLogWrapper::~_dpsLogWrapper()
    {
@@ -62,27 +70,54 @@ namespace engine
                   "Event handler size is not 0" ) ;
    }
 
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DPSLGWRAPP_INIT, "_dpsLogWrapper::init" )
    INT32 _dpsLogWrapper::init ()
    {
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY ( SDB__DPSLGWRAPP_INIT ) ;
+
       pmdOptionsCB *optCB = pmdGetKRCB()->getOptionCB() ;
 
       _dpslocal = optCB->isDpsLocal() ;
       _buf.setLogFileSz( optCB->getReplLogFileSz() ) ;
       _buf.setLogFileNum( optCB->getReplLogFileNum() ) ;
 
-      INT32 rc = _buf.init( optCB->getReplLogPath(),
-                            optCB->getReplLogBuffSize(),
-                            sdbGetTransCB() ) ;
-      if ( SDB_OK == rc )
+      rc = _buf.init( optCB->getReplLogPath(),
+                      optCB->getReplLogBuffSize(),
+                      sdbGetTransCB() ) ;
+      if ( SDB_OK != rc )
       {
-         _initialized = TRUE ;
+         goto error ;
+      }
+      _syncInterval = optCB->getSyncInterval() ;
+      _syncRecordNum = optCB->getSyncRecordNum() ;
+
+      pmdGetSyncMgr()->setLogAccess( this ) ;
+      pmdGetSyncMgr()->setMainUnit( this ) ;
+
+      if ( optCB->archiveOn() )
+      {
+         rc = _archiver.init( this, optCB->getArchivePath() ) ;
+         if ( SDB_OK != rc )
+         {
+            goto error ;
+         }
       }
 
+      _initialized = TRUE ;
+
+   done:
+      PD_TRACE_EXITRC( SDB__DPSLGWRAPP_INIT, rc ) ;
       return rc ;
+   error:
+      goto done ;
    }
 
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DPSLGWRAPP_REGEVENTHANDLER, "_dpsLogWrapper::regEventHandler" )
    void _dpsLogWrapper::regEventHandler( dpsEventHandler *pHandler )
    {
+      PD_TRACE_ENTRY ( SDB__DPSLGWRAPP_REGEVENTHANDLER ) ;
+
       SDB_ASSERT( pHandler, "Handle can't be NULL" ) ;
       SDB_ASSERT( pmdGetThreadEDUCB() &&
                   EDU_TYPE_MAIN == pmdGetThreadEDUCB()->getType(),
@@ -94,10 +129,15 @@ namespace engine
       }
       _vecEventHandler.push_back( pHandler ) ;
       _buf.regEventHandler( pHandler ) ;
+
+      PD_TRACE_EXIT( SDB__DPSLGWRAPP_REGEVENTHANDLER ) ;
    }
 
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DPSLGWRAPP_UNREGEVENTHANDLER, "_dpsLogWrapper::unregEventHandler" )
    void _dpsLogWrapper::unregEventHandler( dpsEventHandler *pHandler )
    {
+      PD_TRACE_ENTRY ( SDB__DPSLGWRAPP_UNREGEVENTHANDLER ) ;
+
       SDB_ASSERT( pHandler, "Handle can't be NULL" ) ;
       SDB_ASSERT( pmdGetThreadEDUCB() && 
                   EDU_TYPE_MAIN == pmdGetThreadEDUCB()->getType(),
@@ -115,32 +155,45 @@ namespace engine
          continue ;
       }
       _buf.unregEventHandler( pHandler ) ;
+
+      PD_TRACE_EXIT( SDB__DPSLGWRAPP_UNREGEVENTHANDLER ) ;
    }
 
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DPSLGWRAPP_ACTIVE, "_dpsLogWrapper::active" )
    INT32 _dpsLogWrapper::active ()
    {
       INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY ( SDB__DPSLGWRAPP_ACTIVE ) ;
+
       pmdEDUMgr *pEDUMgr = pmdGetKRCB()->getEDUMgr() ;
       EDUID eduID = PMD_INVALID_EDUID ;
 
-      // dps log writer
       rc = pEDUMgr->startEDU( EDU_TYPE_LOGGW, (void*)this, &eduID ) ;
       if ( rc )
       {
          PD_LOG( PDERROR, "Start dps log writer failed, rc: %d", rc ) ;
          goto error ;
       }
-      pEDUMgr->regSystemEDU( EDU_TYPE_LOGGW, eduID ) ;
-      // dps trans rollback task
+
       rc = pEDUMgr->startEDU( EDU_TYPE_DPSROLLBACK, NULL, &eduID ) ;
       if ( rc )
       {
          PD_LOG( PDERROR, "Start dps trans rollback failed, rc: %d", rc ) ;
          goto error ;
       }
-      pEDUMgr->regSystemEDU( EDU_TYPE_DPSROLLBACK, eduID ) ;
+
+      if ( pmdGetKRCB()->getOptionCB()->archiveOn() )
+      {
+         rc = pEDUMgr->startEDU( EDU_TYPE_LOGARCHIVEMGR, (void*)this, &eduID ) ;
+         if ( rc )
+         {
+            PD_LOG( PDERROR, "Start dps log archiving failed, rc: %d", rc ) ;
+            goto error ;
+         }
+      }
 
    done:
+      PD_TRACE_EXITRC( SDB__DPSLGWRAPP_ACTIVE, rc ) ;
       return rc ;
    error:
       goto done ;
@@ -151,11 +204,37 @@ namespace engine
       return SDB_OK ;
    }
 
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DPSLGWRAPP_FINI, "_dpsLogWrapper::fini" )
    INT32 _dpsLogWrapper::fini ()
    {
-      return SDB_OK ;
+      INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY ( SDB__DPSLGWRAPP_FINI ) ;
+
+      if ( pmdGetKRCB()->getOptionCB()->archiveOn() )
+      {
+         rc = _archiver.fini() ;
+         if ( SDB_OK != rc )
+         {
+            goto error ;
+         }
+      }
+
+   done:
+      PD_TRACE_EXITRC( SDB__DPSLGWRAPP_FINI, rc ) ;
+      return rc ;
+   error:
+      goto done ;
    }
 
+   void _dpsLogWrapper::onConfigChange ()
+   {
+      pmdOptionsCB *optCB = pmdGetKRCB()->getOptionCB() ;
+      _dpslocal = optCB->isDpsLocal() ;
+      _syncInterval = optCB->getSyncInterval() ;
+      _syncRecordNum = optCB->getSyncRecordNum() ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DPSLGWRAPP_SEARCH, "_dpsLogWrapper::search" )
    INT32 _dpsLogWrapper::search( const DPS_LSN &minLsn,
                                  _dpsMessageBlock *mb,
                                  UINT8 type,
@@ -164,6 +243,7 @@ namespace engine
                                  INT32 maxSize )
    {
       SDB_ASSERT ( _initialized, "shouldn't call search without init" ) ;
+      PD_TRACE_ENTRY ( SDB__DPSLGWRAPP_SEARCH ) ;
 
       INT32 rc = SDB_OK ;
       UINT32 length = 0 ;
@@ -193,23 +273,21 @@ namespace engine
             maxSize = (UINT32)maxSize > length ? maxSize - length : 0 ;
          }
 
-         /// max num check
          if ( 0 == maxNum )
          {
             break ;
          }
-         /// max size check
          if ( 0 == maxSize )
          {
             break ;
          }
-         /// max time check
-         if ( maxTime > 0 && time( NULL ) - bTime >= maxTime )
+         if ( maxTime > 0 && time( NULL ) - bTime >= (UINT32)maxTime )
          {
             break ;
          }
       }
 
+      PD_TRACE_EXITRC( SDB__DPSLGWRAPP_SEARCH, rc ) ;
       return rc ;
    }
 
@@ -231,9 +309,13 @@ namespace engine
       return _buf.getStartLsn ( logBufOnly ) ;
    }
 
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DPSLGWRAPP_GETCURRENTLSN, "_dpsLogWrapper::getCurrentLsn" )
    DPS_LSN _dpsLogWrapper::getCurrentLsn()
    {
-      return _buf.currentLsn() ;
+      PD_TRACE_ENTRY ( SDB__DPSLGWRAPP_GETCURRENTLSN ) ;
+      DPS_LSN lsn = _buf.currentLsn() ;
+      PD_TRACE_EXIT( SDB__DPSLGWRAPP_GETCURRENTLSN ) ;
+      return lsn ;
    }
 
    void _dpsLogWrapper::getLsnWindow( DPS_LSN &beginLsn,
@@ -241,14 +323,11 @@ namespace engine
                                       DPS_LSN *pExpectLsn,
                                       DPS_LSN *committed )
    {
-      if ( !_initialized )
+      if ( _initialized )
       {
-         return ;
+         DPS_LSN memLsn ;
+         _buf.getLsnWindow( beginLsn, memLsn, endLsn, pExpectLsn, committed ) ;
       }
-
-      DPS_LSN memLsn ;
-      _buf.getLsnWindow( beginLsn, memLsn, endLsn, pExpectLsn, committed ) ;
-      return ;
    }
 
    void _dpsLogWrapper::getLsnWindow( DPS_LSN &fileBeginLsn,
@@ -257,30 +336,39 @@ namespace engine
                                       DPS_LSN *pExpectLsn,
                                       DPS_LSN *committed )
    {
-      if ( !_initialized )
+      if ( _initialized )
       {
-         return ;
+         _buf.getLsnWindow( fileBeginLsn, memBeginLsn, endLsn,
+                            pExpectLsn, committed ) ;
       }
-
-      _buf.getLsnWindow( fileBeginLsn, memBeginLsn, endLsn,
-                         pExpectLsn, committed ) ;
-      return ;
    }
 
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DPSLGWRAPP_EXPECTLSN, "_dpsLogWrapper::expectLsn" )
    DPS_LSN _dpsLogWrapper::expectLsn()
    {
-      if ( !_initialized )
+      DPS_LSN lsn ;
+      PD_TRACE_ENTRY ( SDB__DPSLGWRAPP_EXPECTLSN ) ;
+      if ( _initialized )
       {
-         DPS_LSN lsn ;
-         return lsn ;
+         lsn = _buf.expectLsn() ;
       }
-      return _buf.expectLsn() ;
+
+      PD_TRACE_EXIT( SDB__DPSLGWRAPP_EXPECTLSN ) ;
+      return lsn ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DPSLGWRAPP_COMMITLSN, "_dpsLogWrapper::commitLsn" )
+   DPS_LSN _dpsLogWrapper::commitLsn()
+   {
+      PD_TRACE_ENTRY ( SDB__DPSLGWRAPP_COMMITLSN ) ;
+      DPS_LSN lsn = _buf.commitLsn() ;
+      PD_TRACE_EXIT( SDB__DPSLGWRAPP_COMMITLSN ) ;
+      return lsn ;
    }
 
    INT32 _dpsLogWrapper::move( const DPS_LSN_OFFSET &offset,
                                const DPS_LSN_VER &version )
    {
-      /// make sure the version is correct
       if ( DPS_INVALID_LSN_OFFSET != offset &&
            DPS_INVALID_LSN_VERSION == version )
       {
@@ -289,44 +377,69 @@ namespace engine
       return _buf.move( offset, version ) ;
    }
 
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DPSLGWRAPP_WRITEDATA, "_dpsLogWrapper::writeData" )
    void _dpsLogWrapper::writeData ( dpsMergeInfo & info )
    {
+      PD_TRACE_ENTRY ( SDB__DPSLGWRAPP_WRITEDATA ) ;
+
+      _lastWriteTick = pmdGetDBTick() ;
+      ++_writeReordNum ;
+
       _buf.writeData( info ) ;
+
+      IExecutor *cb = info.getEDUCB() ;
+
+      if ( cb )
+      {
+         if ( info.hasDummy() )
+         {
+            cb->insertLsn( info.getDummyBlock().record().head()._lsn ) ;
+         }
+         cb->insertLsn( info.getMergeBlock().record().head()._lsn ) ;
+      }
 
       if ( _vecEventHandler.size() > 0 && info.isNeedNotify() )
       {
          DPS_LSN_OFFSET offset = DPS_INVALID_LSN_OFFSET ;
-         pmdEDUCB *cb = info.getEDUCB() ;
          if ( info.hasDummy() )
          {
             offset = info.getDummyBlock().record().head()._lsn ;
-            if ( cb )
-            {
-               cb->insertLsn( offset ) ;
-            }
-
             for( UINT32 i = 0 ; i < _vecEventHandler.size() ; ++i )
             {
                _vecEventHandler[i]->onWriteLog( offset ) ;
             }
          }
          offset = info.getMergeBlock().record().head()._lsn ;
-         if ( cb )
-         {
-            cb->insertLsn( offset ) ;
-         }
          for( UINT32 i = 0 ; i < _vecEventHandler.size() ; ++i )
          {
             _vecEventHandler[i]->onWriteLog( offset ) ;
          }
       }
-      // reset
+
+      if ( info.isTransEnabled() && cb &&
+           DPS_INVALID_TRANS_ID != cb->getTransID() )
+      {
+         UINT64 transID = cb->getTransID() ;
+         cb->setCurTransLsn( info.getMergeBlock().record().head()._lsn ) ;
+
+         if ( sdbGetTransCB()->isFirstOp( transID ) )
+         {
+            sdbGetTransCB()->clearFirstOpTag( transID ) ;
+            cb->setTransID( transID ) ;
+         }
+      }
+
       info.resetInfoEx() ;
+
+      PD_TRACE_EXIT( SDB__DPSLGWRAPP_WRITEDATA ) ;
    }
 
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DPSLGWRAPP_COMPLETEOPR, "_dpsLogWrapper::completeOpr" )
    INT32 _dpsLogWrapper::completeOpr( _pmdEDUCB * cb, INT32 w )
    {
       INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY ( SDB__DPSLGWRAPP_COMPLETEOPR ) ;
+
       if ( w > 1 && cb && 0 != cb->getLsnCount() &&
            _vecEventHandler.size() > 0 )
       {
@@ -340,10 +453,11 @@ namespace engine
          }
          cb->resetLsn() ;
       }
+
+      PD_TRACE_EXITRC ( SDB__DPSLGWRAPP_COMPLETEOPR, rc ) ;
       return rc ;
    }
 
-   // record a row
    // PD_TRACE_DECLARE_FUNCTION ( SDB__DPSLGWRAPP_RECDROW, "_dpsLogWrapper::recordRow" )
    INT32 _dpsLogWrapper::recordRow( const CHAR *row, UINT32 len )
    {
@@ -369,6 +483,9 @@ namespace engine
             goto error;
          }
 
+         _lastWriteTick = pmdGetDBTick() ;
+         ++_writeReordNum ;
+
          rc = _buf.merge( block );
       }
 
@@ -382,6 +499,16 @@ namespace engine
    BOOLEAN _dpsLogWrapper::isInRestore()
    {
       return _buf.isInRestore() ;
+   }
+
+   INT32 _dpsLogWrapper::commit( BOOLEAN deeply, DPS_LSN *committedLsn )
+   {
+      ossTimestamp t ;
+      ossGetCurrentTime( t ) ;
+      _lastSyncTime = t.time * 1000 + t.microtm / 1000 ;
+      _writeReordNum = 0 ;
+
+      return _buf.commit( deeply, committedLsn ) ;
    }
 
    // PD_TRACE_DECLARE_FUNCTION ( SDB__DPSLGWRAPP_PREPARE, "prepare" )
@@ -405,6 +532,66 @@ namespace engine
       return rc ;
    error:
       goto done ;
+   }
+
+   BOOLEAN _dpsLogWrapper::isClosed() const
+   {
+      return FALSE ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DPSLGWRAPP_CANSYNC, "_dpsLogWrapper::canSync" )
+   BOOLEAN _dpsLogWrapper::canSync( BOOLEAN &force ) const
+   {
+      BOOLEAN needSync = FALSE ;
+      force = FALSE ;
+      PD_TRACE_ENTRY( SDB__DPSLGWRAPP_CANSYNC ) ;
+
+      if ( !_buf.hasDirty() )
+      {
+      }
+      else if ( _syncRecordNum > 0 && _writeReordNum >= _syncRecordNum )
+      {
+         PD_LOG( PDDEBUG, "Write record number[%u] more than threshold[%u]",
+                 _writeReordNum, _syncRecordNum ) ;
+         force = TRUE ;
+         needSync = TRUE ;
+      }
+      else if ( pmdGetTickSpanTime( _lastWriteTick ) < DPS_NO_WRITE_TIME )
+      {
+      }
+      else if ( _syncInterval > 0 )
+      {
+         ossTimestamp tm ;
+         ossGetCurrentTime( tm ) ;
+         UINT64 curTime = tm.time * 1000 + tm.microtm / 1000 ;
+
+         if ( curTime - _lastSyncTime >= _syncInterval )
+         {
+            PD_LOG( PDDEBUG, "Time interval threshold tiggered, "
+                    "CurTime:%llu, LastSyncTime:%llu, SyncInterval:%u",
+                    curTime, _lastSyncTime, _syncInterval ) ;
+            needSync = TRUE ;
+         }
+      }
+
+      PD_TRACE1 ( SDB__DPSLGWRAPP_CANSYNC, PD_PACK_INT( needSync ) ) ;
+      PD_TRACE_EXIT( SDB__DPSLGWRAPP_CANSYNC ) ;
+      return needSync ;
+   }
+
+   INT32 _dpsLogWrapper::sync( BOOLEAN force,
+                               BOOLEAN sync,
+                               IExecutor *cb )
+   {
+      return commit( sync, NULL ) ;
+   }
+
+   void _dpsLogWrapper::lock()
+   {
+   }
+
+   void _dpsLogWrapper::unlock()
+   {
    }
 
    /*

@@ -42,8 +42,8 @@
 
 namespace engine
 {
-   class ScriptEngine ;
-   class Scope ;
+   class _sptContainer ;
+   class _sptScope ;
 }
 
 class _fmpJSVM : public _fmpVM
@@ -60,16 +60,15 @@ public:
 
    virtual INT32 initGlobalDB( BSONObj &res ) ;
 
-  // virtual INT32 compile( const BSONElement &func, const CHAR *name ) ;
 
 private:
    INT32 _transCode2Str( const BSONElement &ele, std::string &str ) ;
 
 private:
-   engine::ScriptEngine *_engine ;
-   engine::Scope *_scope ;
-   std::string _cmd ;
-   void *_cursor ;
+   engine::_sptContainer   *_engine ;
+   engine::_sptScope       *_scope ;
+   std::string             _cmd ;
+   void                    *_cursor ;
 } ;
 
 #endif

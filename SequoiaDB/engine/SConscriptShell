@@ -1,27 +1,22 @@
-# -*- mode: python; -*-
-
 import os
 
 Import("shellEnv")
-Import("ssllib_file")
-Import("ssllib_file1")
 Import("guess_os")
 Import("usesm")
 if usesm:
     Import("smlib_file")
+
 sptFiles = [
-      "spt/engine.cpp",
       "spt/dbClasses.cpp",
       "spt/sptConvertor.cpp",
-      "spt/sptParseTroff.cpp",
       "spt/sptConvertorHelper.cpp",
-	  "spt/sptUtil.cpp",
       "spt/sptCommon.cpp"
       ]
 
 spt2Files = [
       "spt/sptContainer.cpp",
       "spt/sptInvoker.cpp",
+      "spt/sptObjDesc.cpp",
       "spt/sptReturnVal.cpp",
       "spt/sptScope.cpp",
       "spt/sptSPArguments.cpp",
@@ -31,16 +26,31 @@ spt2Files = [
       "spt/sptBsonobjArray.cpp",
       "spt/sptLibssh2Session.cpp",
       "spt/sptSshSession.cpp",
-      "spt/usrdef/sptUsrSsh.cpp",
+      "spt/sptRemote.cpp",
       "spt/sptProperty.cpp",
       "spt/sptGlobalFunc.cpp",
+      "spt/sptClassMetaInfo.cpp",
+      "spt/sptHelp.cpp",
+      "spt/sptWords.cpp",
+      "spt/sptParseMandoc.cpp",
+      "spt/sptFuncDef.cpp",
+      "spt/sptPrivateData.cpp",
+      "spt/usrdef/sptUsrSsh.cpp",
       "spt/usrdef/sptUsrCmd.cpp",
       "spt/usrdef/sptUsrFile.cpp",
       "spt/usrdef/sptUsrSystem.cpp",
       "spt/usrdef/sptUsrOma.cpp",
       "spt/usrdef/sptUsrOmaAssit.cpp",
       "spt/usrdef/sptUsrHash.cpp",
-      "spt/usrdef/sptUsrSdbTool.cpp"
+      "spt/usrdef/sptUsrSdbTool.cpp",
+      "spt/usrdef/sptUsrRemote.cpp",
+      "spt/usrdef/sptUsrRemoteAssit.cpp",
+      "spt/usrdef/sptUsrFilter.cpp",
+      "spt/usrdef/sptUsrFileContent.cpp",
+      "spt/usrdef/sptUsrFileCommon.cpp",
+      "spt/usrdef/sptUsrSystemCommon.cpp",
+      "spt/usrdef/sptUsrCmdCommon.cpp",
+      "spt/usrdef/sptUsrOmaCommon.cpp"
       ]
 
 ossFiles = [
@@ -50,6 +60,7 @@ ossFiles = [
       "oss/oss.cpp",
       "oss/ossErr.cpp",
       "oss/ossUtil.cpp",
+      "oss/ossFile.cpp",
       "oss/ossIO.cpp",
       "oss/ossPrimitiveFileOp.cpp",
       "oss/ossStackDump.cpp",
@@ -73,10 +84,12 @@ shellBpMain = [
       ]
 
 pdFiles = [
+      "pd/pdErr.cpp",
       "pd/pd.cpp",
       "pd/pdTrace.cpp",
       "pd/pdComponents.cpp",
-      "pd/pdFunctionList.cpp"
+      "pd/pdFunctionList.cpp",
+      "pd/pdTraceAnalysis.cpp"
       ]
 
 utilFiles = [
@@ -93,8 +106,11 @@ utilFiles = [
       "client/bson/numbers.c",
       "client/bson/bson.c",
       "client/bson/encoding.c",
+      "client/bson/common_decimal.c",
       "client/base64c.c",
       "client/cJSON.c",
+      "client/cJSON_ext.c",
+      "client/cJSON_iterator.c",
       "client/jstobs.c",
       "client/timestampParse.c",
       "client/timestampTm.c",
@@ -108,6 +124,7 @@ util2Files = [
      "bson/base64.cpp",
      "bson/nonce.cpp",
      "bson/md5.c",
+     "bson/bsonDecimal.cpp",
      "util/utilBsongen.cpp"
 ]
 
@@ -116,55 +133,6 @@ clientCFiles = [
       "client/common.c",
       "client/network.c"
       ]
-
-mdocmlFiles = [
-      "mdocml/parseMandocCpp.cpp",
-      "mdocml/eqn_html.c",
-      "mdocml/html.c",
-      "mdocml/man_html.c",
-      "mdocml/mdoc_html.c",
-      "mdocml/tbl_html.c",
-      "mdocml/mdoc_man.c",
-      "mdocml/eqn_term.c",
-      "mdocml/man_term.c",
-      "mdocml/mdoc_term.c",
-      "mdocml/term.c",
-      "mdocml/term_ascii.c",
-      "mdocml/term_ps.c",
-      "mdocml/tbl_term.c",
-      "mdocml/parseMandoc.c",
-      "mdocml/out.c",
-      "mdocml/tree.c",
-      "mdocml/compat_fgetln.c",
-      "mdocml/compat_getsubopt.c",
-      "mdocml/compat_strlcat.c",
-      "mdocml/compat_strlcpy.c",
-      "mdocml/man.c",
-      "mdocml/man_hash.c",
-      "mdocml/man_macro.c",
-      "mdocml/man_validate.c",
-      "mdocml/arch.c",
-      "mdocml/att.c",
-      "mdocml/lib.c",
-      "mdocml/mdoc.c",
-      "mdocml/mdoc_argv.c",
-      "mdocml/mdoc_hash.c",
-      "mdocml/mdoc_macro.c",
-      "mdocml/mdoc_validate.c",
-      "mdocml/st.c",
-      "mdocml/vol.c",
-      "mdocml/eqn.c",
-      "mdocml/roff.c",
-      "mdocml/tbl.c",
-      "mdocml/tbl_data.c",
-      "mdocml/tbl_layout.c",
-      "mdocml/tbl_opts.c",
-      "mdocml/chars.c",
-      "mdocml/mandoc.c",
-      "mdocml/msec.c",
-      "mdocml/read.c",
-      "mdocml/common.c"
-]
 
 ssh2Files = [
       "ssh2/agent.c",
@@ -209,26 +177,21 @@ shellEnv.StaticLibrary('ssh2', ssh2Files)
 #Utilities
 shellEnv.StaticLibrary('util', utilFiles)
 shellEnv.StaticLibrary('util2', util2Files)
-#Mdocml
-shellEnv.StaticLibrary('mdocml', mdocmlFiles)
 #Process Model
 shellEnv.StaticLibrary('pmd', pmdFiles)
 
 #Shell Executable
+#Shell Backend  Executable
 sdb = shellEnv.Program("sdb", shellMain,
-      LIBDEPS=["spt","oss","pd","util","clientc", "mdocml", "ssh2", "util2", "spt2", "pmd"],
+      LIBDEPS=["spt","oss","pd","util","clientc", "ssh2", "util2", "spt2", "pmd"],
       _LIBDEPS='$_LIBDEPS_OBJS' )
+sdbbp = shellEnv.Program("sdbbp", shellBpMain,
+      LIBDEPS=["spt","oss","pd","util","clientc", "ssh2", "util2", "spt2", "pmd"],
+      _LIBDEPS='$_LIBDEPS_OBJS' )
+shellEnv.Install( '#/bin', sdbbp )
 
 shellEnv.Install( '#/bin', sdb )
 
-#Shell Backend  Executable
-sdbbp = shellEnv.Program("sdbbp", shellBpMain,
-      LIBDEPS=["spt","oss","pd","util","clientc", "mdocml","ssh2", "util2", "spt2", "pmd"],
-      _LIBDEPS='$_LIBDEPS_OBJS' )
-
-shellEnv.Install( '#/bin', sdbbp )
 if "win32" == guess_os:
    if usesm:
       shellEnv.Install( '#/bin', smlib_file)
-   shellEnv.Install( '#/bin', ssllib_file)
-   shellEnv.Install( '#/bin', ssllib_file1)

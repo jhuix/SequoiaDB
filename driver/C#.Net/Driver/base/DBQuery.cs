@@ -1,4 +1,5 @@
 ﻿using SequoiaDB.Bson;
+using System.Collections.Generic;
 
 /** \namespace SequoiaDB
  *  \brief SequoiaDB Driver for C#.Net
@@ -15,37 +16,51 @@ namespace SequoiaDB
         private long returnRowsCount = -1;
         private int flag = 0;
 
-	    /** \memberof FLG_QUERY_STRINGOUT 0x00000001
-	     *  \brief Normally, query return bson stream, 
-	     *         when this flag is added, query return binary data stream
-	     */
-	    public const int FLG_QUERY_STRINGOUT = 0x00000001;
-	
-	    /** \memberof FLG_INSERT_CONTONDUP 0x00000080
-	     *  \brief Force to use specified hint to query,
-	     *         if database have no index assigned by the hint, fail to query
-	     */
-	    public const int FLG_QUERY_FORCE_HINT = 0x00000080;
-	
-	    /** \memberof FLG_QUERY_PARALLED 0x00000100
-	     *  \brief Enable paralled sub query
-	     */
-	    public const int FLG_QUERY_PARALLED = 0x00000100;
-	
-	    /** \memberof FLG_QUERY_WITH_RETURNDATA 0x00000200
-         *  \brief Return data in query response
+        /** \memberof FLG_QUERY_FORCE_HINT 0x00000080
+         *  \brief Force to use specified hint to query,
+         *         if database have no index assigned by the hint, fail to query
          */
-	    public const int FLG_QUERY_WITH_RETURNDATA = 0x00000200;
-	
+	    public const int FLG_QUERY_FORCE_HINT = 0x00000080;
+
+        /** \memberof FLG_QUERY_PARALLED 0x00000100
+         *  \brief Enable parallel sub query,
+         *         each sub query will finish scanning diffent part of the data
+         */
+        public const int FLG_QUERY_PARALLED = 0x00000100;
+
+        /** \memberof FLG_QUERY_WITH_RETURNDATA 0x00000200
+         *  \brief In general, query won't return data until cursor gets from database,
+         *         when add this flag, return data in query response, it will be more high-performance
+         */
+        public const int FLG_QUERY_WITH_RETURNDATA = 0x00000200;
+
 	    /** \memberof FLG_QUERY_EXPLAIN 0x00000400
-	     *  \brief Explain query
+	     *  \brief Query explain
 	     */
-        public const int FLG_QUERY_EXPLAIN = 0x00000400;
+        internal const int FLG_QUERY_EXPLAIN = 0x00000400;
 
         /** \memberof FLG_QUERY_MODIFY 0x00001000
-	     *  \brief query and modify
+	     *  \brief Query and modify
 	     */
-        public const int FLG_QUERY_MODIFY = 0x00001000;
+        internal const int FLG_QUERY_MODIFY = 0x00001000;
+
+
+        /** \memberof FLG_QUERY_PREPARE_MORE 0x00004000
+         *  \brief Enable prepare more data when query.
+         */
+        internal const int FLG_QUERY_PREPARE_MORE = 0x00004000;
+
+        /** \memberof FLG_QUERY_KEEP_SHARDINGKEY_IN_UPDATE 0x00008000
+         *  \brief The sharding key in update rule is not filtered,
+                   when executing querydAndUpdate.
+         */
+        public const int FLG_QUERY_KEEP_SHARDINGKEY_IN_UPDATE = 0x00008000;
+
+
+        internal static readonly Dictionary<int, int> flagsDir = new Dictionary<int, int>() {
+            // add mapping flags as below, if necessary:
+            //{FLG_QUERY_FORCE_HINT, NEW_FLG_QUERY_FORCE_HINT}
+        };
 
        /** \property Matcher
         *  \brief Matching rule
@@ -97,6 +112,22 @@ namespace SequoiaDB
         {
             get { return flag; }
             set { flag = value; }
+        }
+
+        internal static int RegulateFlag(int flags)
+        {
+            int erasedFlags = flags;
+            int mergedFlags = 0;
+
+            foreach(KeyValuePair<int,int> item in flagsDir)
+            {
+                if ((0 != (erasedFlags & item.Key)) && (item.Key != item.Value))
+                {
+                    erasedFlags &= ~item.Key;
+                    mergedFlags |= item.Value;
+                }
+            }
+            return erasedFlags | mergedFlags;
         }
 
    }

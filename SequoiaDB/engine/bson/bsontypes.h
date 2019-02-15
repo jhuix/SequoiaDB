@@ -1,4 +1,3 @@
-// bsontypes.h
 
 /*    Copyright 2009 10gen Inc.
  *
@@ -82,6 +81,8 @@ namespace bson {
         NumberLong = 18,
         /** max type that is not MaxKey */
         JSTypeMax=18,
+        /** decimal type */
+        NumberDecimal=100,
         /** larger than all other types */
         MaxKey=127
     };

@@ -32,135 +32,158 @@
 
    Last Changed =
 
-******************************************************************************/
+*******************************************************************************/
 
 #include "dmsCompress.hpp"
 #include "pmdEDU.hpp"
 #include "dmsRecord.hpp"
-#include <../snappy/snappy.h>
+#include "dmsTrace.hpp"
 
 using namespace bson ;
 
 namespace engine
 {
+   _dmsCompressorEntry::_dmsCompressorEntry()
+   : _compressor( NULL ),
+     _dictionary( UTIL_INVALID_DICT )
+   {
+   }
 
-   INT32 dmsCompress ( _pmdEDUCB *cb, utilCompressor *compressor,
-                       utilCompressorContext compContext,
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DMSCOMPRESSORENTRY_SETCOMPRESSOR, "_dmsCompressorEntry::setCompressor" )
+   void _dmsCompressorEntry::setCompressor( _utilCompressor *compressor )
+   {
+      PD_TRACE_ENTRY( SDB__DMSCOMPRESSORENTRY_SETCOMPRESSOR ) ;
+
+      _compressor = compressor ;
+
+      PD_TRACE_EXIT( SDB__DMSCOMPRESSORENTRY_SETCOMPRESSOR ) ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DMSCOMPRESSORENTRY_SETDICTIONARY, "_dmsCompressorEntry::setDictionary" )
+   void _dmsCompressorEntry::setDictionary( const utilDictHandle dictionary )
+   {
+      PD_TRACE_ENTRY( SDB__DMSCOMPRESSORENTRY_SETDICTIONARY ) ;
+
+      _dictionary = dictionary ;
+
+      PD_TRACE_EXIT( SDB__DMSCOMPRESSORENTRY_SETDICTIONARY ) ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__DMSCOMPRESSORENTRY_RESET, "_dmsCompressorEntry::reset" )
+   void _dmsCompressorEntry::reset()
+   {
+      PD_TRACE_ENTRY( SDB__DMSCOMPRESSORENTRY_RESET );
+
+      _compressor = NULL ;
+      _dictionary = UTIL_INVALID_DICT ;
+
+      PD_TRACE_EXIT( SDB__DMSCOMPRESSORENTRY_RESET ) ;
+   }
+
+   // PD_TRACE_DECLARE_FUNCTION ( SDB_DMSCOMPRESS2, "dmsCompress" )
+   INT32 dmsCompress ( _pmdEDUCB *cb, _dmsCompressorEntry *compressorEntry,
                        const CHAR *pInputData, INT32 inputSize,
-                       const CHAR **ppData, INT32 *pDataSize )
+                       const CHAR **ppData, INT32 *pDataSize,
+                       UINT8 &ratio )
    {
       INT32 rc = SDB_OK ;
+      PD_TRACE_ENTRY( SDB_DMSCOMPRESS2 ) ;
       CHAR *pBuff = NULL ;
-      size_t maxCompressedLen = 0 ;
+      UINT32 compressedLen = 0 ;
 
       SDB_ASSERT ( pInputData && ppData && pDataSize,
                    "Data pointer and size pointer can't be NULL" ) ;
+      SDB_ASSERT( compressorEntry,
+                  "Compressor entry pointer can't be NULL" ) ;
 
-      /*
-       * If compressor is not NULL, it's using zlib or lz4. Otherwise, compress
-       * using snappy.
-       */
-      if ( compressor )
+      _utilCompressor *compressor = compressorEntry->getCompressor() ;
+      const utilDictHandle dictionary = compressorEntry->getDictionary() ;
+      SDB_ASSERT( compressor, "Compressor pointer can't be NULL" ) ;
+      if ( !compressor )
       {
-         /*
-          * From compressor zlib and lz4, 4 bytes which specifies the original
-          * data length are stored before the actual compressed data, as the
-          * compression algorithms don't provide any way to estimate the
-          * uncompressed data length.
-          */
-         maxCompressedLen = compressor->compressBound( inputSize )
-                            + sizeof( UINT32 ) ;
-      }
-      else
-      {
-         maxCompressedLen = snappy::MaxCompressedLength ( inputSize ) ;
+         PD_LOG( PDERROR, "Occur serious error: "
+                 "The compressor handle is NULL" ) ;
+         rc = SDB_SYS ;
+         goto error ;
       }
 
-      pBuff = cb->getCompressBuff( maxCompressedLen ) ;
+      rc = compressor->compressBound( inputSize, compressedLen,
+                                      dictionary ) ;
+      PD_RC_CHECK( rc, PDERROR,
+                   "Failed to get max compressed length, rc: %d", rc ) ;
+      pBuff = cb->getCompressBuff( compressedLen ) ;
       if ( !pBuff )
       {
          PD_LOG( PDERROR, "Failed to alloc compress buff, size: %d",
-                 maxCompressedLen ) ;
+                 compressedLen ) ;
          rc = SDB_OOM ;
          goto error ;
       }
 
-      if ( NULL == compressor )
+      rc = compressor->compress( pInputData, inputSize, pBuff,
+                                 compressedLen, dictionary ) ;
+      if ( rc )
       {
-         // let's rock :)
-         snappy::RawCompress ( pInputData, (size_t)inputSize,
-                               pBuff, &maxCompressedLen ) ;
-      }
-      else
-      {
-         UINT32 actualDataBufLen = maxCompressedLen - sizeof( UINT32 ) ;
-         rc = compressor->compress( compContext,  pInputData, inputSize,
-                                    pBuff + sizeof( UINT32 ),
-                                    actualDataBufLen ) ;
-         if ( rc )
-         {
-            PD_LOG( PDERROR, "Failed to compress record, the data will stay in "
-                    "not compressed format, rc: %d", rc ) ;
-            goto error ;
-         }
-
-         //If compressed successfully, write the original length in the output.
-         maxCompressedLen = actualDataBufLen + sizeof( UINT32 ) ;
-         *(UINT32 *)pBuff = inputSize ;
+         PD_LOG( ( ( SDB_UTIL_COMPRESS_ABORT == rc ) ? PDINFO : PDERROR ),
+                   "Failed to compress data, rc: %d", rc ) ;
+         goto error ;
       }
 
-      // assign the output buffer pointer
       if ( ppData )
       {
          *ppData = pBuff ;
       }
       if ( pDataSize )
       {
-         *pDataSize = (INT32)maxCompressedLen ;
+         *pDataSize = (INT32)compressedLen ;
       }
+      ratio = (UINT8)( (*pDataSize) * 100 / inputSize ) ;
 
    done :
+      PD_TRACE_EXITRC( SDB_DMSCOMPRESS2, rc ) ;
       return rc ;
    error :
       goto done ;
    }
 
-   INT32 dmsCompress ( _pmdEDUCB *cb, utilCompressor *compressor,
-                       utilCompressorContext compContext,
-                       const BSONObj &obj,
-                       const CHAR* pOIDPtr, INT32 oidLen,
-                       const CHAR **ppData, INT32 *pDataSize )
+   // PD_TRACE_DECLARE_FUNCTION ( SDB_DMSCOMPRESS, "dmsCompress" )
+   INT32 dmsCompress ( _pmdEDUCB *cb, _dmsCompressorEntry *compressorEntry,
+                       const BSONObj &obj, const CHAR* pOIDPtr, INT32 oidLen,
+                       const CHAR **ppData, INT32 *pDataSize, UINT8 &ratio  )
    {
       INT32 rc = SDB_OK ;
-      CHAR *pTmpBuff = NULL ;
+      PD_TRACE_ENTRY( SDB_DMSCOMPRESS ) ;
+      CHAR *pObjData = NULL ;
+      INT32 objSize = 0 ;
 
-      // if we want to append OID, then
+      SDB_ASSERT( compressorEntry, "Compressor entry can't be NULL" ) ;
+
       if ( oidLen && pOIDPtr )
       {
-         INT32 tmpBuffLen = 0 ;
-         const CHAR *pObjData = NULL ;
-
-         // get the requested size by adding object size and oid size
-         INT32 requestedSize = obj.objsize() + oidLen + DMS_RECORD_METADATA_SZ ;
-         rc = cb->allocBuff( requestedSize, &pTmpBuff, tmpBuffLen ) ;
+         UINT32 requestedSize = obj.objsize() + oidLen ;
+         rc = cb->allocBuff( requestedSize, &pObjData, NULL ) ;
          if ( rc )
          {
-            PD_LOG( PDERROR, "Failed to alloc tmp buffer, size: %d",
+            PD_LOG( PDERROR, "Failed to alloc tmp buffer, size: %u",
                     requestedSize ) ;
             goto error ;
          }
-         pObjData = pTmpBuff + DMS_RECORD_METADATA_SZ ;
 
-         DMS_RECORD_SETDATA_OID ( pTmpBuff, obj.objdata(), obj.objsize(),
-                                  BSONElement(pOIDPtr) ) ;
+         *(UINT32*)pObjData = oidLen + obj.objsize() ;
+         ossMemcpy( pObjData + sizeof(UINT32), pOIDPtr, oidLen ) ;
+         ossMemcpy( pObjData + sizeof(UINT32) + oidLen,
+                    obj.objdata() + sizeof(UINT32),
+                    obj.objsize() - sizeof(UINT32) ) ;
 
-         rc = dmsCompress ( cb, compressor, compContext, pObjData,
-                            BSONObj(pObjData).objsize(), ppData, pDataSize ) ;
+         objSize = BSONObj(pObjData).objsize() ;
+         rc = dmsCompress ( cb, compressorEntry, pObjData,
+                            objSize, ppData, pDataSize, ratio ) ;
       }
       else
       {
-         rc = dmsCompress( cb, compressor, compContext, obj.objdata(),
-                           obj.objsize(), ppData, pDataSize ) ;
+         objSize = obj.objsize() ;
+         rc = dmsCompress( cb, compressorEntry, obj.objdata(),
+                           objSize, ppData, pDataSize, ratio ) ;
       }
       if ( rc )
       {
@@ -168,97 +191,79 @@ namespace engine
       }
 
    done :
-      if ( pTmpBuff )
+      if ( pObjData )
       {
-         cb->releaseBuff( pTmpBuff ) ;
+         cb->releaseBuff( pObjData ) ;
       }
+      PD_TRACE_EXITRC( SDB_DMSCOMPRESS, rc ) ;
       return rc ;
    error :
       goto done ;
    }
 
-   INT32 dmsUncompress ( _pmdEDUCB *cb, utilCompressor *compressor,
-                         utilCompressorContext compContext,
+   // PD_TRACE_DECLARE_FUNCTION ( SDB_DMSUNCOMPRESS, "dmsUncompress" )
+   INT32 dmsUncompress ( _pmdEDUCB *cb, _dmsCompressorEntry *compressorEntry,
                          const CHAR *pInputData, INT32 inputSize,
                          const CHAR **ppData, INT32 *pDataSize )
    {
       INT32 rc = SDB_OK ;
-      bool  result = FALSE ;
+      PD_TRACE_ENTRY( SDB_DMSUNCOMPRESS ) ;
       CHAR *pBuff = NULL ;
+      UINT32 uncompressedLen = 0 ;
 
       SDB_ASSERT ( pInputData && ppData && pDataSize,
                    "Data pointer and size pointer can't be NULL" ) ;
+      SDB_ASSERT( compressorEntry,
+                  "Compressor entry pointer can't be NULL" ) ;
 
-      size_t maxUncompressedLen = 0 ;
-      UINT32 destSize = 0 ;
-      if ( compressor )
+      _utilCompressor *compressor = compressorEntry->getCompressor() ;
+      SDB_ASSERT( compressor, "Compressor pointer can't be NULL" ) ;
+      if ( !compressor )
       {
-         maxUncompressedLen = *(UINT32 *)pInputData ;
-      }
-      else
-      {
-         // estimate the max possible size for uncompressed data + sanity check
-         result = snappy::GetUncompressedLength ( pInputData, (size_t)inputSize,
-                                                  &maxUncompressedLen ) ;
-         if ( !result )
-         {
-            PD_LOG( PDERROR, "Failed to get uncompressed length" ) ;
-            rc = SDB_CORRUPTED_RECORD ;
-            goto error ;
-         }
+         compressor = getCompressorByType( UTIL_COMPRESSOR_SNAPPY ) ;
       }
 
-      pBuff = cb->getUncompressBuff( maxUncompressedLen ) ;
+      if ( !compressor )
+      {
+         PD_LOG( PDERROR, "Occur serious error: "
+                 "The compressor handle is NULL" ) ;
+         rc = SDB_SYS ;
+         goto error ;
+      }
+
+      rc = compressor->getUncompressedLen( pInputData, inputSize,
+                                           uncompressedLen ) ;
+      PD_RC_CHECK( rc, PDERROR,
+                   "Failed to get uncompressed length, rc: %d", rc ) ;
+
+      pBuff = cb->getUncompressBuff( uncompressedLen ) ;
       if ( !pBuff )
       {
-         PD_LOG( PDERROR, "Failed to allocate uncompression buff, size: %d",
-                 maxUncompressedLen ) ;
+         PD_LOG( PDERROR, "Failed to allocate decompression buff, size: %d",
+                 uncompressedLen ) ;
          rc = SDB_OOM ;
          goto error ;
       }
 
-      destSize = maxUncompressedLen ;
-      if ( compressor )
-      {
-         /*
-          * First 4 bytes of the input data is the original uncompressed data
-          * length.
-          */
-         rc = compressor->decompress( compContext,
-                                      pInputData + sizeof( UINT32 ),
-                                      inputSize - sizeof( UINT32 ),
-                                      pBuff, destSize ) ;
-         result = ( SDB_OK == rc ) ? TRUE : FALSE ;
-      }
-      else
-      {
-         // let's rock :)
-         result = snappy::RawUncompress ( pInputData, (size_t)inputSize,
-                                          pBuff ) ;
-      }
-      if ( !result )
-      {
-         PD_LOG( PDERROR, "Failed to uncompress record" ) ;
-         rc = SDB_CORRUPTED_RECORD ;
-         goto error ;
-      }
+      rc = compressor->decompress( pInputData, inputSize, pBuff,
+                                   uncompressedLen,
+                                   compressorEntry->getDictionary() ) ;
+      PD_RC_CHECK( rc, PDERROR, "Failed to decompress data, rc: %d", rc ) ;
 
-      // assign return value
       if ( ppData )
       {
          *ppData = pBuff ;
       }
       if ( pDataSize )
       {
-         *pDataSize = destSize ;
+         *pDataSize = uncompressedLen ;
       }
 
    done :
+      PD_TRACE_EXITRC( SDB_DMSUNCOMPRESS, rc ) ;
       return rc ;
    error :
       goto done ;
    }
-
 }
-
 

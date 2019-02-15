@@ -59,7 +59,6 @@ using namespace engine ;
 #error "sdbbp should always have SDB_SHELL defined"
 #endif
 
-// caller should free output in the case of success
 // PD_TRACE_DECLARE_FUNCTION ( SDB_READFROMPIPE, "readFromPipe" )
 static INT32 readFromPipe ( OSSNPIPE & npipe , CHAR ** output )
 {
@@ -92,7 +91,6 @@ static INT32 readFromPipe ( OSSNPIPE & npipe , CHAR ** output )
          goto done ;
 
       boost::algorithm::trim ( buf ) ;
-      // output is freed by the caller
       *output = (CHAR *) SDB_OSS_MALLOC ( buf.size() + 1 ) ;
       if ( ! *output )
       {
@@ -122,16 +120,9 @@ void monitor_thread ( const OSSPID  shpid ,
    PD_TRACE_ENTRY ( SDB_MONITOR_THREAD );
    while ( ossIsProcessRunning ( shpid ) )
    {
-      try
-      {
-         boost::this_thread::sleep ( boost::posix_time::seconds(1) ) ;
-      }
-      catch ( boost::thread_interrupted &  )
-      {
-      }
+      ossSleep( OSS_ONE_SEC ) ;
    }
 
-   // shell has exited, so just clean up and exit the whole program
    ossCleanNamedPipeByName ( f2bName ) ;
    ossCleanNamedPipeByName ( b2fName ) ;
    PD_TRACE_EXIT ( SDB_MONITOR_THREAD );
@@ -175,13 +166,8 @@ INT32 enterDaemonMode ( sptScope *scope ,
    PD_TRACE_ENTRY ( SDB_ENTERDAEMONMODE );
    CHAR *         code        = NULL ;
    BOOLEAN        exit        = FALSE ;
-   //FILE           oldStdout   = *stdout ;
    INT32          fd          = -1 ;
    INT32          hOutFd      = -1 ;
-   //FILE *         newStdout   = NULL ;
-   //CHAR *         result      = NULL ;
-   bson::BSONObj rval ;
-   bson::BSONObj detail ;
 
    OSSNPIPE f2bPipe ;
    OSSNPIPE b2fPipe ;
@@ -204,7 +190,6 @@ INT32 enterDaemonMode ( sptScope *scope ,
                             1 , 0 , b2fPipe ) ;
    SH_VERIFY_RC
 
-   // tell front-end that initialzation finished
    rc = ossOpenNamedPipe ( waitName , OSS_NPIPE_OUTBOUND , 0 , waitPipe ) ;
    SH_VERIFY_RC
 
@@ -219,7 +204,6 @@ INT32 enterDaemonMode ( sptScope *scope ,
       rc = ossConnectNamedPipe ( f2bPipe , OSS_NPIPE_INBOUND ) ;
       SH_VERIFY_RC
 
-      // code is freed after evaluated or in done:
       rc = readFromPipe ( f2bPipe , &code )  ;
       SH_VERIFY_RC
 
@@ -232,9 +216,7 @@ INT32 enterDaemonMode ( sptScope *scope ,
       rc = ossNamedPipeToFd ( b2fPipe , &fd ) ;
       SH_VERIFY_RC
 
-      // save the fd of sdbbp.log
       hOutFd = ossDup( 1 ) ;
-      // redirect fd 1(it had been redirect to sdbbp.log) to b2fPipe
       rc = ossDup2( fd, 1 ) ;
       SH_VERIFY_RC
 
@@ -243,24 +225,14 @@ INT32 enterDaemonMode ( sptScope *scope ,
 
       if ( ! exit )
          scope->eval( code, ossStrlen( code ), "(sdbbp)", 1,
-                      SPT_EVAL_FLAG_PRINT, rval, detail ) ;
+                      SPT_EVAL_FLAG_PRINT, NULL ) ;
       SAFE_OSS_FREE ( code ) ;
-      // shell always have errno defined
       ossPrintf ( " %d", sdbGetErrno() ) ;
-      //result = NULL ;
 
-      //*stdout = oldStdout ;
-      // close the copy fd of b2fPipe
       ossCloseFd( 1 ) ;
-      // set 1 redirect back to sdbbp.log
       ossDup2( hOutFd, 1 ) ;
-      // close the copy fd of sdbbp.log
       ossCloseFd( hOutFd ) ;
 
-      // close name pipe
-      // when we close this writen name pipe, the read name pipe
-      // in front process will finish reading, and it will print
-      // the contents
       rc = ossDisconnectNamedPipe ( b2fPipe ) ;
       SH_VERIFY_RC
 
@@ -288,30 +260,19 @@ int main ( int argc , const char * argv[] )
    INT32             rc       = SDB_OK ;
    OSSPID            shpid    = OSS_INVALID_PID ;
    OSSPID            bppid    = OSS_INVALID_PID ;
-   CHAR waitName[128] ;
-   CHAR f2bName[128] ;
-   CHAR b2fName[128] ;
+   CHAR waitName[128]         = { 0 } ;
+   CHAR f2bName[128]          = { 0 } ;
+   CHAR b2fName[128]          = { 0 } ;
    engine::sptContainer container ;
    engine::sptScope *scope = NULL ;
 
-   // redirect stdout to log file, so, when we printf error info,
-   // thay will be redirected to log file
    if ( ! freopen ( SDB_BP_LOG_FILE , "a" , stdout ) )
    {
-      FILE *stream = NULL ;
-#if defined(_WINDOWS)
-      stream = freopen( "CON", "w", stdout ) ;
-#else
-      stream = freopen( "/dev/tty", "w", stdout ) ;
-#endif
-      if ( NULL == stream )
+      rc = ossResetTty() ;
+      if ( SDB_OK != rc )
       {
-         rc = SDB_SYS ;
          goto error ;
       }
-      // this can only display in linux, for in linux, father and son process
-      // share the same terminal, but in window, the follow info display in 
-      // a terminal where we can't see
       ossPrintf( "warning: failed to freopen stdout to log "
                  "file[%s]"OSS_NEWLINE, SDB_BP_LOG_FILE ) ;
    }
@@ -339,7 +300,6 @@ int main ( int argc , const char * argv[] )
    rc = container.init() ;
    SH_VERIFY_RC
 
-   // will purge engine in done:
    scope = container.newScope() ;
    SH_VERIFY_COND ( scope , SDB_SYS ) ;
 

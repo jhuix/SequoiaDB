@@ -26,6 +26,99 @@ var errMsg         = "" ;
 var rc             = SDB_OK ;
 
 /* *****************************************************************************
+SdbError Class, inherits Error
+@description: sequoiadb error object
+@author: David Li
+@date: 2016/5/26
+usage:
+    new SdbError(Error);
+    new SdbError(Error, message);
+    new SdbError(errcode, message);
+    new SdbError(message);
+    SdbError.toString();
+    SdbError.getErrCode();
+    SdbError.getErrMsg();
+examples:
+    try {
+        // ...
+    } catch(e) {
+        // throw new SdbError(e);
+        // throw new SdbError(e, "error message");
+        // throw new SdbError(SDB_SYS, "error message");
+        // throw new SdbError("error message");
+    }
+
+    try {
+        // ...
+    } catch(e) {
+        var err = new SdbError(e);
+        logger.log(PDERROR, err);
+        throw err;
+    }
+***************************************************************************** */
+var SdbError = function(err, errmsg) {
+    this.errcode = SDB_OK;
+    this.message = "";
+
+    if (err == undefined) {
+        throw "invalid err";
+    }
+
+    if (errmsg != undefined) {
+        if (typeof(errmsg) != "string") {
+            throw "invalid errmsg";
+        } else {
+            this.message = errmsg;
+        }
+    }
+
+    if (typeof(err) == "number") {
+        this.errcode = err;
+        if (err < 0) {
+            if (this.message != "") {
+                this.message += ", " + getErr(err);
+            } else {
+                this.message = getErr(err);
+            }
+        }
+    } else if (typeof(err) == "string") {
+        this.errcode = SDB_SYS;
+        this.message = err;
+    } else if (err instanceof Error) {
+        if (err instanceof SdbError) {
+            this.errcode = err.errcode;
+        } else {
+            this.errcode = SDB_SYS;
+        }
+        if (this.message != "") {
+            this.message += ", " + err.message;
+        } else {
+            this.message = err.message;
+        }
+    } else {
+        throw "invalid arguments for SdbError";
+    }
+
+    setLastError(this.errcode);
+    setLastErrMsg(this.message);
+};
+
+SdbError.prototype = new Error();
+SdbError.prototype.constructor = SdbError;
+
+SdbError.prototype.toString = function() {
+    return "SdbError: " + this.message + ", errcode=" +this.errcode;
+};
+
+SdbError.prototype.getErrCode = function() {
+    return this.errcode;
+};
+
+SdbError.prototype.getErrMsg = function() {
+    return this.message;
+};
+
+/* *****************************************************************************
 @discretion: handle system exception
 @author: Tanzhaobo
 @parameter
@@ -96,6 +189,64 @@ function exception_handle( exp, msg )
       throw SDB_SYS ;
    }
 }
+
+/* *****************************************************************************
+@discretion: trim the blanks at the head and tail of a string
+@author: Tanzhaobo
+@parameter
+   str[string]: the string to be trimmed
+@return
+   retStr[string]: the string after being trimmed
+***************************************************************************** */
+function strTrim ( str )
+{
+   return str.replace(/(^\s*)|(\s*$)/g, "") ;
+}
+
+/* *****************************************************************************
+@discretion: remove "\'" and "\"" in a string
+@author: Tanzhaobo
+@parameter
+   inputStr[string]: the string to be handle
+@return
+   outputStr[string]: the string after being handle
+***************************************************************************** */
+function removeQuotes( inputStr ) {
+   var len = inputStr.length ;
+   var outputStr = '' ;
+   for ( var i = 0; i < len; i++ ) {
+      var c = inputStr.charAt( i ) ;
+      if ( c != '\'' && c != '\"' ) {
+         outputStr += c ;
+      }
+   }
+   return outputStr ;
+} ;
+
+/* *****************************************************************************
+@discretion: remove the "\n" or "\n\r" in the string
+@author: Tanzhaobo
+@parameter
+   inputStr[string]: the string to be handle
+@return
+   outputStr[string]: the string after being handle
+***************************************************************************** */
+function removeBreak( inputStr ) {
+   var exp = null ;
+   if ( !isString( inputStr ) ) {
+      throw new SdbError( SDB_INVALIDARG, 
+         "the input argument[" + inputStr + "] is not a string" ) ;
+   }
+   var len = inputStr.length ;
+   var outputStr = '' ;
+   for ( var i = 0; i < len; i++ ) {
+      var c = inputStr.charAt( i ) ;
+      if ( c != '\n' && c != '\n\r' ) {
+         outputStr += c ;
+      }
+   }
+   return outputStr ;
+} ;
 
 /* *****************************************************************************
 @discretion: remove the "\n" or "\n\r" in the end of string
@@ -304,57 +455,6 @@ function sprintf( format )
 }
 
 /* *****************************************************************************
-@discretion: create temporary directory in remote host
-@author: Tanzhaobo
-@parameter
-   ssh[object]: ssh object
-@return void
-***************************************************************************** */
-function createTmpDir( ssh )
-{
-   var str = "" ;
-   // directories make in target host /tmp   
-   var dirs = [ OMA_PATH_TEMP_OMA_DIR,
-                OMA_PATH_TEMP_BIN_DIR,
-                OMA_PATH_TEMP_PACKET_DIR,
-                OMA_PATH_TEMP_CONF_DIR,
-                OMA_PATH_TEMP_DATA_DIR,
-                OMA_PATH_TMP_WEB_DIR,
-                OMA_PATH_TEMP_LOG_DIR,
-                OMA_PATH_TEMP_LOCAL_DIR,
-                OMA_PATH_TEMP_SPT_DIR,
-                OMA_PATH_TEMP_TEMP_DIR ] ;
-   try
-   {
-      if ( SYS_LINUX == SYS_TYPE )
-      {
-        // rm /tmp/omatmp
-        str = "rm " + OMA_PATH_TEMP_OMA_DIR + " -rf " ;
-        ssh.exec( str ) ;
-        // mkdir dirs
-        for ( var i = 0; i < dirs.length; i++ )
-        {
-           str = "mkdir -p " + dirs[i] ;
-           ssh.exec( str ) ;
-        }
-      }
-      else
-      {
-         // TODO: tanzhaobo
-      }
-   }
-   catch( e )
-   {
-      SYSEXPHANDLE( e ) ;
-      rc = GETLASTERROR() ;
-      errMsg = "Failed to create temporary directory in host[" + ssh.getPeerIP() + "]" ;
-      PD_LOG( arguments, PDERROR, FILE_NAME_FUNC,
-              errMsg + ", rc: " + rc + ", detail: " + GETLASTERRMSG() ) ;
-      exception_handle( rc, errMsg ) ;
-   }
-}
-
-/* *****************************************************************************
 @discretion: remove the temporary directory and files in temporary directory
 @author: Tanzhaobo
 @parameter
@@ -394,15 +494,28 @@ function removeTmpDir( ssh )
    ssh[object]: ssh object
 @return void
 ***************************************************************************** */
-function removeTmpDir2( ssh )
+function removeTmpDir2( ssh, isSkipPacket )
 {
    var str = "" ;
    // directories need to be removed in target host
-   var dirs = [ OMA_PATH_TEMP_BIN_DIR,
-                OMA_PATH_TEMP_PACKET_DIR,
-                OMA_PATH_TEMP_SPT_DIR,
-                OMA_PATH_TEMP_LOCAL_DIR,
-                OMA_PATH_TMP_WEB_DIR ] ;
+   var dirs = null ;
+
+   if( isSkipPacket === true )
+   {
+      dirs = [ OMA_PATH_TEMP_BIN_DIR,
+               OMA_PATH_TEMP_SPT_DIR,
+               OMA_PATH_TEMP_LOCAL_DIR,
+               OMA_PATH_TMP_WEB_DIR ] ;
+   }
+   else
+   {
+      dirs = [ OMA_PATH_TEMP_BIN_DIR,
+               OMA_PATH_TEMP_PACKET_DIR,
+               OMA_PATH_TEMP_SPT_DIR,
+               OMA_PATH_TEMP_LOCAL_DIR,
+               OMA_PATH_TMP_WEB_DIR ] ;
+   }
+
    try
    {
       if ( SYS_LINUX == SYS_TYPE )
@@ -426,6 +539,62 @@ function removeTmpDir2( ssh )
       errMsg = "Failed to remove temporary directory in host[" + ssh.getPeerIP() + "]" ;
       PD_LOG( arguments, PDWARNING, FILE_NAME_FUNC,
               errMsg + ", rc: " + rc + ", detail: " + GETLASTERRMSG() ) ;
+   }
+}
+
+
+/* *****************************************************************************
+@discretion: create temporary directory in remote host
+@author: Tanzhaobo
+@parameter
+   ssh[object]: ssh object
+@return void
+***************************************************************************** */
+function createTmpDir( ssh )
+{
+   var str = "" ;
+   // directories make in target host /tmp   
+   var dirs = [ OMA_PATH_TEMP_OMA_DIR,
+                OMA_PATH_TEMP_BIN_DIR,
+                OMA_PATH_TEMP_PACKET_DIR,
+                OMA_PATH_TEMP_CONF_DIR,
+                OMA_PATH_TEMP_DATA_DIR,
+                OMA_PATH_TMP_WEB_DIR,
+                OMA_PATH_TEMP_LOG_DIR,
+                OMA_PATH_TEMP_LOCAL_DIR,
+                OMA_PATH_TEMP_SPT_DIR,
+                OMA_PATH_TEMP_TEMP_DIR ] ;
+   try
+   {
+      if ( SYS_LINUX == SYS_TYPE )
+      {
+        // rm /tmp/omatmp
+        //str = "rm " + OMA_PATH_TEMP_OMA_DIR + " -rf " ;
+        //ssh.exec( str ) ;
+
+        removeTmpDir2( ssh, true ) ;
+
+        // mkdir dirs
+        for ( var i = 0; i < dirs.length; i++ )
+        {
+           str = "mkdir -p " + dirs[i] ;
+           ssh.exec( str ) ;
+           ssh.exec("chmod -R 777 " + dirs[i]);
+        }
+      }
+      else
+      {
+         // TODO: tanzhaobo
+      }
+   }
+   catch( e )
+   {
+      SYSEXPHANDLE( e ) ;
+      rc = GETLASTERROR() ;
+      errMsg = "Failed to create temporary directory in host[" + ssh.getPeerIP() + "]" ;
+      PD_LOG( arguments, PDERROR, FILE_NAME_FUNC,
+              errMsg + ", rc: " + rc + ", detail: " + GETLASTERRMSG() ) ;
+      exception_handle( rc, errMsg ) ;
    }
 }
 
@@ -939,7 +1108,7 @@ function getLocalCMSvc()
       if ( arr.size() > 0 )
       {
          obj = eval( '(' + arr.pos() + ')' ) ;
-         retStr = obj[SvcName2] ;
+         retStr = obj[SvcName3] ;
       }
    }
    catch( e )
@@ -1049,51 +1218,51 @@ function getAUsablePortFromRemote( ssh )
 @discretion: get the right place to change the owner of a directory
 @author: Tanzhaobo
 @parameter
-   ssh[object]: ssh object
+   path[string]: the data path
 @return
-   retPort[nunber]: return a dirctory path
+   ssh[object]: remote ssh object
+   curPath[string]: return the right place to change the owner of the path
 ***************************************************************************** */
-function getThePlaceToChangeOwner( path )
+function getChangeOwnerPath( ssh, path )
 {
-   var retStr = path ;
-   var pos = -1 ;
-   if ( SYS_LINUX == SYS_TYPE )
+   try
    {
-      var arr = path.split( '/' ) ;
-      var num = arr.length ;
-      // in case: "/" or "/opt"
-      if ( num <= 2 )
+      if ( path == undefined || path == "" || path == "/" )
       {
-         return path ;
+         throw new SdbError( SDB_INVALIDARG, "Invalid data path: " + path ) ;
       }
-      pos = path.lastIndexOf( '/' ) ;
-      // in case: "/opt/"
-      if ( pos == path.length -1 && num == 3 )
+      if ( ssh.isPathExist( path ) && !ssh.isDirectory( path ) )
       {
-         return path ;
+         throw new SdbError( SDB_INVALIDARG, sprintf( "Data path[?] should be a directory", path ) ) ;
       }
-      // otherwise
-      var len = arr[num - 1].length ; ;
-      // in case: "/opt/.../123/345"
-      if ( len )
+      var curPath = "" ;
+      var dirArr = path.split( '/' ) ;
+      var i = 0 ;
+      if ( SYS_LINUX == SYS_TYPE )
       {
-         pos = path.length - 1 - len ;
-         retStr = path.substring( 0, pos ) ;
+         for ( i = 0; i < dirArr.length; i++ )
+         {
+            if ( dirArr[i] != "" )
+            {
+               curPath = curPath + "/"  + dirArr[i] ;
+               if ( !ssh.isPathExist(curPath) )
+               {
+                  break ;
+               }
+            }
+         }
       }
-      // in case: "/opt/.../123/345/"
       else
       {
-         len = arr[num - 2].length ;
-         pos = path.length - 1 - len - 1 ;
-         retStr = path.substring( 0, pos ) ;
+        // TODO: windows
       }
+      return curPath ;
    }
-   else
+   catch( e )
    {
-     // TODO:
+         var errMsg = sprintf( "Failed to get the point to change the owner of path[?]", path ) ;
+         throw new SdbError( e, errMsg ) ;
    }
-
-   return retStr ;
 }
 
 /* *****************************************************************************
@@ -1108,11 +1277,15 @@ function getThePlaceToChangeOwner( path )
 ***************************************************************************** */
 function changeDirOwner( ssh, path, user, userGroup )
 {
-   var ret = null ;
    var str = null ;
    var cmd = null ;
+   var errMsg = null ;
    if ( SYS_LINUX == SYS_TYPE )
    {
+      // get the directory to change owner
+      var changePoint = getChangeOwnerPath( ssh, path ) ;
+      
+      // mkdir
       cmd = " mkdir -p " + path ;
       try
       {
@@ -1120,29 +1293,22 @@ function changeDirOwner( ssh, path, user, userGroup )
       }
       catch ( e )
       {
-         SYSEXPHANDLE( e ) ;
-         rc = GETLASTERROR() ;
          errMsg = sprintf( "Failed to create path[?] in host[?]", path, ssh.getPeerIP() ) ;
-         PD_LOG( arguments, PDERROR, FILE_NAME_FUNC,
-                 sprintf( errMsg + ", rc: ?, detail: ?", rc, GETLASTERRMSG() ) ) ;
-         exception_handle( rc, errMsg ) ;
+         throw new SdbError( e, errMsg ) ;
       }
-      path = getThePlaceToChangeOwner( path ) ;
+      
+      // change owner of the dirctory
       str = user + ":" + userGroup ;
-      cmd = " chown -R " + str + " " + path ;
+      cmd = " chown -R " + str + " " + changePoint ;
       try
       {
          ssh.exec( cmd ) ;
       }
       catch ( e )
       {
-         SYSEXPHANDLE( e ) ;
-         rc = GETLASTERROR() ;
          errMsg = sprintf( "Failed to change path[?]'s owner to [?] in host[?]",
-                           path, str, ssh.getPeerIP() ) ;
-         PD_LOG( arguments, PDERROR, FILE_NAME_FUNC,
-                 sprintf( errMsg + ", rc: ?, detail: ?", rc, GETLASTERRMSG() ) ) ;
-         exception_handle( rc, errMsg ) ;
+                           changePoint, str, ssh.getPeerIP() ) ;
+         throw new SdbError( e, errMsg ) ;
       }
    }
    else
@@ -1551,3 +1717,295 @@ function getPacketName( packet )
    }
    return packetname ;
 }
+
+/******************************************************************************
+type assert series
+@description: judge type of the obj
+@author: David Li
+@date: 2016/5/27
+@return: true if obj is instance of the type, otherwise false
+******************************************************************************/
+function isTypeOf(obj, type) {
+    if (obj != undefined && typeof(obj) == type) {
+        return true;
+    }
+    return false;
+};
+
+function isString(obj) {
+    return isTypeOf(obj, "string");
+};
+
+function isNumber(obj) {
+    return isTypeOf(obj, "number");
+};
+
+function isBool(obj) {
+    return isTypeOf(obj, "boolean");
+};
+
+function isObject(obj) {
+    return isTypeOf(obj, "object");
+};
+
+function isArray(obj) {
+    return isObject(obj) && (obj instanceof Array);
+};
+
+function isNotNullString(obj) {
+    if (isString(obj) && obj != "") {
+        return true;
+    }
+    return false;
+};
+
+/******************************************************************************
+Extension methods for Ssh
+@description: 
+@author: David Li
+@date: 2016/5/27
+usage:
+    Ssh.isPathExist(path);                      // true if path exists, false if not exists, throw SdbError if other error
+    Ssh.isFile(path);                           // true if path is file, false if not file, throw SdbError if path not exists or other error
+    Ssh.isDirectory(path);                      // true if path is directory, false if not directory, throw SdbError if path not exists or other error
+    Ssh.isEmptyDirectory(path);                 // true if path is empty directory, false if not empty directory, throw SdbError if path not exists or other error
+    Ssh.mkdir(path);                            // throw SdbError if failed
+    Ssh.remove(path, force, recursive);         // throw SdbError if failed
+    Ssh.chmod(path, mode, recursive)            // throw SdbError if failed
+    Ssh.chown(path, user, group, recursive);    // throw SdbError if failed
+******************************************************************************/
+Ssh.prototype.isPathExist = function Ssh_isPathExist(path) {
+    if (SYS_TYPE != SYS_LINUX) {
+        throw new SdbError(SDB_SYS, "unsupported system");
+    }
+
+    var shell = "ls " + path;
+    try { this.exec(shell); } catch(e) {}
+
+    if (this.getLastRet() == 0) {
+        return true;
+    } else {
+        var msg = this.getLastOut();
+        if ( msg.indexOf("No such file or directory") != -1 ||
+             msg.indexOf("没有那个文件或目录") != -1 )
+        {
+            setLastError(SDB_OK);
+            setLastErrMsg("");
+            return false;
+        }
+
+        var cr = msg.lastIndexOf("\n");
+        if (cr != -1) {
+            msg = msg.substring(0, cr);
+        }
+        throw new SdbError(SDB_SYS, msg);
+    }
+};
+
+Ssh.prototype.isFile = function Ssh_isFile(path) {
+    if (SYS_TYPE != SYS_LINUX) {
+        throw new SdbError(SDB_SYS, "unsupported system");
+    }
+
+    if (!this.isPathExist(path)) {
+        throw new SdbError(SDB_SYS, "No such file or directory");
+    }
+
+    var shell = "ls " + path + "/";
+    try { this.exec(shell); } catch(e) {}
+
+    if (this.getLastRet() == 0) {
+        return false; // directory
+    } else {
+        var msg = this.getLastOut();
+        if (msg.indexOf("Not a directory") != -1) {
+            setLastError(SDB_OK);
+            setLastErrMsg("");
+            return true;
+        }
+
+        var cr = msg.lastIndexOf("\n");
+        if (cr != -1) {
+            msg = msg.substring(0, cr);
+        }
+        throw new SdbError(SDB_SYS, msg);
+    }
+};
+
+Ssh.prototype.isDirectory = function Ssh_isDirectory(path) {
+    if (SYS_TYPE != SYS_LINUX) {
+        throw new SdbError(SDB_SYS, "unsupported system");
+    }
+
+    if (!this.isPathExist(path)) {
+        throw new SdbError(SDB_SYS, "No such file or directory");
+    }
+
+    var shell = "ls " + path + "/";
+    try { this.exec(shell); } catch(e) {}
+
+    if (this.getLastRet() == 0) {
+        return true; // directory
+    } else {
+        var msg = this.getLastOut();
+        if (msg.indexOf("Not a directory") != -1) {
+            setLastError(SDB_OK);
+            setLastErrMsg("");
+            return false;
+        }
+
+        var cr = msg.lastIndexOf("\n");
+        if (cr != -1) {
+            msg = msg.substring(0, cr);
+        }
+        throw new SdbError(SDB_SYS, msg);
+    }
+};
+
+Ssh.prototype.isEmptyDirectory = function Ssh_isEmptyDirectory(path) {
+    if (SYS_TYPE != SYS_LINUX) {
+        throw new SdbError(SDB_SYS, "unsupported system");
+    }
+
+    if (!this.isDirectory(path)) {
+        return false;
+    }
+
+    var shell = "ls " + path + "/*";
+    try { this.exec(shell); } catch(e) {}
+
+    if (this.getLastRet() == 0) {
+        return false;
+    } else {
+        var msg = this.getLastOut();
+        if ( msg.indexOf("No such file or directory") != -1 ||
+             msg.indexOf("没有那个文件或目录") != -1 )
+        {
+            setLastError(SDB_OK);
+            setLastErrMsg("");
+            return true;
+        }
+
+        var cr = msg.lastIndexOf("\n");
+        if (cr != -1) {
+            msg = msg.substring(0, cr);
+        }
+        throw new SdbError(SDB_SYS, msg);
+    }
+};
+
+Ssh.prototype.mkdir = function Ssh_mkdir(path) {
+    if (SYS_TYPE != SYS_LINUX) {
+        throw new SdbError(SDB_SYS, "unsupported system");
+    }
+
+    var shell = "mkdir -p " + path;
+    try { this.exec(shell); } catch(e) {}
+
+    if (this.getLastRet() == 0) {
+        return;
+    } else {
+        var msg = this.getLastOut();
+        var cr = msg.lastIndexOf("\n");
+        if (cr != -1) {
+            msg = msg.substring(0, cr);
+        }
+        throw new SdbError(SDB_SYS, msg);
+    }
+};
+
+Ssh.prototype.remove = function Ssh_remove(path, force, recursive) {
+    if (SYS_TYPE != SYS_LINUX) {
+        throw new SdbError(SDB_SYS, "unsupported system");
+    }
+
+    var shell = "rm ";
+    if (isBool(force) && force) {
+        shell += " -f ";
+    }
+    if (isBool(recursive) && recursive) {
+        shell += " -r ";
+    }
+    shell += path;
+
+    try { this.exec(shell); } catch(e) {}
+
+    if (this.getLastRet() == 0) {
+        return;
+    } else {
+        var msg = this.getLastOut();
+        var cr = msg.lastIndexOf("\n");
+        if (cr != -1) {
+            msg = msg.substring(0, cr);
+        }
+        throw new SdbError(SDB_SYS, msg);
+    }
+};
+
+Ssh.prototype.chmod = function Ssh_chmod(path, mode, recursive) {
+    if (SYS_TYPE != SYS_LINUX) {
+        throw new SdbError(SDB_SYS, "unsupported system");
+    }
+
+    if (!isNotNullString(path)) {
+        throw new SdbError(SDB_INVALIDARG, "invalid path: " + path);
+    }
+
+    if (!isNumber(mode)) {
+        throw new SdbError(SDB_INVALIDARG, "mode should be number");
+    }
+
+    var shell = "chmod ";
+    if (isBool(recursive) && recursive) {
+        shell += "-R ";
+    }
+    shell += mode + " " + path;
+    try { this.exec(shell); } catch(e) {}
+
+    if (this.getLastRet() == 0) {
+        return;
+    } else {
+        var msg = this.getLastOut();
+        var cr = msg.lastIndexOf("\n");
+        if (cr != -1) {
+            msg = msg.substring(0, cr);
+        }
+        throw new SdbError(SDB_SYS, msg);
+    }
+};
+
+Ssh.prototype.chown = function Ssh_chown(path, user, group, recursive) {
+    if (SYS_TYPE != SYS_LINUX) {
+        throw new SdbError(SDB_SYS, "unsupported system");
+    }
+
+    if (!isNotNullString(path)) {
+        throw new SdbError(SDB_INVALIDARG, "invalid path: " + path);
+    }
+
+    if (!isNotNullString(user)) {
+        throw new SdbError(SDB_INVALIDARG, "user should be string and not empty");
+    }
+
+    var shell = "chown ";
+    if (isBool(recursive) && recursive) {
+        shell += "-R ";
+    }
+    shell += user;
+    if (isNotNullString(group)) {
+        shell += ":" + group;
+    }
+    shell += " " + path;
+    try { this.exec(shell); } catch(e) {}
+
+    if (this.getLastRet() == 0) {
+        return;
+    } else {
+        var msg = this.getLastOut();
+        var cr = msg.lastIndexOf("\n");
+        if (cr != -1) {
+            msg = msg.substring(0, cr);
+        }
+        throw new SdbError(SDB_SYS, msg);
+    }
+};

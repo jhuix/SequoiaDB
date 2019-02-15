@@ -81,7 +81,7 @@ namespace engine
 
       while ( _timeout <= 0 || (INT32)timeOut <= _timeout )
       {
-         eduMgr->waitEDU( eduCB()->getID() ) ;
+         eduMgr->waitEDU( eduCB() ) ;
 
          if ( !pQueue->timed_wait_and_pop( request, OSS_ONE_SEC ) )
          {
@@ -95,7 +95,7 @@ namespace engine
          }
          timeOut = 0 ;
 
-         eduMgr->activateEDU( eduCB()->getID() ) ;
+         eduMgr->activateEDU( eduCB() ) ;
          eduCB()->incEventCount() ;
 
          if ( !request._context )
@@ -103,7 +103,6 @@ namespace engine
             continue ;
          }
 
-         // dec idle
          bpscb->_idlePrefAgentNum.dec() ;
          contextID = request._context->contextID() ;
          rc = request._context->prefetch( eduCB(), request._prefID ) ;

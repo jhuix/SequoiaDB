@@ -45,9 +45,6 @@
 namespace engine
 {
 #define DMS_COLLECTION_SPACE_NAME_SZ      127
-// page length can be 4/8/16/32/64K
-// Note that windows memory allocation granulartiy is 64K, so we need to make
-// sure each segment must be multiple of 64K
 
 #define DMS_PAGE_SIZE4K        4096    // 4K
 #define DMS_PAGE_SIZE8K        8192    // 8K
@@ -55,9 +52,7 @@ namespace engine
 #define DMS_PAGE_SIZE32K       32768   // 32K
 #define DMS_PAGE_SIZE64K       65536   // 64K
 
-#define DMS_DICT_MAX_SIZE ( 4 * 1024 * 1024 )
-
-/// for lob
+#define DMS_PAGE_SIZE64B       64
 #define DMS_PAGE_SIZE256B      256
 
 #define DMS_PAGE_SIZE128K      131072  // 128K
@@ -66,28 +61,22 @@ namespace engine
 
 #define DMS_PAGE_SIZE_DFT      DMS_PAGE_SIZE64K
 #define DMS_PAGE_SIZE_MAX      DMS_PAGE_SIZE64K
+#define DMS_PAGE_SIZE_BASE     DMS_PAGE_SIZE4K
 
 #define DMS_DEFAULT_LOB_PAGE_SZ  DMS_PAGE_SIZE256K
 #define DMS_DO_NOT_CREATE_LOB    0
 
-// the maximum number of pages * size for the storage unit
-// this number does NOT count metadata
-// max SU size:
-// 4K: 512GB
-// 8K: 1TB
-// 16K: 2TB
-// 32K: 4TB
-// 64K: 8TB
-// Note this number is 2^28
 #define DMS_MAX_PG             (128*1024*1024)
 #define DMS_MAX_SZ(x)          (((UINT64)DMS_MAX_PG)*(x))
 
-// fixed segment size 128MB
 #define DMS_SEGMENT_SZ         (128*1024*1024)
 #define DMS_SEGMENT_PG(x)      (DMS_SEGMENT_SZ/(x))
 
 #define DMS_MAX_EXTENT_SZ      DMS_SEGMENT_SZ
 #define DMS_MIN_EXTENT_SZ(x)   (x)
+#define DMS_BEST_UP_EXTENT_SZ  (16*1024*1024)
+
+#define DMS_COMPRESS_RATIO_THRESHOLD      ( 95 )
 
 #define DMS_ID_KEY_NAME        "_id"
 
@@ -104,6 +93,7 @@ namespace engine
 #define DMS_INVALID_MBID            65535
 #define DMS_INVALID_PAGESIZE        0
 #define DMS_INVALID_LOGICCSID       0xffffffff
+#define DMS_INVALID_LOGICCLID       0xffffffff
 
 #define DMS_DATA_SU_EXT_NAME        "data"
 #define DMS_INDEX_SU_EXT_NAME       "idx"
@@ -114,6 +104,9 @@ namespace engine
 #define DMS_TEMP_NAME_PATTERN       "%s%04d"
 
 #define DMS_INDEX_SORT_BUFFER_MIN_SIZE     32
+
+#define DMS_CAP_EXTENT_SZ           (32 * 1024 * 1024)
+#define DMS_CAP_EXTENT_BODY_SZ      ( DMS_CAP_EXTENT_SZ - DMS_EXTENT_METADATA_SZ )
 
    /*
       DMS TOOL FUNCTIONS:
@@ -128,7 +121,9 @@ namespace engine
       DMS_ACCESS_TYPE_DELETE,
       DMS_ACCESS_TYPE_TRUNCATE,
       DMS_ACCESS_TYPE_CRT_INDEX,
-      DMS_ACCESS_TYPE_DROP_INDEX
+      DMS_ACCESS_TYPE_DROP_INDEX,
+      DMS_ACCESS_TYPE_CRT_DICT,
+      DMS_ACCESS_TYPE_POP
    } ;
    typedef enum _DMS_ACCESS_TYPE DMS_ACCESS_TYPE ;
 
@@ -186,9 +181,6 @@ namespace engine
       {
          return compare(rhs)<0 ;
       }
-      // <0 if current object sit before argment rid
-      // =0 means extent/offset are the same
-      // >0 means current obj sit after argment rid
       INT32 compare ( const _dmsRecordID &rhs ) const
       {
          if (_extent != rhs._extent)
@@ -213,7 +205,23 @@ namespace engine
    } ;
    typedef class _dmsRecordID dmsRecordID ;
 
-   // helper function, check DMS/IXM object name validity
+   /*
+      DMS_FILE_TYPE define
+   */
+   enum DMS_FILE_TYPE
+   {
+      DMS_FILE_DATA     = 1,
+      DMS_FILE_IDX,
+      DMS_FILE_LOB
+   } ;
+
+   enum DMS_STORAGE_TYPE
+   {
+      DMS_STORAGE_NORMAL = 0,
+      DMS_STORAGE_CAPPED,
+      DMS_STORAGE_DUMMY
+   } ;
+
    BOOLEAN  dmsIsSysCSName ( const CHAR *collectionSpaceName ) ;
    INT32    dmsCheckCSName ( const CHAR *collectionSpaceName,
                              BOOLEAN sys = FALSE ) ;

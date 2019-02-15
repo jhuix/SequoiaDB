@@ -61,19 +61,20 @@ namespace engine
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__OSSEVN_WAIT );
-      boost::system_time const timeout = boost::get_system_time() + 
-            boost::posix_time::milliseconds (millisec) ;
 
+      boost::chrono::milliseconds timeout
+         = boost::chrono::milliseconds(millisec) ;
       boost::mutex::scoped_lock lock ( _mutex ) ;
 
       ++_waitNum ;
-      if ( !_signal )
+      while ( !_signal )
       {
          if ( millisec < 0 )
          {
             _cond.wait ( lock ) ;
          }
-         else if ( !_cond.timed_wait ( lock, timeout ) )
+         else if ( boost::cv_status::timeout ==
+                   _cond.wait_for( lock, timeout ) )
          {
             --_waitNum ;
             rc = SDB_TIMEOUT ;
@@ -99,7 +100,6 @@ namespace engine
       boost::mutex::scoped_lock lock ( _mutex ) ;
       _signal = 1 ;
       _useData = data ;
-      //lock.unlock () ;
       _cond.notify_one () ;
 
       PD_TRACE_EXIT ( SDB__OSSEN_SIGNAL );
@@ -113,7 +113,6 @@ namespace engine
       boost::mutex::scoped_lock lock ( _mutex ) ;
       _signal = 1 ;
       _useData = data ;
-      //lock.unlock () ;
       _cond.notify_all () ;
 
       PD_TRACE_EXIT ( SDB__OSSEN_SIGALL );

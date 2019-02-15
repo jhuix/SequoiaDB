@@ -107,6 +107,54 @@ namespace engine
       return taskCount ;
    }
 
+   UINT32 _clsTaskMgr::taskCountByCL( const CHAR *pCLName )
+   {
+      UINT32 taskCount = 0 ;
+
+      ossScopedLock lock ( &_taskLatch, SHARED ) ;
+
+      std::map<UINT64, _clsTask*>::iterator it = _taskMap.begin() ;
+      while ( it != _taskMap.end() )
+      {
+         clsTask *pTask = it->second ;
+         if ( pTask->collectionName() &&
+              '\0' != pTask->collectionName()[0] &&
+              0 == ossStrcmp( pCLName, pTask->collectionName() ) )
+         {
+            ++taskCount ;
+         }
+         ++it ;
+      }
+
+      return taskCount ;
+   }
+
+   UINT32 _clsTaskMgr::taskCountByCS( const CHAR *pCSName )
+   {
+      UINT32 taskCount = 0 ;
+
+      ossScopedLock lock ( &_taskLatch, SHARED ) ;
+
+      std::map<UINT64, _clsTask*>::iterator it = _taskMap.begin() ;
+      while ( it != _taskMap.end() )
+      {
+         clsTask *pTask = it->second ;
+         if ( pTask->collectionSpaceName() &&
+              0 == ossStrcmp( pCSName, pTask->collectionSpaceName() ) )
+         {
+            ++taskCount ;
+         }
+         ++it ;
+      }
+
+      return taskCount ;
+   }
+
+   INT32 _clsTaskMgr::waitTaskEvent( INT64 millisec )
+   {
+      return _taskEvent.wait( millisec ) ;
+   }
+
    PD_TRACE_DECLARE_FUNCTION ( SDB__CLSTKMGR_ADDTK, "_clsTaskMgr::addTask" )
    INT32 _clsTaskMgr::addTask ( _clsTask * pTask, UINT64 taskID )
    {
@@ -125,7 +173,6 @@ namespace engine
       while ( it != _taskMap.end() )
       {
          indexTask = it->second ;
-         ++it ;
 
          if ( taskID == it->first ||
               ( pTask->taskType() == indexTask->taskType() &&
@@ -138,8 +185,8 @@ namespace engine
             rc = SDB_CLS_MUTEX_TASK_EXIST ;
             goto error ;
          }
+         ++it ;
       }
-      // add to map
       _taskMap[ taskID ] = pTask ;
    done:
       PD_TRACE_EXITRC ( SDB__CLSTKMGR_ADDTK, rc ) ;
@@ -159,6 +206,7 @@ namespace engine
       {
          SDB_OSS_DEL it->second ;
          _taskMap.erase ( it ) ;
+         _taskEvent.signal() ;
       }
 
       PD_TRACE_EXIT ( SDB__CLSTKMGR_RVTK1 ) ;
@@ -194,6 +242,35 @@ namespace engine
       {
          return it->second->setStatus( CLS_TASK_STATUS_CANCELED ) ;
       }
+   }
+
+   string _clsTaskMgr::dumpTasks( CLS_TASK_TYPE type )
+   {
+      string taskStr ;
+
+      ossScopedLock lock ( &_taskLatch, SHARED ) ;
+
+      std::map<UINT64, _clsTask*>::iterator it = _taskMap.begin() ;
+      while ( it != _taskMap.end() )
+      {
+         clsTask *pTask = it->second ;
+         if ( CLS_TASK_UNKNOW == type ||
+              type == pTask->taskType() )
+         {
+            taskStr += "[ taskName: " ;
+            taskStr += pTask->taskName() ? pTask->taskName() : "" ;
+            taskStr += " collectionName: " ;
+            taskStr += pTask->collectionName() ? pTask->collectionName() : "" ;
+            taskStr += " ]" ;
+         }
+         ++it ;
+         if ( it != _taskMap.end() )
+         {
+            taskStr += "\n" ;
+         }
+      }
+
+      return taskStr ;
    }
 
    void _clsTaskMgr::regCollection( const string & clName )
@@ -303,6 +380,16 @@ namespace engine
       return FALSE ;
    }
 
+   const CHAR* _clsDummyTask::collectionName() const
+   {
+      return "" ;
+   }
+
+   const CHAR* _clsDummyTask::collectionSpaceName() const
+   {
+      return "" ;
+   }
+
    /*
    _clsSplitTask : implement
    */
@@ -314,7 +401,6 @@ namespace engine
       _status = CLS_TASK_STATUS_READY ;
       _taskType = CLS_TASK_SPLIT ;
       _percent  = 0.0 ;
-      //_lockEnd = FALSE ;
    }
 
    _clsSplitTask::~_clsSplitTask ()
@@ -330,6 +416,9 @@ namespace engine
       _taskName += ", End:" ;
       _taskName += _splitEndKeyObj.toString() ;
       _taskName += " } " ;
+
+      size_t npos = _clFullName.find( '.' ) ;
+      _csName = _clFullName.substr( 0, npos ) ;
    }
 
    INT32 _clsSplitTask::init ( const CHAR * clFullName, INT32 sourceID,
@@ -339,7 +428,6 @@ namespace engine
                                clsCatalogSet &cataSet )
    {
       INT32 rc = SDB_OK ;
-      //_lockEnd = FALSE ;
 
       _clFullName    = clFullName ;
       _sourceID      = sourceID ;
@@ -356,7 +444,6 @@ namespace engine
          _shardingType = CAT_SHARDING_TYPE_HASH ;
       }
 
-      // calc the end key
       BSONObj groupUpBound ;
       BSONObj allUpbound ;
       rc = cataSet.getGroupUpBound( sourceID, groupUpBound ) ;
@@ -365,11 +452,9 @@ namespace engine
       rc = cataSet.getGroupUpBound( 0, allUpbound ) ;
       PD_RC_CHECK( rc, PDERROR, "Failed to get all up bound, rc: %d", rc ) ;
 
-      // bKey can't empty
       PD_CHECK( !_splitKeyObj.isEmpty(), SDB_INVALIDARG, error, PDERROR,
                 "Split begin key can't be empty" ) ;
 
-      // check begin valid
       if ( cataSet.isHashSharding() )
       {
          PD_CHECK( bKey.firstElement().numberInt() <
@@ -389,7 +474,6 @@ namespace engine
                    bKey.toString().c_str() ) ;
       }
 
-      // calc eKey
       if ( _splitEndKeyObj.isEmpty() )
       {
          _splitEndKeyObj = groupUpBound.getOwned() ;
@@ -400,7 +484,6 @@ namespace engine
          _splitEndKeyObj = BSONObj() ;
       }
 
-      // make sure eKey > bKey
       if ( !_splitEndKeyObj.isEmpty() )
       {
          if ( cataSet.isHashSharding() )
@@ -638,7 +721,6 @@ namespace engine
          goto error ;
       }
 
-      // calc all partition number
       pos = cataSet.getFirstItem() ;
       while ( NULL != ( cataItem = cataSet.getNextItem( pos ) ) )
       {
@@ -663,7 +745,6 @@ namespace engine
                 cataSet.toCataInfoBson().toString().c_str(), groupID,
                 splitNum, totalNum, percent ) ;
 
-      // find the begin key
       splitNum = totalNum - splitNum ;
       pos = cataSet.getFirstItem() ;
       while ( NULL != ( cataItem = cataSet.getNextItem( pos ) ) )
@@ -707,6 +788,16 @@ namespace engine
    const CHAR* _clsSplitTask::taskName () const
    {
       return _taskName.c_str() ;
+   }
+
+   const CHAR* _clsSplitTask::collectionName() const
+   {
+      return _clFullName.c_str() ;
+   }
+
+   const CHAR* _clsSplitTask::collectionSpaceName() const
+   {
+      return _csName.c_str() ;
    }
 
    PD_TRACE_DECLARE_FUNCTION ( SDB__CLSSPLITTK_MXON, "_clsSplitTask::muteXOn" )
@@ -766,7 +857,6 @@ namespace engine
                ret = TRUE ;
                goto done ;
             }
-            // lock end
             /*else if ( _lockEnd && beginResult < 0 )
             {
                ret = TRUE ;

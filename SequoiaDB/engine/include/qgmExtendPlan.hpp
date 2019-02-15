@@ -40,12 +40,13 @@
 
 #include "qgmOptiTree.hpp"
 #include <queue>
+#include "utilMap.hpp"
 
 namespace engine
 {
 
    typedef INT32 QGM_EXTEND_ID ;
-   typedef std::map<QGM_EXTEND_ID, qgmOptiTreeNode* >   QGM_EXTEND_TABLE ;
+   typedef _utilMap<QGM_EXTEND_ID, qgmOptiTreeNode*, 8 > QGM_EXTEND_TABLE ;
 
    class _qgmExtendPlan : public SDBObject
    {
@@ -56,7 +57,6 @@ namespace engine
    public:
       INT32 extend( qgmOptiTreeNode *&extended ) ;
 
-      /// when local is not NULL, it will be defined as local.
       INT32 insertPlan( UINT32 id, qgmOptiTreeNode *ex = NULL ) ;
 
       OSS_INLINE qgmOptiTreeNode *getNode( UINT32 id )

@@ -68,14 +68,12 @@ namespace engine
             goto error ;
          }
 
-         // build js file arguments
          ss << "var " << JS_ARG_BUS << " = " 
             << bus.toString(FALSE, TRUE).c_str() << " ; "
             << "var " << JS_ARG_SYS << " = "
             << sys.toString(FALSE, TRUE).c_str() << " ; " ;
          _jsFileArgs = ss.str() ;
          PD_LOG ( PDDEBUG, "Add host passes argument: %s", _jsFileArgs.c_str() ) ;
-         // add js file
          rc = addJsFile( FILE_ADD_HOST, _jsFileArgs.c_str() ) ;
          if ( rc )
          {
@@ -105,18 +103,9 @@ namespace engine
       BSONObjBuilder bob ;
       BSONObj subObj ;
 
-      // the output bson format
-      // {
-      //  "SdbUser":"sdbadmin",
-      //  "SdbPasswd":"sdbadmin",
-      //  "SdbUserGroup":"sdbadmin_group",
-      //  "InstallPacket":"/home/users/tanzhaobo/sequoiadb/bin/../packet/sequoiadb-1.8-linux_x86_64-installer.run",
-      //  "HostInfo":{"IP":"192.168.20.42","HostName":"susetzb","User":"root","Passwd":"sequoiadb","SshPort":"22","AgentServic":"11790","InstallPath":"/opt/sequoiadb"}
-      // }
 
       try
       {
-         //build subObj
          bob.append( OMA_FIELD_IP, _addHostInfo._item._ip.c_str() ) ;
          bob.append( OMA_FIELD_HOSTNAME, _addHostInfo._item._hostName.c_str() ) ;
          bob.append( OMA_FIELD_USER, _addHostInfo._item._user.c_str() ) ;
@@ -124,9 +113,9 @@ namespace engine
          bob.append( OMA_FIELD_SSHPORT, _addHostInfo._item._sshPort.c_str() ) ;
          bob.append( OMA_FIELD_AGENTSERVICE, _addHostInfo._item._agentService.c_str() ) ;
          bob.append( OMA_FIELD_INSTALLPATH, _addHostInfo._item._installPath.c_str() ) ;
+         bob.append( OMA_FIELD_VERSION, _addHostInfo._item._version.c_str() ) ;
          subObj = bob.obj() ;
 
-         // build retObj
          builder.append( OMA_FIELD_SDBUSER,
                          _addHostInfo._common._sdbUser.c_str() ) ;
          builder.append( OMA_FIELD_SDBPASSWD,
@@ -172,13 +161,11 @@ namespace engine
          BSONObj bus( pInstallInfo ) ;
          stringstream ss ;
 
-         // build js file arguments
          ss << "var " << JS_ARG_BUS << " = " 
             << bus.toString(FALSE, TRUE).c_str() << " ; " ;
          _jsFileArgs = ss.str() ;
          PD_LOG ( PDDEBUG, "Check add host information passes argument: %s",
                   _jsFileArgs.c_str() ) ;
-         // add js file
          rc = addJsFile( FIEL_ADD_HOST_CHECK_INFO, _jsFileArgs.c_str() ) ;
          if ( rc )
          {
@@ -228,7 +215,6 @@ namespace engine
             goto error ;
          }
 
-         // build js file arguments
          ss << "var " << JS_ARG_BUS << " = " 
             << bus.toString(FALSE, TRUE).c_str() << " ; "
             << "var " << JS_ARG_SYS << " = "
@@ -236,7 +222,6 @@ namespace engine
          _jsFileArgs = ss.str() ;
          PD_LOG ( PDDEBUG, "Remove host passes argument: %s",
                   _jsFileArgs.c_str() ) ;
-         // add js file
          rc = addJsFile( FILE_REMOVE_HOST, _jsFileArgs.c_str() ) ;
          if ( rc )
          {
@@ -267,14 +252,14 @@ namespace engine
 
       try
       {
-         //build subObj
          bob.append( OMA_FIELD_IP, _removeHostInfo._item._ip.c_str() ) ;
          bob.append( OMA_FIELD_HOSTNAME, _removeHostInfo._item._hostName.c_str() ) ;
          bob.append( OMA_FIELD_USER, _removeHostInfo._item._user.c_str() ) ;
          bob.append( OMA_FIELD_PASSWD, _removeHostInfo._item._passwd.c_str() ) ;
          bob.append( OMA_FIELD_SSHPORT, _removeHostInfo._item._sshPort.c_str() ) ;
          bob.append( OMA_FIELD_CLUSTERNAME, _removeHostInfo._item._clusterName.c_str() ) ;
-         bob.append( OMA_FIELD_INSTALLPATH, _removeHostInfo._item._installPath.c_str() ) ;
+         bob.appendArray( OMA_FIELD_PACKAGES, _removeHostInfo._item._packages ) ;
+
          retObj1 = bob.obj() ;
          retObj2 = BSON( OMA_FIELD_TASKID << _removeHostInfo._taskID ) ;
       }
@@ -312,7 +297,6 @@ namespace engine
          stringstream ss ;
          BSONObj bus = BSONObj(pInstallInfo).copy() ;
          BSONObj sys = BSON( OMA_FIELD_TASKID << _taskID ) ;
-         // build js file arguments
          ss << "var " << JS_ARG_BUS << " = " 
             << bus.toString(FALSE, TRUE).c_str() << " ; "
             << "var " << JS_ARG_SYS << " = "
@@ -320,7 +304,6 @@ namespace engine
          _jsFileArgs = ss.str() ;
          PD_LOG ( PDDEBUG, "Install temporary coord passes argument: %s",
                   _jsFileArgs.c_str() ) ;
-         // add js file
          rc = addJsFile( FILE_INSTALL_TMP_COORD, _jsFileArgs.c_str() ) ;
          if ( rc )
          {
@@ -388,7 +371,6 @@ namespace engine
          BSONObj bus = BSON( OMA_FIELD_TMPCOORDSVCNAME << _tmpCoordSvcName ) ;
          BSONObj sys = BSON( OMA_FIELD_TASKID << _taskID ) ;
 
-         // build js file arguments
          ss << "var " << JS_ARG_BUS << " = " 
             << bus.toString(FALSE, TRUE).c_str() << " ; "
             << "var " << JS_ARG_SYS << " = "
@@ -396,7 +378,6 @@ namespace engine
          _jsFileArgs = ss.str() ;
          PD_LOG ( PDDEBUG, "Remove temporary coord passes argument: %s",
                   _jsFileArgs.c_str() ) ;
-         // add js file
          rc = addJsFile( FILE_REMOVE_TMP_COORD, _jsFileArgs.c_str() ) ;
          if ( rc )
          {
@@ -483,7 +464,6 @@ namespace engine
                  OMA_FIELD_INSTALLPATH2    << _info._dbPath.c_str() <<
                  OMA_FIELD_INSTALLCONFIG   << _info._conf ) ;
          BSONObj sys = BSON ( OMA_FIELD_TASKID << _taskID ) ;
-         // build js file arguments
          ss << "var " << JS_ARG_BUS << " = " 
             << bus.toString(FALSE, TRUE).c_str() << " ; "
             << "var " << JS_ARG_SYS << " = "
@@ -491,7 +471,6 @@ namespace engine
          _jsFileArgs = ss.str() ;
          PD_LOG ( PDDEBUG, "Install standalone passes argument: %s",
                   _jsFileArgs.c_str() ) ;
-         // add js file
          rc = addJsFile( FILE_INSTALL_STANDALONE, _jsFileArgs.c_str() ) ;
          if ( rc )
          {
@@ -560,7 +539,6 @@ namespace engine
          BSONObj sys = BSON (
                  OMA_FIELD_TASKID << _taskID <<
                  OMA_FIELD_TMPCOORDSVCNAME << _tmpCoordSvcName.c_str() ) ;
-         // build js file arguments
          ss << "var " << JS_ARG_BUS << " = " 
             << bus.toString(FALSE, TRUE).c_str() << " ; "
             << "var " << JS_ARG_SYS << " = "
@@ -568,7 +546,6 @@ namespace engine
          _jsFileArgs = ss.str() ;
          PD_LOG ( PDDEBUG, "Install catalog passes argument: %s",
                   _jsFileArgs.c_str() ) ;
-         // add js file
          rc = addJsFile( FILE_INSTALL_CATALOG, _jsFileArgs.c_str() ) ;
          if ( rc )
          {
@@ -637,7 +614,6 @@ namespace engine
          BSONObj sys = BSON (
                  OMA_FIELD_TASKID << _taskID <<
                  OMA_FIELD_TMPCOORDSVCNAME << _tmpCoordSvcName.c_str() ) ;
-         // build js file arguments
          ss << "var " << JS_ARG_BUS << " = " 
             << bus.toString(FALSE, TRUE).c_str() << " ; "
             << "var " << JS_ARG_SYS << " = "
@@ -645,7 +621,6 @@ namespace engine
          _jsFileArgs = ss.str() ;
          PD_LOG ( PDDEBUG, "Install coord passes argument: %s",
                   _jsFileArgs.c_str() ) ;
-         // add js file
          rc = addJsFile( FILE_INSTALL_COORD, _jsFileArgs.c_str() ) ;
          if ( rc )
          {
@@ -715,7 +690,6 @@ namespace engine
          BSONObj sys = BSON (
                  OMA_FIELD_TASKID << _taskID <<
                  OMA_FIELD_TMPCOORDSVCNAME << _tmpCoordSvcName.c_str() ) ;
-         // build js file arguments
          ss << "var " << JS_ARG_BUS << " = " 
             << bus.toString(FALSE, TRUE).c_str() << " ; "
             << "var " << JS_ARG_SYS << " = "
@@ -762,7 +736,6 @@ namespace engine
       INT32 rc = SDB_OK ;
       stringstream ss ;
       
-      // build js file arguments
       ss << "var " << JS_ARG_BUS << " = " 
          << _bus.toString(FALSE, TRUE).c_str() << " ; "
          << "var " << JS_ARG_SYS << " = "
@@ -770,7 +743,6 @@ namespace engine
       _jsFileArgs = ss.str() ;
       PD_LOG ( PDDEBUG, "Rollback standalone passes "
                "argument: %s", _jsFileArgs.c_str() ) ;
-      // add js file
       rc = addJsFile( FILE_ROLLBACK_STANDALONE, _jsFileArgs.c_str() ) ;
       if ( rc )
       {
@@ -810,7 +782,6 @@ namespace engine
                  OMA_FIELD_TASKID << _taskID <<
                  OMA_FIELD_TMPCOORDSVCNAME << _tmpCoordSvcName.c_str() ) ;
 
-         // build js file arguments
          ss << "var " << JS_ARG_SYS << " = "
             << sys.toString(FALSE, TRUE).c_str() << " ; " ;
          _jsFileArgs = ss.str() ;
@@ -861,13 +832,11 @@ namespace engine
          BSONObj sys = BSON (
                  OMA_FIELD_TASKID << _taskID <<
                  OMA_FIELD_TMPCOORDSVCNAME << _tmpCoordSvcName.c_str() ) ;
-         // build js file arguments
          ss << "var " << JS_ARG_SYS << " = "
             << sys.toString(FALSE, TRUE).c_str() << " ; " ;
          _jsFileArgs = ss.str() ;
          PD_LOG ( PDDEBUG, "Rollback coord passes "
                   "argument: %s", _jsFileArgs.c_str() ) ;
-         // add js file
          rc = addJsFile( FILE_ROLLBACK_COORD, _jsFileArgs.c_str() ) ;
          if ( rc )
          {
@@ -915,11 +884,9 @@ namespace engine
          stringstream ss ;
          BSONObj bus ;
          BSONObj sys ;
-         // get installed data nodes info
          _getInstalledDataGroupInfo( bus ) ;
          sys = BSON( OMA_FIELD_TASKID << _taskID <<
                      OMA_FIELD_TMPCOORDSVCNAME << _tmpCoordSvcName.c_str() ) ;
-         // build js file arguments
          ss << "var " << JS_ARG_BUS << " = " 
             << bus.toString(FALSE, TRUE).c_str() << " ; "
             << "var " << JS_ARG_SYS << " = "
@@ -981,7 +948,6 @@ namespace engine
       INT32 rc = SDB_OK ;
       stringstream ss ;
       
-      // build js file arguments
          ss << "var " << JS_ARG_BUS << " = " 
             << _bus.toString(FALSE, TRUE).c_str() << " ; "
             << "var " << JS_ARG_SYS << " = "
@@ -989,7 +955,6 @@ namespace engine
          _jsFileArgs = ss.str() ;
       PD_LOG ( PDDEBUG, "Remove standalone passes argument: %s",
                _jsFileArgs.c_str() ) ;
-      // add js file
       rc = addJsFile( FILE_REMOVE_STANDALONE, _jsFileArgs.c_str() ) ;
       if ( rc )
       {
@@ -1027,7 +992,6 @@ namespace engine
       BSONObj bus = _info.copy() ;
       BSONObj sys = BSON( OMA_FIELD_TASKID << _taskID <<
                           OMA_FIELD_TMPCOORDSVCNAME << _tmpCoordSvcName.c_str() ) ;
-      // build js file arguments
       ss << "var " << JS_ARG_BUS << " = " 
          << bus.toString(FALSE, TRUE).c_str() << " ; "
          << "var " << JS_ARG_SYS << " = "
@@ -1035,7 +999,6 @@ namespace engine
       _jsFileArgs = ss.str() ;
       PD_LOG ( PDDEBUG, "Remove catalog group passes "
                "argument: %s", _jsFileArgs.c_str() ) ;
-      // add js file
       rc = addJsFile( FILE_REMOVE_CATALOG_RG, _jsFileArgs.c_str() ) ;
       if ( rc )
       {
@@ -1074,7 +1037,6 @@ namespace engine
       BSONObj sys = BSON( OMA_FIELD_TASKID << _taskID <<
                           OMA_FIELD_TMPCOORDSVCNAME << _tmpCoordSvcName.c_str() ) ;
 
-      // build js file arguments
       ss << "var " << JS_ARG_BUS << " = " 
          << bus.toString(FALSE, TRUE).c_str() << " ; "
          << "var " << JS_ARG_SYS << " = "
@@ -1082,7 +1044,6 @@ namespace engine
       _jsFileArgs = ss.str() ;
       PD_LOG ( PDDEBUG, "Remove coord group passes "
                "argument: %s", _jsFileArgs.c_str() ) ;
-      // add js file
       rc = addJsFile( FILE_REMOVE_COORD_RG, _jsFileArgs.c_str() ) ;
       if ( rc )
       {
@@ -1119,7 +1080,6 @@ namespace engine
       BSONObj bus = _info.copy() ;
       BSONObj sys = BSON( OMA_FIELD_TASKID << _taskID <<
                           OMA_FIELD_TMPCOORDSVCNAME << _tmpCoordSvcName.c_str() ) ;
-      // build js file arguments
       ss << "var " << JS_ARG_BUS << " = " 
          << bus.toString(FALSE, TRUE).c_str() << " ; "
          << "var " << JS_ARG_SYS << " = "
@@ -1127,7 +1087,6 @@ namespace engine
       _jsFileArgs = ss.str() ;
       PD_LOG ( PDDEBUG, "Remove data group passes "
                "argument: %s", _jsFileArgs.c_str() ) ;
-      // add js file
       rc = addJsFile( FILE_REMOVE_DATA_RG, _jsFileArgs.c_str() ) ;
       if ( rc )
       {
@@ -1161,7 +1120,6 @@ namespace engine
       stringstream ss ;
       BSONObj bus = _info.copy() ;
       BSONObj sys = BSON( OMA_FIELD_TASKID << _taskID ) ;
-      // build js file arguments
       ss << "var " << JS_ARG_BUS << " = " 
          << bus.toString(FALSE, TRUE).c_str() << " ; "
          << "var " << JS_ARG_SYS << " = "
@@ -1169,7 +1127,6 @@ namespace engine
       _jsFileArgs = ss.str() ;
       PD_LOG ( PDDEBUG, "Init for executing js passes "
                "argument: %s", _jsFileArgs.c_str() ) ;
-      // add js file
       rc = addJsFile( FILE_INIT_ENV, _jsFileArgs.c_str() ) ;
       if ( rc )
       {
@@ -1212,7 +1169,6 @@ namespace engine
             goto error ;
          }
 
-         // build js file arguments
          ss << "var " << JS_ARG_BUS << " = " 
             << bus.toString(FALSE, TRUE).c_str() << " ; "
             << "var " << JS_ARG_SYS << " = "
@@ -1220,7 +1176,6 @@ namespace engine
          _jsFileArgs = ss.str() ;
          PD_LOG ( PDDEBUG, "Installing znode passes argument: %s",
                   _jsFileArgs.c_str() ) ;
-         // add js file
          rc = addJsFile( FILE_INSTALL_ZOOKEEPER, _jsFileArgs.c_str() ) ;
          if ( rc )
          {
@@ -1250,40 +1205,7 @@ namespace engine
       BSONArrayBuilder bab ;
       vector<string>::iterator it = _addZNInfo._common._serverInfo.begin() ;
 
-      // the output bson format for standalone is:
-      // { 
-      //  "DeployMod":"standalone",
-      //  "PacketPath":"/opt/sequoiadb/packet/zookeeper-3.4.6.tar.gz",
-      //  "HostName":"rhel64-test8",
-      //  "User": "root", "Passwd": "sequoiadb",
-      //  "SdbUser": "sdbadmin", "SdbPasswd": "sdbadmin", "SdbUserGroup": "sdbadmin_group",
-      //  "SshPort": "22",
-      //  "zooid": 1,
-      //  "installpath":"/opt/zookeeper",
-      //  "datapath":"/opt/zookeeper/data",
-      //  "clientport":"2181",
-      //  "ticktime":"2000"
-      // } 
 
-      // the output bson format for cluster is:
-      // { 
-      //  "DeployMod":"distribution",
-      //  "PacketPath":"/opt/sequoiadb/packet/zookeeper-3.4.6.tar.gz",
-      //  "HostName":"susetzb",
-      //  "User": "root", "Passwd": "sequoiadb",
-      //  "SdbUser": "sdbadmin", "SdbPasswd": "sdbadmin", "SdbUserGroup": "sdbadmin_group",
-      //  "SshPort": "22",
-      //  "zooid": 1,
-      //  "installpath":"/opt/zookeeper",
-      //  "datapath":"/opt/zookeeper/data",
-      //  "dataport":"2888",
-      //  "electport":"3888",
-      //  "clientport":"2181",
-      //  "synclimit":"5",
-      //  "initlimit":"10",
-      //  "ticktime":"2000",
-      //  "ServerInfo":["server.1=susetzb:2888:3888", "server.2=rhel64-test8:2888:3888", "server.3=rhel64-test9:2888:3888"]
-      // }
 
 
       try
@@ -1314,7 +1236,6 @@ namespace engine
          }
          bob.appendArray( OMA_FIELD_SERVERINFO, bab.arr() ) ;
 
-         // build retObj
          retObj1 = bob.obj() ;
          retObj2 = BSON( OMA_FIELD_TASKID << _addZNInfo._taskID ) ;
       }
@@ -1360,7 +1281,6 @@ namespace engine
             goto error ;
          }
 
-         // build js file arguments
          ss << "var " << JS_ARG_BUS << " = " 
             << bus.toString(FALSE, TRUE).c_str() << " ; "
             << "var " << JS_ARG_SYS << " = "
@@ -1368,7 +1288,6 @@ namespace engine
          _jsFileArgs = ss.str() ;
          PD_LOG ( PDDEBUG, "Removing znode passes argument: %s",
                   _jsFileArgs.c_str() ) ;
-         // add js file
          rc = addJsFile( FILE_REMOVE_ZOOKEEPER, _jsFileArgs.c_str() ) ;
          if ( rc )
          {
@@ -1398,38 +1317,7 @@ namespace engine
       BSONArrayBuilder bab ;
       vector<string>::iterator it ;
 
-      // the output bson format for standalone is:
-      // { 
-      //  "DeployMod":"standalone",
-      //  "HostName":"rhel64-test8",
-      //  "User": "root",
-      //  "Passwd": "sequoiadb",
-      //  "SdbUser": "sdbadmin", "SdbPasswd": "sdbadmin", "SdbUserGroup": "sdbadmin_group",
-      //  "SshPort": "22",
-      //  "zooid": 1,
-      //  "installPath":"/opt/zookeeper",
-      //  "datapath":"/opt/zookeeper/data",
-      //  "clientport":"2181",
-      //  "ticktime":"2000"
-      // }
 
-      // the output bson format for cluster is:
-      // {
-      //  "DeployMod":"distribution",
-      //  "HostName":"susetzb",
-      //  "User": "root", "Passwd": "sequoiadb",
-      //  "SdbUser": "sdbadmin", "SdbPasswd": "sdbadmin", "SdbUserGroup": "sdbadmin_group",
-      //  "SshPort": "22",
-      //  "zooid": 1,
-      //  "installpath":"/opt/zookeeper",
-      //  "datapath":"/opt/zookeeper/data",
-      //  "dataport":"2888",
-      //  "electport":"3888",
-      //  "clientport":"2181",
-      //  "synclimit":"5",
-      //  "initLimit":"10",
-      //  "ticktime":"2000"
-      // }
 
       try
       {
@@ -1451,7 +1339,6 @@ namespace engine
          bob.append( OMA_FIELD_INITLIMIT3, _removeZNInfo._item._initLimit.c_str() ) ;
          bob.append( OMA_FIELD_TICKTIME3, _removeZNInfo._item._tickTime.c_str() ) ;
 
-         // build retObj
          retObj1 = bob.obj() ;
          retObj2 = BSON( OMA_FIELD_TASKID << _removeZNInfo._taskID ) ;
       }
@@ -1497,7 +1384,6 @@ namespace engine
             goto error ;
          }
 
-         // build js file arguments
          ss << "var " << JS_ARG_BUS << " = " 
             << bus.toString(FALSE, TRUE).c_str() << " ; "
             << "var " << JS_ARG_SYS << " = "
@@ -1505,7 +1391,6 @@ namespace engine
          _jsFileArgs = ss.str() ;
          PD_LOG ( PDDEBUG, "Checking znodes pass argument: %s",
                   _jsFileArgs.c_str() ) ;
-         // add js file
          rc = addJsFile( FILE_CHECK_ZOOKEEPER, _jsFileArgs.c_str() ) ;
          if ( rc )
          {
@@ -1537,34 +1422,6 @@ namespace engine
       INT64 taskID     = 0 ;
       vector<CheckZNInfo>::iterator it = _checkZNInfos.begin() ;
 
-      // the output bson format for cluster is:
-      // { 
-      //  "DeployMod":"distribution",
-      //  "ServerInfo":
-      //   [ 
-      //     {
-      //      "HostName":"susetzb",
-      //      "User": "root",
-      //      "Passwd": "sequoiadb",
-      //      "SdbUser": "sdbadmin",
-      //      "SdbPasswd": "sdbadmin",
-      //      "SdbUserGroup": "sdbadmin_group",
-      //      "SshPort": "22",
-      //      "zooid": "1",
-      //      "installPath":"/opt/zookeeper",
-      //      "datapath":"/opt/zookeeper/data",
-      //      "dataport":"2888",
-      //      "electport":"3888",
-      //      "clientport":"2181",
-      //      "synclimit":"5",
-      //      "initLimit":"10",
-      //      "ticktime":"2000",
-      //      "clustername":"cl",
-      //      "businessname":"bus"
-      //     },
-      //     ...
-      //   ]
-      // }
 
       if ( it == _checkZNInfos.end() )
       {
@@ -1609,7 +1466,6 @@ namespace engine
          bob.append( OMA_FIELD_DEPLOYMOD, pStr ) ;
          bob.append( OMA_FIELD_SERVERINFO, bab.arr() ) ;
 
-         // build retObj
          retObj1 = bob.obj() ;
          retObj2 = BSON( OMA_FIELD_TASKID << taskID ) ;
       }
@@ -1655,7 +1511,6 @@ namespace engine
             goto error ;
          }
 
-         // build js file arguments
          ss << "var " << JS_ARG_BUS << " = " 
             << bus.toString(FALSE, TRUE).c_str() << " ; "
             << "var " << JS_ARG_SYS << " = "
@@ -1663,12 +1518,354 @@ namespace engine
          _jsFileArgs = ss.str() ;
          PD_LOG ( PDDEBUG, "Checking znodes' environment pass argument: %s",
                   _jsFileArgs.c_str() ) ;
-         // add js file
          rc = addJsFile( FILE_CHECK_ZOOKEEPER_ENV, _jsFileArgs.c_str() ) ;
          if ( rc )
          {
             PD_LOG ( PDERROR, "Failed to add js file[%s], rc = %d ",
                      FILE_CHECK_ZOOKEEPER_ENV, rc ) ;
+            goto error ;
+         }
+      }
+      catch ( std::exception &e )
+      {
+         rc = SDB_INVALIDARG ;
+         PD_LOG ( PDERROR, "Failed to build bson, exception is: %s",
+                  e.what() ) ;
+         goto error ;
+      }
+
+   done:
+      return rc ;
+   error :
+      goto done ;
+   }
+
+   _omaCheckSsqlOlap::_omaCheckSsqlOlap( const BSONObj& config, const BSONObj& sysInfo )
+   {
+      _config = config ;
+      _sysInfo = sysInfo ;
+   }
+
+   _omaCheckSsqlOlap::~_omaCheckSsqlOlap()
+   {
+   }
+
+   INT32 _omaCheckSsqlOlap::init( const CHAR *pInstallInfo )
+   {
+      INT32 rc = SDB_OK ;
+      try
+      {
+         stringstream ss ;
+
+         ss << "var " << JS_ARG_BUS << " = " 
+            << _config.toString(FALSE, TRUE).c_str() << " ; "
+            << "var " << JS_ARG_SYS << " = "
+            << _sysInfo.toString(FALSE, TRUE).c_str() << " ; " ;
+         _jsFileArgs = ss.str() ;
+         PD_LOG ( PDDEBUG, "Checking sequoiasql olap passes argument: %s",
+                  _jsFileArgs.c_str() ) ;
+
+         rc = addJsFile( FILE_SEQUOIASQL_OLAP_COMMON ) ;
+         if ( rc )
+         {
+            PD_LOG ( PDERROR, "Failed to add js file[%s], rc = %d ",
+                     FILE_SEQUOIASQL_OLAP_COMMON, rc ) ;
+            goto error ;
+         }
+
+         rc = addJsFile( FILE_SEQUOIASQL_OLAP_CHECK, _jsFileArgs.c_str() ) ;
+         if ( rc )
+         {
+            PD_LOG ( PDERROR, "Failed to add js file[%s], rc = %d ",
+                     FILE_SEQUOIASQL_OLAP_CHECK, rc ) ;
+            goto error ;
+         }
+      }
+      catch ( std::exception &e )
+      {
+         rc = SDB_INVALIDARG ;
+         PD_LOG ( PDERROR, "Failed to build bson, exception is: %s",
+                  e.what() ) ;
+         goto error ;
+      }
+
+   done:
+      return rc ;
+   error :
+      goto done ;
+   }
+
+   _omaInstallSsqlOlap::_omaInstallSsqlOlap( const BSONObj& config,
+                                             const BSONObj& sysInfo )
+   {
+      _config = config ;
+      _sysInfo = sysInfo ;
+   }
+
+   _omaInstallSsqlOlap::~_omaInstallSsqlOlap()
+   {
+   }
+
+   INT32 _omaInstallSsqlOlap::init( const CHAR *pInstallInfo )
+   {
+      INT32 rc = SDB_OK ;
+      try
+      {
+         stringstream ss ;
+
+         ss << "var " << JS_ARG_BUS << " = " 
+            << _config.toString(FALSE, TRUE).c_str() << " ; "
+            << "var " << JS_ARG_SYS << " = "
+            << _sysInfo.toString(FALSE, TRUE).c_str() << " ; " ;
+         _jsFileArgs = ss.str() ;
+         PD_LOG ( PDDEBUG, "Installing sequoiasql olap passes argument: %s",
+                  _jsFileArgs.c_str() ) ;
+
+         rc = addJsFile( FILE_SEQUOIASQL_OLAP_COMMON ) ;
+         if ( rc )
+         {
+            PD_LOG ( PDERROR, "Failed to add js file[%s], rc = %d ",
+                     FILE_SEQUOIASQL_OLAP_COMMON, rc ) ;
+            goto error ;
+         }
+
+         rc = addJsFile( FILE_SEQUOIASQL_OLAP_CONFIG ) ;
+         if ( rc )
+         {
+            PD_LOG ( PDERROR, "Failed to add js file[%s], rc = %d ",
+                     FILE_SEQUOIASQL_OLAP_CONFIG, rc ) ;
+            goto error ;
+         }
+
+         rc = addJsFile( FILE_SEQUOIASQL_OLAP_INSTALL, _jsFileArgs.c_str() ) ;
+         if ( rc )
+         {
+            PD_LOG ( PDERROR, "Failed to add js file[%s], rc = %d ",
+                     FILE_SEQUOIASQL_OLAP_INSTALL, rc ) ;
+            goto error ;
+         }
+      }
+      catch ( std::exception &e )
+      {
+         rc = SDB_INVALIDARG ;
+         PD_LOG ( PDERROR, "Failed to build bson, exception is: %s",
+                  e.what() ) ;
+         goto error ;
+      }
+
+   done:
+      return rc ;
+   error :
+      goto done ;
+   }
+
+   _omaTrustSsqlOlap::_omaTrustSsqlOlap( const BSONObj& config,
+                                       const BSONObj& sysInfo )
+   {
+      _config = config ;
+      _sysInfo = sysInfo ;
+   }
+
+   _omaTrustSsqlOlap::~_omaTrustSsqlOlap()
+   {
+   }
+
+   INT32 _omaTrustSsqlOlap::init( const CHAR *pInstallInfo )
+   {
+      INT32 rc = SDB_OK ;
+      try
+      {
+         stringstream ss ;
+
+         ss << "var " << JS_ARG_BUS << " = " 
+            << _config.toString(FALSE, TRUE).c_str() << " ; "
+            << "var " << JS_ARG_SYS << " = "
+            << _sysInfo.toString(FALSE, TRUE).c_str() << " ; " ;
+         _jsFileArgs = ss.str() ;
+         PD_LOG ( PDDEBUG, "Trusting sequoiasql olap passes argument: %s",
+                  _jsFileArgs.c_str() ) ;
+
+         rc = addJsFile( FILE_SEQUOIASQL_OLAP_COMMON ) ;
+         if ( rc )
+         {
+            PD_LOG ( PDERROR, "Failed to add js file[%s], rc = %d ",
+                     FILE_SEQUOIASQL_OLAP_COMMON, rc ) ;
+            goto error ;
+         }
+
+         rc = addJsFile( FILE_SEQUOIASQL_OLAP_TRUST, _jsFileArgs.c_str() ) ;
+         if ( rc )
+         {
+            PD_LOG ( PDERROR, "Failed to add js file[%s], rc = %d ",
+                     FILE_SEQUOIASQL_OLAP_TRUST, rc ) ;
+            goto error ;
+         }
+      }
+      catch ( std::exception &e )
+      {
+         rc = SDB_INVALIDARG ;
+         PD_LOG ( PDERROR, "Failed to build bson, exception is: %s",
+                  e.what() ) ;
+         goto error ;
+      }
+
+   done:
+      return rc ;
+   error :
+      goto done ;
+   }
+
+   _omaCheckHdfsSsqlOlap::_omaCheckHdfsSsqlOlap( const BSONObj& config,
+                                                 const BSONObj& sysInfo )
+   {
+      _config = config ;
+      _sysInfo = sysInfo ;
+   }
+
+   _omaCheckHdfsSsqlOlap::~_omaCheckHdfsSsqlOlap()
+   {
+   }
+
+   INT32 _omaCheckHdfsSsqlOlap::init( const CHAR *pInstallInfo )
+   {
+      INT32 rc = SDB_OK ;
+      try
+      {
+         stringstream ss ;
+
+         ss << "var " << JS_ARG_BUS << " = " 
+            << _config.toString(FALSE, TRUE).c_str() << " ; "
+            << "var " << JS_ARG_SYS << " = "
+            << _sysInfo.toString(FALSE, TRUE).c_str() << " ; " ;
+         _jsFileArgs = ss.str() ;
+         PD_LOG ( PDDEBUG, "Checking HDFS for sequoiasql olap passes argument: %s",
+                  _jsFileArgs.c_str() ) ;
+
+         rc = addJsFile( FILE_SEQUOIASQL_OLAP_COMMON ) ;
+         if ( rc )
+         {
+            PD_LOG ( PDERROR, "Failed to add js file[%s], rc = %d ",
+                     FILE_SEQUOIASQL_OLAP_COMMON, rc ) ;
+            goto error ;
+         }
+
+         rc = addJsFile( FILE_SEQUOIASQL_OLAP_CHECK_HDFS, _jsFileArgs.c_str() ) ;
+         if ( rc )
+         {
+            PD_LOG ( PDERROR, "Failed to add js file[%s], rc = %d ",
+                     FILE_SEQUOIASQL_OLAP_CHECK_HDFS, rc ) ;
+            goto error ;
+         }
+      }
+      catch ( std::exception &e )
+      {
+         rc = SDB_INVALIDARG ;
+         PD_LOG ( PDERROR, "Failed to build bson, exception is: %s",
+                  e.what() ) ;
+         goto error ;
+      }
+
+   done:
+      return rc ;
+   error :
+      goto done ;
+   }
+
+   _omaInitClusterSsqlOlap::_omaInitClusterSsqlOlap( const BSONObj& config,
+                                                     const BSONObj& sysInfo )
+   {
+      _config = config ;
+      _sysInfo = sysInfo ;
+   }
+
+   _omaInitClusterSsqlOlap::~_omaInitClusterSsqlOlap()
+   {
+   }
+
+   INT32 _omaInitClusterSsqlOlap::init( const CHAR *pInstallInfo )
+   {
+      INT32 rc = SDB_OK ;
+      try
+      {
+         stringstream ss ;
+
+         ss << "var " << JS_ARG_BUS << " = " 
+            << _config.toString(FALSE, TRUE).c_str() << " ; "
+            << "var " << JS_ARG_SYS << " = "
+            << _sysInfo.toString(FALSE, TRUE).c_str() << " ; " ;
+         _jsFileArgs = ss.str() ;
+         PD_LOG ( PDDEBUG, "Init cluster for sequoiasql olap passes argument: %s",
+                  _jsFileArgs.c_str() ) ;
+
+         rc = addJsFile( FILE_SEQUOIASQL_OLAP_COMMON ) ;
+         if ( rc )
+         {
+            PD_LOG ( PDERROR, "Failed to add js file[%s], rc = %d ",
+                     FILE_SEQUOIASQL_OLAP_COMMON, rc ) ;
+            goto error ;
+         }
+
+         rc = addJsFile( FILE_SEQUOIASQL_OLAP_INIT, _jsFileArgs.c_str() ) ;
+         if ( rc )
+         {
+            PD_LOG ( PDERROR, "Failed to add js file[%s], rc = %d ",
+                     FILE_SEQUOIASQL_OLAP_INIT, rc ) ;
+            goto error ;
+         }
+      }
+      catch ( std::exception &e )
+      {
+         rc = SDB_INVALIDARG ;
+         PD_LOG ( PDERROR, "Failed to build bson, exception is: %s",
+                  e.what() ) ;
+         goto error ;
+      }
+
+   done:
+      return rc ;
+   error :
+      goto done ;
+   }
+
+   _omaRemoveSsqlOlap::_omaRemoveSsqlOlap( const BSONObj& config, 
+                                           const BSONObj& sysInfo )
+   {
+      _config = config ;
+      _sysInfo = sysInfo ;
+   }
+
+   _omaRemoveSsqlOlap::~_omaRemoveSsqlOlap()
+   {
+   }
+
+   INT32 _omaRemoveSsqlOlap::init( const CHAR *pInstallInfo )
+   {
+      INT32 rc = SDB_OK ;
+      try
+      {
+         stringstream ss ;
+
+         ss << "var " << JS_ARG_BUS << " = " 
+            << _config.toString(FALSE, TRUE).c_str() << " ; "
+            << "var " << JS_ARG_SYS << " = "
+            << _sysInfo.toString(FALSE, TRUE).c_str() << " ; " ;
+         _jsFileArgs = ss.str() ;
+         PD_LOG ( PDDEBUG, "Removing sequoiasql olap passes argument: %s",
+                  _jsFileArgs.c_str() ) ;
+
+         rc = addJsFile( FILE_SEQUOIASQL_OLAP_COMMON ) ;
+         if ( rc )
+         {
+            PD_LOG ( PDERROR, "Failed to add js file[%s], rc = %d ",
+                     FILE_SEQUOIASQL_OLAP_COMMON, rc ) ;
+            goto error ;
+         }
+
+         rc = addJsFile( FILE_SEQUOIASQL_OLAP_REMOVE, _jsFileArgs.c_str() ) ;
+         if ( rc )
+         {
+            PD_LOG ( PDERROR, "Failed to add js file[%s], rc = %d ",
+                     FILE_SEQUOIASQL_OLAP_REMOVE, rc ) ;
             goto error ;
          }
       }
@@ -1715,7 +1912,6 @@ namespace engine
                   OMA_FIELD_DBPASSWD << _ssqlInfo._dbPasswd <<
                   OMA_FIELD_SQL << _ssqlInfo._sql << 
                   OMA_FIELD_RESULTFORMAT << _ssqlInfo._resultFormat ) ;
-      // build js file arguments
       ss << "var " << JS_ARG_BUS << " = " 
          << bus.toString(FALSE, TRUE).c_str() << " ; "
          << "var " << JS_ARG_SYS << " = "
@@ -1723,7 +1919,6 @@ namespace engine
       _jsFileArgs = ss.str() ;
 
       PD_LOG ( PDDEBUG, "ssql execute argument: %s", _jsFileArgs.c_str() ) ;
-      // add js file
       rc = addJsFile( FILE_RUN_PSQL, _jsFileArgs.c_str() ) ;
       if ( rc )
       {
@@ -1767,7 +1962,6 @@ namespace engine
                   OMA_FIELD_DBPASSWD << _ssqlInfo._dbPasswd <<
                   OMA_FIELD_SQL << _ssqlInfo._sql << 
                   OMA_FIELD_RESULTFORMAT << _ssqlInfo._resultFormat ) ;
-      // build js file arguments
       ss << "var " << JS_ARG_BUS << " = " 
          << bus.toString(FALSE, TRUE).c_str() << " ; "
          << "var " << JS_ARG_SYS << " = "
@@ -1775,7 +1969,6 @@ namespace engine
       _jsFileArgs = ss.str() ;
 
       PD_LOG ( PDDEBUG, "ssql execute argument: %s", _jsFileArgs.c_str() ) ;
-      // add js file
       rc = addJsFile( FILE_CLEAN_SSQL_EXEC, _jsFileArgs.c_str() ) ;
       if ( rc )
       {
@@ -1819,7 +2012,6 @@ namespace engine
                   OMA_FIELD_DBPASSWD << _ssqlInfo._dbPasswd <<
                   OMA_FIELD_SQL << _ssqlInfo._sql << 
                   OMA_FIELD_RESULTFORMAT << _ssqlInfo._resultFormat ) ;
-      // build js file arguments
       ss << "var " << JS_ARG_BUS << " = " 
          << bus.toString(FALSE, TRUE).c_str() << " ; "
          << "var " << JS_ARG_SYS << " = "
@@ -1827,7 +2019,6 @@ namespace engine
       _jsFileArgs = ss.str() ;
 
       PD_LOG ( PDDEBUG, "ssql execute argument: %s", _jsFileArgs.c_str() ) ;
-      // add js file
       rc = addJsFile( FILE_GET_PSQL, _jsFileArgs.c_str() ) ;
       if ( rc )
       {
@@ -1836,6 +2027,1016 @@ namespace engine
          goto error ;
       }
          
+   done:
+      return rc ;
+   error:
+     goto done ;
+   }
+
+   /*
+      add business
+   */
+   IMPLEMENT_OACMD_AUTO_REGISTER( _omaAddBusiness )
+
+   _omaAddBusiness::_omaAddBusiness()
+   {
+   }
+
+   _omaAddBusiness::~_omaAddBusiness()
+   {
+   }
+
+   INT32 _omaAddBusiness::init( const CHAR *pInstallInfo )
+   {
+      INT32 rc = SDB_OK ;
+      stringstream ss ;
+      BSONObj bus( pInstallInfo ) ;
+   
+      ss << "var " << JS_ARG_BUS << " = " 
+         << bus.toString( FALSE, TRUE ).c_str() << " ; " ;
+   
+      _jsFileArgs = ss.str() ;
+      PD_LOG( PDDEBUG, "Add Business argument: %s",
+              _jsFileArgs.c_str() ) ;
+   
+      rc = addJsFile( FILE_ADD_BUSINESS, _jsFileArgs.c_str() ) ;
+      if ( rc )
+      {
+         PD_LOG( PDERROR, "Failed to add js file[%s], rc = %d ",
+                 FILE_ADD_BUSINESS, rc ) ;
+         goto error ;
+      }
+         
+   done:
+      return rc ;
+   error:
+     goto done ;
+
+   }
+
+   INT32 _omaAddBusiness::convertResult( const BSONObj& itemInfo,
+                                         BSONObj& taskInfo )
+   {
+      INT32 rc = SDB_OK ;
+      INT32 updateErrno = SDB_OK ;
+      INT32 updateProgress = 0 ;
+      INT32 errnoNum = taskInfo.getIntField( OMA_FIELD_ERRNO ) ;
+      INT32 progress = taskInfo.getIntField( OMA_FIELD_PROGRESS ) ;
+      string detail  = taskInfo.getStringField( OMA_FIELD_DETAIL ) ;
+      string updateDetail ;
+      string updateHostName ;
+      BSONObj resultInfo = taskInfo.getObjectField( OMA_FIELD_RESULTINFO ) ;
+      BSONObj condition  = BSON( OMA_FIELD_ERRNO      << "" <<
+                                 OMA_FIELD_DETAIL     << "" <<
+                                 OMA_FIELD_PROGRESS   << "" <<
+                                 OMA_FIELD_RESULTINFO << "" ) ;
+      BSONObj oneResultCondition = BSON( OMA_FIELD_HOSTNAME    << "" <<
+                                         OMA_FIELD_PORT2       << "" <<
+                                         OMA_FIELD_STATUS      << 0 <<
+                                         OMA_FIELD_STATUSDESC  << "" <<
+                                         OMA_FIELD_ERRNO       << 0 <<
+                                         OMA_FIELD_DETAIL      << ""  ) ;
+      BSONObj updateFlow = itemInfo.getObjectField( OMA_FIELD_FLOW ) ;
+      BSONObj nodeResult = itemInfo.filterFieldsUndotted(
+                                                    oneResultCondition, TRUE ) ;
+      BSONObj taskInfo2 = taskInfo.filterFieldsUndotted( condition, FALSE ) ;
+      BSONObjBuilder newTaskInfo ;
+      BSONArrayBuilder newResultInfo ;
+
+      rc = omaGetStringElement( itemInfo, OMA_FIELD_HOSTNAME, updateHostName ) ;
+      if( rc )
+      {
+         rc = SDB_OK ;
+         goto done ;
+      }
+
+      rc = omaGetIntElement( itemInfo, OMA_FIELD_ERRNO, updateErrno ) ;
+      if( rc )
+      {
+         rc = SDB_OK ;
+         updateErrno = SDB_OK ;
+      }
+
+      rc = omaGetIntElement( itemInfo, OMA_FIELD_PROGRESS, updateProgress ) ;
+      if( rc )
+      {
+         rc = SDB_OK ;
+         updateProgress = -1 ;
+      }
+
+      rc = omaGetStringElement( itemInfo, OMA_FIELD_DETAIL, updateDetail ) ;
+      if( rc )
+      {
+         rc = SDB_OK ;
+         updateDetail = "" ;
+      }
+
+      {
+         BSONObjIterator resultIter( resultInfo ) ;
+
+         while( resultIter.more() )
+         {
+            BSONElement resultEle = resultIter.next() ;
+            BSONObj oneResult = resultEle.embeddedObject() ;
+            string hostName = oneResult.getStringField( OMA_FIELD_HOSTNAME ) ;
+
+            if( updateHostName == hostName )
+            {
+               BSONObjBuilder newOneResultInfoBuilder ;
+               BSONArray newFlowArray ;
+               BSONObj flow = oneResult.getObjectField( OMA_FIELD_FLOW ) ;
+               if( errnoNum == SDB_OK && updateErrno )
+               {
+                  errnoNum  = updateErrno ;
+                  detail = updateDetail ;
+               }
+               if( updateProgress > 0 )
+               {
+                  progress += updateProgress ;
+               }
+               if( progress > 100 )
+               {
+                  progress = 100 ;
+               }
+               else if( progress < 0 )
+               {
+                  progress = 0 ;
+               }
+               _aggrFlowArray( flow, updateFlow, newFlowArray ) ;
+               newOneResultInfoBuilder.appendElements( nodeResult ) ;
+               newOneResultInfoBuilder.append( OMA_FIELD_FLOW, newFlowArray ) ;
+               newResultInfo.append( newOneResultInfoBuilder.obj() ) ;
+            }
+            else
+            {
+               newResultInfo.append( oneResult ) ;
+            }
+         }
+      }
+
+      newTaskInfo.append( OMA_FIELD_ERRNO, errnoNum ) ;
+      newTaskInfo.append( OMA_FIELD_DETAIL, detail ) ;
+      newTaskInfo.append( OMA_FIELD_PROGRESS, progress ) ;
+      newTaskInfo.append( OMA_FIELD_RESULTINFO, newResultInfo.arr() ) ;
+      newTaskInfo.appendElements( taskInfo2 ) ;
+
+      taskInfo = newTaskInfo.obj() ;
+
+   done:
+      return rc ;
+   }
+
+   void _omaAddBusiness::_aggrFlowArray( const BSONObj& array1,
+                                         const BSONObj& array2,
+                                         BSONArray& out )
+   {
+      BSONArrayBuilder arrayBuilder ;
+
+      {
+         BSONObjIterator iter( array1 ) ;
+
+         while( iter.more() )
+         {
+            BSONElement ele = iter.next() ;
+
+            arrayBuilder.append( ele.String() ) ;
+         }
+      }
+
+      {
+         BSONObjIterator iter( array2 ) ;
+
+         while( iter.more() )
+         {
+            BSONElement ele = iter.next() ;
+
+            arrayBuilder.append( ele.String() ) ;
+         }
+      }
+
+      out = arrayBuilder.arr() ;
+   }
+
+   /*
+      add business
+   */
+   IMPLEMENT_OACMD_AUTO_REGISTER( _omaRemoveBusiness )
+
+   _omaRemoveBusiness::_omaRemoveBusiness()
+   {
+   }
+
+   _omaRemoveBusiness::~_omaRemoveBusiness()
+   {
+   }
+
+   INT32 _omaRemoveBusiness::init( const CHAR *pInstallInfo )
+   {
+      INT32 rc = SDB_OK ;
+      stringstream ss ;
+      BSONObj bus( pInstallInfo ) ;
+   
+      ss << "var " << JS_ARG_BUS << " = " 
+         << bus.toString( FALSE, TRUE ).c_str() << " ; " ;
+   
+      _jsFileArgs = ss.str() ;
+      PD_LOG( PDDEBUG, "Remove Business argument: %s",
+              _jsFileArgs.c_str() ) ;
+   
+      rc = addJsFile( FILE_REMOVE_BUSINESS, _jsFileArgs.c_str() ) ;
+      if ( rc )
+      {
+         PD_LOG( PDERROR, "Failed to add js file[%s], rc = %d ",
+                 FILE_REMOVE_BUSINESS, rc ) ;
+         goto error ;
+      }
+         
+   done:
+      return rc ;
+   error:
+     goto done ;
+
+   }
+
+   INT32 _omaRemoveBusiness::convertResult( const BSONObj& itemInfo,
+                                            BSONObj& taskInfo )
+   {
+      INT32 rc = SDB_OK ;
+      INT32 updateErrno = SDB_OK ;
+      INT32 updateProgress = 0 ;
+      INT32 errnoNum = taskInfo.getIntField( OMA_FIELD_ERRNO ) ;
+      INT32 progress = taskInfo.getIntField( OMA_FIELD_PROGRESS ) ;
+      string detail  = taskInfo.getStringField( OMA_FIELD_DETAIL ) ;
+      string updateDetail ;
+      string updateHostName ;
+      BSONObj resultInfo = taskInfo.getObjectField( OMA_FIELD_RESULTINFO ) ;
+      BSONObj condition  = BSON( OMA_FIELD_ERRNO      << "" <<
+                                 OMA_FIELD_DETAIL     << "" <<
+                                 OMA_FIELD_PROGRESS   << "" <<
+                                 OMA_FIELD_RESULTINFO << "" ) ;
+      BSONObj oneResultCondition = BSON( OMA_FIELD_HOSTNAME    << "" <<
+                                         OMA_FIELD_PORT2       << "" <<
+                                         OMA_FIELD_STATUS      << 0 <<
+                                         OMA_FIELD_STATUSDESC  << "" <<
+                                         OMA_FIELD_ERRNO       << 0 <<
+                                         OMA_FIELD_DETAIL      << ""  ) ;
+      BSONObj updateFlow = itemInfo.getObjectField( OMA_FIELD_FLOW ) ;
+      BSONObj nodeResult = itemInfo.filterFieldsUndotted(
+                                                    oneResultCondition, TRUE ) ;
+      BSONObj taskInfo2 = taskInfo.filterFieldsUndotted( condition, FALSE ) ;
+      BSONObjBuilder newTaskInfo ;
+      BSONArrayBuilder newResultInfo ;
+
+      rc = omaGetStringElement( itemInfo, OMA_FIELD_HOSTNAME, updateHostName ) ;
+      if( rc )
+      {
+         rc = SDB_OK ;
+         goto done ;
+      }
+
+      rc = omaGetIntElement( itemInfo, OMA_FIELD_ERRNO, updateErrno ) ;
+      if( rc )
+      {
+         rc = SDB_OK ;
+         updateErrno = SDB_OK ;
+      }
+
+      rc = omaGetIntElement( itemInfo, OMA_FIELD_PROGRESS, updateProgress ) ;
+      if( rc )
+      {
+         rc = SDB_OK ;
+         updateProgress = -1 ;
+      }
+
+      rc = omaGetStringElement( itemInfo, OMA_FIELD_DETAIL, updateDetail ) ;
+      if( rc )
+      {
+         rc = SDB_OK ;
+         updateDetail = "" ;
+      }
+
+      {
+         BSONObjIterator resultIter( resultInfo ) ;
+
+         while( resultIter.more() )
+         {
+            BSONElement resultEle = resultIter.next() ;
+            BSONObj oneResult = resultEle.embeddedObject() ;
+            string hostName = oneResult.getStringField( OMA_FIELD_HOSTNAME ) ;
+
+            if( updateHostName == hostName )
+            {
+               BSONObjBuilder newOneResultInfoBuilder ;
+               BSONArray newFlowArray ;
+               BSONObj flow = oneResult.getObjectField( OMA_FIELD_FLOW ) ;
+               if( errnoNum == SDB_OK && updateErrno )
+               {
+                  errnoNum  = updateErrno ;
+                  detail = updateDetail ;
+               }
+               if( updateProgress > 0 )
+               {
+                  progress += updateProgress ;
+               }
+               if( progress > 100 )
+               {
+                  progress = 100 ;
+               }
+               else if( progress < 0 )
+               {
+                  progress = 0 ;
+               }
+               _aggrFlowArray( flow, updateFlow, newFlowArray ) ;
+               newOneResultInfoBuilder.appendElements( nodeResult ) ;
+               newOneResultInfoBuilder.append( OMA_FIELD_FLOW, newFlowArray ) ;
+               newResultInfo.append( newOneResultInfoBuilder.obj() ) ;
+            }
+            else
+            {
+               newResultInfo.append( oneResult ) ;
+            }
+         }
+      }
+
+      newTaskInfo.append( OMA_FIELD_ERRNO, errnoNum ) ;
+      newTaskInfo.append( OMA_FIELD_DETAIL, detail ) ;
+      newTaskInfo.append( OMA_FIELD_PROGRESS, progress ) ;
+      newTaskInfo.append( OMA_FIELD_RESULTINFO, newResultInfo.arr() ) ;
+      newTaskInfo.appendElements( taskInfo2 ) ;
+
+      taskInfo = newTaskInfo.obj() ;
+
+   done:
+      return rc ;
+   }
+
+   void _omaRemoveBusiness::_aggrFlowArray( const BSONObj& array1,
+                                            const BSONObj& array2,
+                                            BSONArray& out )
+   {
+      BSONArrayBuilder arrayBuilder ;
+
+      {
+         BSONObjIterator iter( array1 ) ;
+
+         while( iter.more() )
+         {
+            BSONElement ele = iter.next() ;
+
+            arrayBuilder.append( ele.String() ) ;
+         }
+      }
+
+      {
+         BSONObjIterator iter( array2 ) ;
+
+         while( iter.more() )
+         {
+            BSONElement ele = iter.next() ;
+
+            arrayBuilder.append( ele.String() ) ;
+         }
+      }
+
+      out = arrayBuilder.arr() ;
+   }
+
+   /*
+     _omaExtendDB implement
+   */
+   IMPLEMENT_OACMD_AUTO_REGISTER( _omaExtendDB )
+
+   _omaExtendDB::_omaExtendDB()
+   {
+   }
+
+   _omaExtendDB::~_omaExtendDB()
+   {
+   }
+
+   INT32 _omaExtendDB::init( const CHAR* pInstallInfo )
+   {
+      INT32 rc = SDB_OK ;
+      stringstream ss ;
+      BSONObj bus( pInstallInfo ) ;
+
+      ss << "var " << JS_ARG_BUS << " = " 
+         << bus.toString( FALSE, TRUE ).c_str() << " ; " ;
+
+      _jsFileArgs = ss.str() ;
+      PD_LOG( PDDEBUG, "Extend SequoiaDB argument: %s",
+              _jsFileArgs.c_str() ) ;
+
+      rc = addJsFile( FILE_EXTEND_SEQUOIADB, _jsFileArgs.c_str() ) ;
+      if ( rc )
+      {
+         PD_LOG( PDERROR, "Failed to add js file[%s], rc = %d ",
+                 FILE_EXTEND_SEQUOIADB, rc ) ;
+         goto error ;
+      }
+         
+   done:
+      return rc ;
+   error:
+     goto done ;
+   }
+
+   void _omaExtendDB::_aggrFlowArray( const BSONObj& array1,
+                                      const BSONObj& array2,
+                                      BSONArray& out )
+   {
+      BSONArrayBuilder arrayBuilder ;
+
+      {
+         BSONObjIterator iter( array1 ) ;
+         while( iter.more() )
+         {
+            BSONElement ele = iter.next() ;
+            arrayBuilder.append( ele.String() ) ;
+         }
+      }
+
+      {
+         BSONObjIterator iter( array2 ) ;
+         while( iter.more() )
+         {
+            BSONElement ele = iter.next() ;
+            arrayBuilder.append( ele.String() ) ;
+         }
+      }
+      out = arrayBuilder.arr() ;
+   }
+
+   INT32 _omaExtendDB::convertResult( const BSONObj& itemInfo,
+                                      BSONObj& taskInfo )
+   {
+      INT32 rc = SDB_OK ;
+      INT32 updateErrno = SDB_OK ;
+      INT32 updateProgress = 0 ;
+      INT32 errnoNum = taskInfo.getIntField( OMA_FIELD_ERRNO ) ;
+      INT32 progress = taskInfo.getIntField( OMA_FIELD_PROGRESS ) ;
+      string detail  = taskInfo.getStringField( OMA_FIELD_DETAIL ) ;
+      string updateDetail ;
+      string updateHostName ;
+      string updateSvcname ;
+      BSONObj resultInfo = taskInfo.getObjectField( OMA_FIELD_RESULTINFO ) ;
+      BSONObj condition  = BSON( OMA_FIELD_ERRNO << "" <<
+                                 OMA_FIELD_DETAIL << "" <<
+                                 OMA_FIELD_PROGRESS << "" <<
+                                 OMA_FIELD_RESULTINFO << "" ) ;
+      BSONObj oneResultCondition = BSON( OMA_FIELD_HOSTNAME << "" <<
+                                         OMA_FIELD_DATAGROUPNAME << "" <<
+                                         OMA_FIELD_SVCNAME << "" <<
+                                         OMA_FIELD_ROLE << "" <<
+                                         OMA_FIELD_STATUS << 0 <<
+                                         OMA_FIELD_STATUSDESC << "" <<
+                                         OMA_FIELD_ERRNO << 0 <<
+                                         OMA_FIELD_DETAIL << ""  ) ;
+      BSONObj updateFlow = itemInfo.getObjectField( OMA_FIELD_FLOW ) ;
+      BSONObj nodeResult = itemInfo.filterFieldsUndotted(
+                                                    oneResultCondition, TRUE ) ;
+      BSONObj taskInfo2 = taskInfo.filterFieldsUndotted( condition, FALSE ) ;
+      BSONObjBuilder newTaskInfo ;
+      BSONArrayBuilder newResultInfo ;
+
+      rc = omaGetStringElement( itemInfo, OMA_FIELD_HOSTNAME, updateHostName ) ;
+      if( rc )
+      {
+         rc = SDB_OK ;
+         goto done ;
+      }
+
+      rc = omaGetStringElement( itemInfo, OMA_FIELD_SVCNAME, updateSvcname ) ;
+      if( rc )
+      {
+         rc = SDB_OK ;
+         goto done ;
+      }
+
+      rc = omaGetIntElement( itemInfo, OMA_FIELD_ERRNO, updateErrno ) ;
+      if( rc )
+      {
+         rc = SDB_OK ;
+         updateErrno = SDB_OK ;
+      }
+
+      rc = omaGetIntElement( itemInfo, OMA_FIELD_PROGRESS, updateProgress ) ;
+      if( rc )
+      {
+         rc = SDB_OK ;
+         updateProgress = -1 ;
+      }
+
+      rc = omaGetStringElement( itemInfo, OMA_FIELD_DETAIL, updateDetail ) ;
+      if( rc )
+      {
+         rc = SDB_OK ;
+         updateDetail = "" ;
+      }
+
+      {
+         BSONObjIterator resultIter( resultInfo ) ;
+
+         while( resultIter.more() )
+         {
+            BSONElement resultEle = resultIter.next() ;
+            BSONObj oneResult = resultEle.embeddedObject() ;
+            string hostName = oneResult.getStringField( OMA_FIELD_HOSTNAME ) ;
+            string svcname = oneResult.getStringField( OMA_FIELD_SVCNAME ) ;
+
+            if( updateHostName == hostName && updateSvcname == svcname )
+            {
+               BSONObjBuilder newOneResultInfoBuilder ;
+               BSONArray newFlowArray ;
+               BSONObj flow = oneResult.getObjectField( OMA_FIELD_FLOW ) ;
+               if( errnoNum == SDB_OK && updateErrno )
+               {
+                  errnoNum  = updateErrno ;
+                  detail = updateDetail ;
+               }
+               if( updateProgress > 0 )
+               {
+                  progress += updateProgress ;
+               }
+               if( progress > 100 )
+               {
+                  progress = 100 ;
+               }
+               else if( progress < 0 )
+               {
+                  progress = 0 ;
+               }
+               _aggrFlowArray( flow, updateFlow, newFlowArray ) ;
+               newOneResultInfoBuilder.appendElements( nodeResult ) ;
+               newOneResultInfoBuilder.append( OMA_FIELD_FLOW, newFlowArray ) ;
+               newResultInfo.append( newOneResultInfoBuilder.obj() ) ;
+            }
+            else
+            {
+               newResultInfo.append( oneResult ) ;
+            }
+         }
+      }
+
+      newTaskInfo.append( OMA_FIELD_ERRNO, errnoNum ) ;
+      newTaskInfo.append( OMA_FIELD_DETAIL, detail ) ;
+      newTaskInfo.append( OMA_FIELD_PROGRESS, progress ) ;
+      newTaskInfo.append( OMA_FIELD_RESULTINFO, newResultInfo.arr() ) ;
+      newTaskInfo.appendElements( taskInfo2 ) ;
+
+      taskInfo = newTaskInfo.obj() ;
+
+   done:
+      return rc ;
+   }
+
+   /*
+     _omaShrinkBusiness implement
+   */
+   IMPLEMENT_OACMD_AUTO_REGISTER( _omaShrinkBusiness )
+
+   _omaShrinkBusiness::_omaShrinkBusiness()
+   {
+   }
+
+   _omaShrinkBusiness::~_omaShrinkBusiness()
+   {
+   }
+
+   INT32 _omaShrinkBusiness::init( const CHAR* pInstallInfo )
+   {
+      INT32 rc = SDB_OK ;
+      stringstream ss ;
+      BSONObj bus( pInstallInfo ) ;
+
+      ss << "var " << JS_ARG_BUS << " = " 
+         << bus.toString( FALSE, TRUE ).c_str() << " ; " ;
+
+      _jsFileArgs = ss.str() ;
+      PD_LOG( PDDEBUG, "Extend SequoiaDB argument: %s",
+              _jsFileArgs.c_str() ) ;
+
+      rc = addJsFile( FILE_SHRINK_BUSINESS, _jsFileArgs.c_str() ) ;
+      if ( rc )
+      {
+         PD_LOG( PDERROR, "Failed to add js file[%s], rc = %d ",
+                 FILE_SHRINK_BUSINESS, rc ) ;
+         goto error ;
+      }
+         
+   done:
+      return rc ;
+   error:
+     goto done ;
+   }
+
+   void _omaShrinkBusiness::_aggrFlowArray( const BSONObj& array1,
+                                            const BSONObj& array2,
+                                            BSONArray& out )
+   {
+      BSONArrayBuilder arrayBuilder ;
+
+      {
+         BSONObjIterator iter( array1 ) ;
+         while( iter.more() )
+         {
+            BSONElement ele = iter.next() ;
+            arrayBuilder.append( ele.String() ) ;
+         }
+      }
+
+      {
+         BSONObjIterator iter( array2 ) ;
+         while( iter.more() )
+         {
+            BSONElement ele = iter.next() ;
+            arrayBuilder.append( ele.String() ) ;
+         }
+      }
+      out = arrayBuilder.arr() ;
+   }
+
+   INT32 _omaShrinkBusiness::convertResult( const BSONObj& itemInfo,
+                                            BSONObj& taskInfo )
+   {
+      INT32 rc = SDB_OK ;
+      INT32 updateErrno = SDB_OK ;
+      INT32 updateProgress = 0 ;
+      INT32 progress = taskInfo.getIntField( OMA_FIELD_PROGRESS ) ;
+      string updateDetail ;
+      string updateHostName ;
+      string updateSvcname ;
+      BSONObj resultInfo = taskInfo.getObjectField( OMA_FIELD_RESULTINFO ) ;
+      BSONObj condition  = BSON( OMA_FIELD_ERRNO << "" <<
+                                 OMA_FIELD_DETAIL << "" <<
+                                 OMA_FIELD_PROGRESS << "" <<
+                                 OMA_FIELD_RESULTINFO << "" ) ;
+      BSONObj oneResultCondition = BSON( OMA_FIELD_HOSTNAME << "" <<
+                                         OMA_FIELD_DATAGROUPNAME << "" <<
+                                         OMA_FIELD_SVCNAME << "" <<
+                                         OMA_FIELD_ROLE << "" <<
+                                         OMA_FIELD_STATUS << 0 <<
+                                         OMA_FIELD_STATUSDESC << "" <<
+                                         OMA_FIELD_ERRNO << 0 <<
+                                         OMA_FIELD_DETAIL << ""  ) ;
+      BSONObj updateFlow = itemInfo.getObjectField( OMA_FIELD_FLOW ) ;
+      BSONObj nodeResult = itemInfo.filterFieldsUndotted(
+                                                    oneResultCondition, TRUE ) ;
+      BSONObj taskInfo2 = taskInfo.filterFieldsUndotted( condition, FALSE ) ;
+      BSONObjBuilder newTaskInfo ;
+      BSONArrayBuilder newResultInfo ;
+
+      rc = omaGetStringElement( itemInfo, OMA_FIELD_HOSTNAME, updateHostName ) ;
+      if( rc )
+      {
+         rc = SDB_OK ;
+         goto done ;
+      }
+
+      rc = omaGetStringElement( itemInfo, OMA_FIELD_SVCNAME, updateSvcname ) ;
+      if( rc )
+      {
+         rc = SDB_OK ;
+         goto done ;
+      }
+
+      rc = omaGetIntElement( itemInfo, OMA_FIELD_ERRNO, updateErrno ) ;
+      if( rc )
+      {
+         rc = SDB_OK ;
+         updateErrno = SDB_OK ;
+      }
+
+      rc = omaGetIntElement( itemInfo, OMA_FIELD_PROGRESS, updateProgress ) ;
+      if( rc )
+      {
+         rc = SDB_OK ;
+         updateProgress = -1 ;
+      }
+
+      rc = omaGetStringElement( itemInfo, OMA_FIELD_DETAIL, updateDetail ) ;
+      if( rc )
+      {
+         rc = SDB_OK ;
+         updateDetail = "" ;
+      }
+
+      {
+         BSONObjIterator resultIter( resultInfo ) ;
+
+         while( resultIter.more() )
+         {
+            BSONElement resultEle = resultIter.next() ;
+            BSONObj oneResult = resultEle.embeddedObject() ;
+            string hostName = oneResult.getStringField( OMA_FIELD_HOSTNAME ) ;
+            string svcname = oneResult.getStringField( OMA_FIELD_SVCNAME ) ;
+
+            if( updateHostName == hostName && updateSvcname == svcname )
+            {
+               BSONObjBuilder newOneResultInfoBuilder ;
+               BSONArray newFlowArray ;
+               BSONObj flow = oneResult.getObjectField( OMA_FIELD_FLOW ) ;
+               if( updateProgress > 0 )
+               {
+                  progress += updateProgress ;
+               }
+               if( progress > 100 )
+               {
+                  progress = 100 ;
+               }
+               else if( progress < 0 )
+               {
+                  progress = 0 ;
+               }
+               _aggrFlowArray( flow, updateFlow, newFlowArray ) ;
+               newOneResultInfoBuilder.appendElements( nodeResult ) ;
+               newOneResultInfoBuilder.append( OMA_FIELD_FLOW, newFlowArray ) ;
+               newResultInfo.append( newOneResultInfoBuilder.obj() ) ;
+            }
+            else
+            {
+               newResultInfo.append( oneResult ) ;
+            }
+         }
+      }
+
+      newTaskInfo.append( OMA_FIELD_ERRNO, SDB_OK ) ;
+      newTaskInfo.append( OMA_FIELD_DETAIL, "" ) ;
+      newTaskInfo.append( OMA_FIELD_PROGRESS, progress ) ;
+      newTaskInfo.append( OMA_FIELD_RESULTINFO, newResultInfo.arr() ) ;
+      newTaskInfo.appendElements( taskInfo2 ) ;
+
+      taskInfo = newTaskInfo.obj() ;
+
+   done:
+      return rc ;
+   }
+
+   /*
+     _omaDeoloyPackage implement
+   */
+   IMPLEMENT_OACMD_AUTO_REGISTER( _omaDeployPackage )
+
+   _omaDeployPackage::_omaDeployPackage()
+   {
+   }
+
+   _omaDeployPackage::~_omaDeployPackage()
+   {
+   }
+
+   INT32 _omaDeployPackage::init( const CHAR* pInstallInfo )
+   {
+      INT32 rc = SDB_OK ;
+      stringstream ss ;
+      BSONObj bus( pInstallInfo ) ;
+
+      ss << "var " << JS_ARG_BUS << " = " 
+         << bus.toString( FALSE, TRUE ).c_str() << " ; " ;
+
+      _jsFileArgs = ss.str() ;
+      PD_LOG( PDDEBUG, "Deploy package argument: %s",
+              _jsFileArgs.c_str() ) ;
+
+      rc = addJsFile( FILE_DEPLOY_PACKAGE, _jsFileArgs.c_str() ) ;
+      if ( rc )
+      {
+         PD_LOG( PDERROR, "Failed to add js file[%s], rc = %d ",
+                 FILE_DEPLOY_PACKAGE, rc ) ;
+         goto error ;
+      }
+         
+   done:
+      return rc ;
+   error:
+     goto done ;
+   }
+
+   void _omaDeployPackage::_aggrFlowArray( const BSONObj& array1,
+                                           const BSONObj& array2,
+                                           BSONArray& out )
+   {
+      BSONArrayBuilder arrayBuilder ;
+
+      {
+         BSONObjIterator iter( array1 ) ;
+         while( iter.more() )
+         {
+            BSONElement ele = iter.next() ;
+            arrayBuilder.append( ele.String() ) ;
+         }
+      }
+
+      {
+         BSONObjIterator iter( array2 ) ;
+         while( iter.more() )
+         {
+            BSONElement ele = iter.next() ;
+            arrayBuilder.append( ele.String() ) ;
+         }
+      }
+      out = arrayBuilder.arr() ;
+   }
+
+   INT32 _omaDeployPackage::convertResult( const BSONObj& itemInfo,
+                                           BSONObj& taskInfo )
+   {
+      INT32 rc = SDB_OK ;
+      INT32 updateErrno = SDB_OK ;
+      INT32 updateProgress = 0 ;
+      INT32 progress = taskInfo.getIntField( OMA_FIELD_PROGRESS ) ;
+      string updateDetail ;
+      string updateHostName ;
+      BSONObj resultInfo = taskInfo.getObjectField( OMA_FIELD_RESULTINFO ) ;
+      BSONObj condition  = BSON( OMA_FIELD_ERRNO      << "" <<
+                                 OMA_FIELD_DETAIL     << "" <<
+                                 OMA_FIELD_PROGRESS   << "" <<
+                                 OMA_FIELD_RESULTINFO << "" ) ;
+      BSONObj oneResultCondition = BSON( OMA_FIELD_HOSTNAME   << "" <<
+                                         OMA_FIELD_IP         << "" <<
+                                         OMA_FIELD_VERSION    << "" <<
+                                         OMA_FIELD_STATUS     << 0  <<
+                                         OMA_FIELD_STATUSDESC << "" <<
+                                         OMA_FIELD_ERRNO      << 0  <<
+                                         OMA_FIELD_DETAIL     << ""  ) ;
+      BSONObj updateFlow = itemInfo.getObjectField( OMA_FIELD_FLOW ) ;
+      BSONObj nodeResult = itemInfo.filterFieldsUndotted(
+                                                    oneResultCondition, TRUE ) ;
+      BSONObj taskInfo2 = taskInfo.filterFieldsUndotted( condition, FALSE ) ;
+      BSONObjBuilder newTaskInfo ;
+      BSONArrayBuilder newResultInfo ;
+
+      rc = omaGetStringElement( itemInfo, OMA_FIELD_HOSTNAME, updateHostName ) ;
+      if( rc )
+      {
+         rc = SDB_OK ;
+         goto done ;
+      }
+
+      rc = omaGetIntElement( itemInfo, OMA_FIELD_ERRNO, updateErrno ) ;
+      if( rc )
+      {
+         rc = SDB_OK ;
+         updateErrno = SDB_OK ;
+      }
+
+      rc = omaGetIntElement( itemInfo, OMA_FIELD_PROGRESS, updateProgress ) ;
+      if( rc )
+      {
+         rc = SDB_OK ;
+         updateProgress = -1 ;
+      }
+
+      rc = omaGetStringElement( itemInfo, OMA_FIELD_DETAIL, updateDetail ) ;
+      if( rc )
+      {
+         rc = SDB_OK ;
+         updateDetail = "" ;
+      }
+
+      {
+         BSONObjIterator resultIter( resultInfo ) ;
+
+         while( resultIter.more() )
+         {
+            BSONElement resultEle = resultIter.next() ;
+            BSONObj oneResult = resultEle.embeddedObject() ;
+            string hostName = oneResult.getStringField( OMA_FIELD_HOSTNAME ) ;
+
+            if( updateHostName == hostName )
+            {
+               BSONObjBuilder newOneResultInfoBuilder ;
+               BSONArray newFlowArray ;
+               BSONObj flow = oneResult.getObjectField( OMA_FIELD_FLOW ) ;
+               if( updateProgress > 0 )
+               {
+                  progress += updateProgress ;
+               }
+               if( progress > 100 )
+               {
+                  progress = 100 ;
+               }
+               else if( progress < 0 )
+               {
+                  progress = 0 ;
+               }
+               _aggrFlowArray( flow, updateFlow, newFlowArray ) ;
+               newOneResultInfoBuilder.appendElements( nodeResult ) ;
+               newOneResultInfoBuilder.append( OMA_FIELD_FLOW, newFlowArray ) ;
+               newResultInfo.append( newOneResultInfoBuilder.obj() ) ;
+            }
+            else
+            {
+               newResultInfo.append( oneResult ) ;
+            }
+         }
+      }
+
+      newTaskInfo.append( OMA_FIELD_ERRNO, SDB_OK ) ;
+      newTaskInfo.append( OMA_FIELD_DETAIL, "" ) ;
+      newTaskInfo.append( OMA_FIELD_PROGRESS, progress ) ;
+      newTaskInfo.append( OMA_FIELD_RESULTINFO, newResultInfo.arr() ) ;
+      newTaskInfo.appendElements( taskInfo2 ) ;
+
+      taskInfo = newTaskInfo.obj() ;
+
+   done:
+      return rc ;
+   }
+
+   
+   /************************** start plugins ************************/
+   /*
+      _omaStartPlugins
+   */
+
+   IMPLEMENT_OACMD_AUTO_REGISTER( _omaStartPlugins )
+
+   _omaStartPlugins::_omaStartPlugins()
+   {
+   }
+
+   _omaStartPlugins::~_omaStartPlugins()
+   {
+   }
+
+   INT32 _omaStartPlugins::init( const CHAR *pInfo )
+   {
+      INT32 rc = SDB_OK ;
+      try
+      {
+         stringstream ss ;
+         BSONObj bus( pInfo ) ;
+
+         ss << "var " << JS_ARG_BUS << " = " 
+            << bus.toString(FALSE, TRUE).c_str() << " ; " ;
+         _jsFileArgs = ss.str() ;
+         PD_LOG ( PDDEBUG, "Scan host passes argument: %s",
+                  _jsFileArgs.c_str() ) ;
+         rc = addJsFile( FILE_START_PLUGINS, _jsFileArgs.c_str() ) ;
+         if ( rc )
+         {
+            PD_LOG ( PDERROR, "Failed to add js file[%s], rc = %d ",
+                     FILE_SCAN_HOST, rc ) ;
+            goto error ;
+         }
+      }
+      catch ( std::exception &e )
+      {
+         rc = SDB_INVALIDARG ;
+         PD_LOG ( PDERROR, "Failed to build bson, exception is: %s",
+                  e.what() ) ;
+         goto error ;
+      }
+   done:
+      return rc ;
+   error:
+     goto done ;
+   }
+
+   /************************** stop plugins ************************/
+   /*
+      _omaStopPlugins
+   */
+
+   IMPLEMENT_OACMD_AUTO_REGISTER( _omaStopPlugins )
+
+   _omaStopPlugins::_omaStopPlugins()
+   {
+   }
+
+   _omaStopPlugins::~_omaStopPlugins()
+   {
+   }
+
+   INT32 _omaStopPlugins::init( const CHAR *pInfo )
+   {
+      INT32 rc = SDB_OK ;
+      try
+      {
+         stringstream ss ;
+         BSONObj bus( pInfo ) ;
+
+         ss << "var " << JS_ARG_BUS << " = " 
+            << bus.toString(FALSE, TRUE).c_str() << " ; " ;
+         _jsFileArgs = ss.str() ;
+         PD_LOG ( PDDEBUG, "Scan host passes argument: %s",
+                  _jsFileArgs.c_str() ) ;
+         rc = addJsFile( FILE_STOP_PLUGINS, _jsFileArgs.c_str() ) ;
+         if ( rc )
+         {
+            PD_LOG ( PDERROR, "Failed to add js file[%s], rc = %d ",
+                     FILE_SCAN_HOST, rc ) ;
+            goto error ;
+         }
+      }
+      catch ( std::exception &e )
+      {
+         rc = SDB_INVALIDARG ;
+         PD_LOG ( PDERROR, "Failed to build bson, exception is: %s",
+                  e.what() ) ;
+         goto error ;
+      }
    done:
       return rc ;
    error:

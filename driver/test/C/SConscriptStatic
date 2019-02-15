@@ -82,6 +82,5 @@ shard = env.Program("shard_static", [testFiles7, gtestMainObj])
 debug = env.Program("debug_static", [testFiles8, gtestMainObj])
 cbson = env.Program("cbson_static", [testFiles9, gtestMainObj])
 domain = env.Program("domain_static", [testFiles10, gtestMainObj])
-
 env.Install( '#/build_test', [collection,collectionspace,cursor,sdb,snapshot,concurrent,
                               shard, debug, cbson, domain] )

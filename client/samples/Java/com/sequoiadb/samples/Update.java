@@ -61,10 +61,13 @@ public class Update {
 		modifier.put("$set", m);
 		cl.upsert(matcher, modifier, null);
 		// query the updated data from db
-		DBCursor cursor = cl.query(matcher, null, null, null);
-		if(cursor.hasNext())
-			System.out.println(cursor.getNext());
-
+		DBCursor cursor = cursor = cl.query(matcher, null, null, null);
+		try {
+			if(cursor.hasNext())
+				System.out.println(cursor.getNext());
+		} finally {
+			cursor.close();
+		}
 		sdb.disconnect();
 	}
 

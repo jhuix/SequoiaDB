@@ -46,10 +46,11 @@
 #include "dmsStorageUnit.hpp"
 #include "msgMessage.hpp"
 
+using namespace bson ;
 
 namespace engine
 {
-   PD_TRACE_DECLARE_FUNCTION ( SDB__MIGLOADJSONPS__SENDMSG,"migMaster::sendMsgToClient" )
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__MIGLOADJSONPS__SENDMSG,"migMaster::sendMsgToClient" )
    INT32 migMaster::sendMsgToClient ( const CHAR *format, ... )
    {
       INT32 rc = SDB_OK ;
@@ -92,7 +93,7 @@ namespace engine
       goto done ;
    }
 
-   PD_TRACE_DECLARE_FUNCTION ( SDB__MIGLOADJSONPS__GETBLOCK,"migMaster::getBlockFromPointer" )
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__MIGLOADJSONPS__GETBLOCK,"migMaster::getBlockFromPointer" )
    INT32 migMaster::getBlockFromPointer(UINT32 startOffset, UINT32 size,
                                         UINT32 &startBlock, UINT32 &endBlock)
    {
@@ -119,7 +120,7 @@ namespace engine
       goto done ;
    }
 
-   PD_TRACE_DECLARE_FUNCTION ( SDB__MIGLOADJSONPS__POPFROMQUEUE, "migMaster::popFromQueue" )
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__MIGLOADJSONPS__POPFROMQUEUE, "migMaster::popFromQueue" )
    void migMaster::popFromQueue( pmdEDUCB *eduCB,
                                  UINT32 &offset, UINT32 &size,
                                  UINT32 &line,   UINT32 &column )
@@ -152,7 +153,7 @@ namespace engine
       PD_TRACE_EXIT ( SDB__MIGLOADJSONPS__POPFROMQUEUE );
    }
 
-   PD_TRACE_DECLARE_FUNCTION ( SDB__MIGLOADJSONPS__PUSHTOQUEUE, "migMaster::pushToQueue" )
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__MIGLOADJSONPS__PUSHTOQUEUE, "migMaster::pushToQueue" )
    void migMaster::pushToQueue( UINT32 offset, UINT32 size,
                                 UINT32 line,   UINT32 column )
    {
@@ -166,7 +167,7 @@ namespace engine
       PD_TRACE_EXIT ( SDB__MIGLOADJSONPS__PUSHTOQUEUE );
    }
 
-   PD_TRACE_DECLARE_FUNCTION ( SDB__MIGLOADJSONPS__INITIALIZE, "migMaster::initialize" )
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__MIGLOADJSONPS__INITIALIZE, "migMaster::initialize" )
    INT32 migMaster::initialize ( setParameters *pParameters )
    {
       INT32 rc = SDB_OK ;
@@ -276,7 +277,7 @@ namespace engine
       goto done ;
    }
 
-   PD_TRACE_DECLARE_FUNCTION ( SDB__MIGLOADJSONPS__STOPWAIT, "migMaster::_stopAndWaitWorker" )
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__MIGLOADJSONPS__STOPWAIT, "migMaster::_stopAndWaitWorker" )
    INT32 migMaster::_stopAndWaitWorker ( pmdEDUCB *eduCB,
                                          UINT32 &success,
                                          UINT32 &failure )
@@ -305,7 +306,7 @@ namespace engine
       return rc ;
    }
 
-   PD_TRACE_DECLARE_FUNCTION ( SDB__MIGLOADJSONPS__CHECKWORKER, "migMaster::_checkErrAndRollback" )
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__MIGLOADJSONPS__CHECKWORKER, "migMaster::_checkErrAndRollback" )
    INT32 migMaster::_checkErrAndRollback  ( pmdEDUCB *eduCB,
                                             dmsStorageLoadOp* loadOp,
                                             dmsMBContext *mbContext,
@@ -316,21 +317,14 @@ namespace engine
       PD_TRACE_ENTRY ( SDB__MIGLOADJSONPS__CHECKWORKER );
       pmdEDUEvent    event ;
 
-      // if we receive any post, that means worker got something wrong and we
-      // should handle it respectively
       /*isGetEven = eduCB->waitEvent ( event, 0 ) ;
       if ( isGetEven )
       {
-         // if we receive anything, let's count the success and failure and
-         // goon, note it means something wrong happened at worker
          workerRe = (_workerReturn *)event._Data ;
          success += workerRe->success ;
          failure += workerRe->failure ;
          --_workerNum ;
       }*/
-      // if something wrong happened at worker, or the connection is gone,
-      // let's rollback
-      //if ( isGetEven || !_sock->isConnected() )
       if ( !_exitSignal )
       {
          _exitSignal = !_sock->isConnected() ;
@@ -341,17 +335,13 @@ namespace engine
       }
       if ( _exitSignal )
       {
-         // print the error in log
          PD_LOG ( PDERROR, "rollback all data" ) ;
-         // send error to user side, note we don't need to check rc since we
-         // can't do anything if it's not success, anyway
          sendMsgToClient ( "Error: rollback all data" ) ;
 
          rc = _stopAndWaitWorker ( eduCB, success, failure ) ;
          PD_RC_CHECK ( rc, PDERROR,
                        "Failed to call _stopAndWaitWorker, rc=%d", rc ) ;
 
-         //roll back
          rc = loadOp->loadRollbackPhase ( mbContext ) ;
          if ( rc )
          {
@@ -371,7 +361,7 @@ namespace engine
    }
 
    // PD_TRACE_DECLARE_FUNCTION ( SDB__MIGLOADJSONPS__RUN, "migMaster::run" )
-   INT32 migMaster::run()
+   INT32 migMaster::run( pmdEDUCB *cb )
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__MIGLOADJSONPS__RUN );
@@ -382,7 +372,6 @@ namespace engine
       pmdKRCB    *krcb          = pmdGetKRCB () ;
       pmdEDUMgr  *eduMgr        = krcb->getEDUMgr () ;
       SDB_DMSCB  *dmsCB         = krcb->getDMSCB () ;
-      pmdEDUCB   *eduCB         = eduMgr->getEDU() ;
       EDUID       agentEDU      = PMD_INVALID_EDUID ;
       BOOLEAN     writable      = FALSE ;
       BOOLEAN     noClearFlag   = FALSE ;
@@ -399,6 +388,14 @@ namespace engine
       dmsStorageLoadOp dmsLoadExtent ;
 
       sendMsgToClient ( "Load start" ) ;
+
+      rc = dmsCB->writable( cb ) ;
+      if ( rc )
+      {
+         PD_LOG ( PDERROR, "Database is not writable, rc = %d", rc ) ;
+         goto error;
+      }
+      writable = TRUE;
 
       rc = rtnCollectionSpaceLock ( _pParameters->pCollectionSpaceName,
                                     dmsCB,
@@ -417,7 +414,8 @@ namespace engine
 
       dmsLoadExtent.init ( su ) ;
 
-      rc = su->data()->getMBContext( &mbContext, _pParameters->pCollectionName,
+      rc = su->data()->getMBContext( &mbContext,
+                                     _pParameters->pCollectionName,
                                      EXCLUSIVE ) ;
       if ( rc )
       { 
@@ -443,8 +441,6 @@ namespace engine
          PD_LOG( PDERROR, "Collection is loading" ) ;
          rc = SDB_COLLECTION_LOAD ;
          sendMsgToClient ( "Collection is loading" ) ;
-         // we set noClearFlag to true, so that we'll convert the collection
-         // flag to NORMAL in done
          noClearFlag = TRUE ;
          goto error ;
       }
@@ -452,31 +448,22 @@ namespace engine
       dmsLoadExtent.setFlagLoad ( mbContext->mb() ) ;
       dmsLoadExtent.setFlagLoadLoad ( mbContext->mb() ) ;
 
-      // unlock
       mbContext->mbUnlock() ;
 
-      rc = dmsCB->writable( eduCB ) ;
-      if ( rc )
-      {
-         PD_LOG ( PDERROR, "Database is not writable, rc = %d", rc ) ;
-         goto error;
-      }
-      writable = TRUE;
-
       dataWorker.pMaster = this ;
-      dataWorker.masterEDUID = eduCB->getID() ;
+      dataWorker.masterEDUID = cb->getID() ;
       dataWorker.pSu = su ;
       dataWorker.clLID = mbContext->clLID() ;
       dataWorker.collectionID = mbContext->mbID() ;
 
-      for ( UINT32 i = 0; i < _pParameters->workerNum; ++i )
+      for ( UINT32 i = 0; i < _pParameters->workerNum ; ++i )
       {
          eduMgr->startEDU ( EDU_TYPE_LOADWORKER, &dataWorker, &agentEDU ) ;
       }
 
       while ( TRUE )
       {
-         rc = _checkErrAndRollback ( eduCB, &dmsLoadExtent,
+         rc = _checkErrAndRollback ( cb, &dmsLoadExtent,
                                      mbContext, success, failure ) ;
          if ( SDB_TIMEOUT != rc &&
               rc )
@@ -486,18 +473,13 @@ namespace engine
             goto error ;
          }
 
-         // fetch one record
          rc = _parser->getNextRecord ( startOffset, size,
                                        &line, &column, _ppBucket ) ;
          if ( rc )
          {
-            // special handle for end of file
             if ( rc == SDB_EOF )
             {
-               // when we hit end of file, let's push 0 to all worker threads,
-               // with num of workers ( so each worker will dispatch one 0, and
-               // exit )
-               rc = _stopAndWaitWorker ( eduCB, success, failure ) ;
+               rc = _stopAndWaitWorker ( cb, success, failure ) ;
                PD_RC_CHECK ( rc, PDERROR,
                              "Failed to call _stopAndWaitWorker, rc=%d", rc ) ;
                break ;
@@ -507,7 +489,6 @@ namespace engine
             PD_LOG ( PDERROR, "Failed to parseJSONs getNextRecord,rc=%d", rc ) ;
             goto error1 ;
          }
-         // calculate the blocks to be locked, based on the length of our record
          rc = getBlockFromPointer ( startOffset, size,
                                     startBlock, endBlock ) ;
          if ( rc )
@@ -515,31 +496,27 @@ namespace engine
             PD_LOG ( PDERROR, "Failed to get block from pointer, rc=%d", rc ) ;
             goto error1 ;
          }
-         // lock them
          for ( UINT32 i = startBlock; i <= endBlock; ++i )
          {
             _ppBucket[i]->inc() ;
          }
-         // push the record to queue
          pushToQueue ( startOffset, size, line, column ) ;
-      } // while ( !eduCB->isForced() )
+      } // while ( !cb->isForced() )
 
-      // when all workers are finish, let's start build phase to rebuild all
-      // indexes
       sendMsgToClient ( "build index" ) ;
-      rc = dmsLoadExtent.loadBuildPhase ( mbContext, eduCB, _pParameters->isAsynchronous,
+      rc = dmsLoadExtent.loadBuildPhase ( mbContext, cb,
+                                          _pParameters->isAsynchronous,
                                           this, &success, &failure ) ;
       if ( rc )
       {
          PD_LOG ( PDERROR, "Failed to load data, rc=%d", rc ) ;
          goto error ;
       }
+
    done:
-      // we only lock and clear flag if we switched to load
       if ( su && mbContext && !noClearFlag )
       {
          rc = mbContext->mbLock( EXCLUSIVE ) ;
-         // we should log failure information
          if ( SDB_OK == rc )
          {
             if ( dmsLoadExtent.isFlagLoadLoad ( mbContext->mb() ) )
@@ -561,7 +538,6 @@ namespace engine
          }
       }
 
-      // send the success message to client
       sendMsgToClient ( "success json: %u, failure json: %u",
                         success, failure ) ;
       sendMsgToClient ( "Load end" ) ;
@@ -574,17 +550,16 @@ namespace engine
       {
          dmsCB->suUnlock ( suID ) ;
       }
-      // count down
       if ( writable )
       {
-         dmsCB->writeDown( eduCB );
+         dmsCB->writeDown( cb );
       }
       PD_TRACE_EXITRC ( SDB__MIGLOADJSONPS__RUN, rc );
       return rc ;
    error:
       goto done ;
    error1:
-      _stopAndWaitWorker ( eduCB, success, failure ) ;
+      _stopAndWaitWorker ( cb, success, failure ) ;
       sendMsgToClient ( "Error: rollback all data" ) ;
       failure += success ;
       success = 0 ;
@@ -633,7 +608,7 @@ namespace engine
       SAFE_OSS_FREE ( _sendMsg ) ;
    }
 
-   PD_TRACE_DECLARE_FUNCTION ( SDB__MIGWORKER__GETBSON, "migWorker::_getBsonFromQueue" )
+   // PD_TRACE_DECLARE_FUNCTION ( SDB__MIGWORKER__GETBSON, "migWorker::_getBsonFromQueue" )
    INT32 migWorker::_getBsonFromQueue( pmdEDUCB *eduCB, BSONObj &obj )
    {
       INT32 rc = SDB_OK ;
@@ -645,7 +620,6 @@ namespace engine
       UINT32 column = 0 ;
       UINT32 startBlock = 0 ;
       UINT32 endBlock   = 0 ;
-      //CHAR  *pJsonBuffer = NULL ;
 
       _master->popFromQueue ( eduCB,
                               offset, size,
@@ -680,8 +654,6 @@ namespace engine
       }
       if ( tempRc )
       {
-         //PD_LOG ( PDERROR, "Failed to json convert bson, json: %s , rc=%d",
-         //         _pJsonBuffer, tempRc ) ;
          _master->sendMsgToClient ( "Error: error "
                                     "in json format, line %u, column %u",
                                     line, column ) ;
@@ -713,13 +685,13 @@ namespace engine
                                  dmsStorageUnit *su,
                                  UINT16 collectionID,
                                  UINT32 clLID,
-                                 BOOLEAN isAsynchr )
+                                 BOOLEAN isAsynchr,
+                                 pmdEDUCB *cb )
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY ( SDB__MIGWORKER__IMPORT );
       pmdKRCB     *krcb           = pmdGetKRCB () ;
-      pmdEDUMgr   *eduMgr         = krcb->getEDUMgr () ;
-      pmdEDUCB    *eduCB          = eduMgr->getEDU() ;
+      pmdEDUMgr   *eduMgr         = krcb->getEDUMgr() ;
       BOOLEAN      isLast         = FALSE ;
       BOOLEAN      isFirst        = TRUE ;
       BSONObj      record ;
@@ -737,7 +709,8 @@ namespace engine
          PD_LOG ( PDERROR, "memory error" ) ;
          goto error ;
       }
-      rc = su->data()->getMBContext( &mbContext, collectionID, clLID, -1 ) ;
+      rc = su->data()->getMBContext( &mbContext, collectionID, clLID,
+                                     DMS_INVALID_CLID, -1 ) ;
       if ( rc )
       {
          PD_LOG( PDERROR, "Failed to get dms mb context, rc: %d", rc ) ;
@@ -767,10 +740,10 @@ namespace engine
       }
 
       while ( !_master->_exitSignal &&
-              !eduCB->isInterrupted() &&
-              !eduCB->isDisconnected() )
+              !cb->isInterrupted() &&
+              !cb->isDisconnected() )
       {
-         rc = _getBsonFromQueue ( eduCB, record ) ;
+         rc = _getBsonFromQueue ( cb, record ) ;
          if ( rc )
          {
             if ( SDB_MIG_END_OF_QUEUE == rc )
@@ -794,6 +767,7 @@ namespace engine
             }
          }
          rc = dmsLoadExtent.pushToTempDataBlock( mbContext,
+                                                 cb,
                                                  record,
                                                  isLast,
                                                  isAsynchr ) ;

@@ -112,7 +112,6 @@ INT32 readInput ( const CHAR *pPrompt, INT32 numIndent,
       return SDB_APP_FORCED ;
    }
 
-   // do a loop if the input end with '\\' character
    while ( pInBuff[ strlen(pInBuff)-1 ] == '\\' &&
            buffLen - strlen( pInBuff ) > 0 )
    {
@@ -159,6 +158,12 @@ TEST(sqlTest, parse_1)
       ossMemset( line, 0, SQL_READLINE_LEN ) ;
       ossMemset( dumpBuf, 0, SQL_DUMPBUFF_LEN ) ;
 
+      if ( qgm )
+      {
+         SDB_OSS_DEL qgm ;
+         qgm = NULL ;
+      }
+
       rc = readInput( "sql", 0, line, SQL_READLINE_LEN ) ;
       if ( rc )
       {
@@ -182,70 +187,85 @@ TEST(sqlTest, parse_1)
       const CHAR *sql = NULL ;
       utilStrTrim( line, sql ) ;
       SQL_AST &ast = container.ast() ;
-      ast = ast_parse( sql, grammar ) ;
+      ast = SQL_PARSE( sql, grammar ) ;
       _qgmPlan *plan = NULL ;
+
       cout << "match:"<< ast.match << " full:" << ast.full << endl ;
-      if ( ast.match )
+
+      if ( ast.match && ast.full )
+      {
+         sqlDumpAst( ast.trees ) ;
+         cout << endl ;
+         rc = builder.build( ast.trees, qgm ) ;
+         if ( SDB_OK == rc )
          {
-            sqlDumpAst( ast.trees ) ;
-            cout << endl ;
-            rc = builder.build( ast.trees, qgm ) ;
+            qgm->dump() ;
+            cout << "**************" << endl ;
+
+            qgmOptiTreeNode *e = NULL ;
+            rc = qgm->extend( e ) ;
+            if ( e )
+            {
+               qgm = e ;
+            }
+
+            if ( SDB_OK != rc )
+            {
+               cout << "***ERROR*** Extend failed, rc = " << rc << endl ;
+               continue ;
+            }
+            else
+            {
+               cout << "After extent, tree dump:" << endl ;
+               e->dump() ;
+            }
+
+            qgmOptTree tree( qgm ) ;
+            optQgmOptimizer optimizer ;
+            rc = optimizer.adjust( tree ) ;
+            if ( qgm != tree.getRoot() )
+            {
+               qgm = tree.getRoot() ;
+            }
+
+            if ( SDB_OK != rc )
+            {
+               cout << "***ERROR*** Optimize failed, rc = " << rc << endl ;
+               continue ;
+            }
+            else
+            {
+               cout << "After optimizer, tree dump:" << endl ;
+               qgm->dump() ;
+            }
+
+            rc = builder.build( tree.getRoot(), plan ) ;
             if ( SDB_OK == rc )
             {
-               qgm->dump() ;
-               cout << "**************" << endl ;
-
-               qgmOptiTreeNode *e = NULL ;
-               rc = qgm->extend( e ) ;
-               if ( SDB_OK != rc )
-               {
-                  cout << "rc = " << rc << endl ;
-                  break ;
-               }
-               else
-               {
-                  cout << "After extent, tree dump:" << endl ;
-                  e->dump() ;
-                  qgm = e ;
-               }
-
-               // optimizer
-               qgmOptTree tree( qgm ) ;
-               optQgmOptimizer optimizer ;
-               rc = optimizer.adjust( tree ) ;
-               if ( SDB_OK != rc )
-               {
-                  cout << "opt failed, rc = " << rc << endl ;
-                  break ;
-               }
-               else
-               {
-                  cout << "After optimizer, tree dump:" << endl ;
-                  qgm = tree.getRoot() ;
-                  qgm->dump() ;
-               }
-
-               rc = builder.build( tree.getRoot(), plan ) ;
+               cout << endl << "plan tree:" << endl ;
+               container.plan() = plan ;
+               rc = qgmDump( &container, dumpBuf, 1024*1024*10) ;
                if ( SDB_OK == rc )
                {
-                  cout << endl << "plan tree:" << endl ;
-                  container.plan() = plan ;
-                  rc = qgmDump( &container, dumpBuf, 1024*1024*10) ;
-                  if ( SDB_OK == rc )
                   cout << dumpBuf << endl ;
                }
-               else
-               {
-                  cout << "rc:" << rc << endl ;
-                  break ;
-               }
-
-               SDB_OSS_DEL qgm ;
-               qgm = NULL ;
             }
+            else
+            {
+               cout << "***ERROR*** Build plan tree failed, rc = "
+                    << rc << endl ;
+               continue ;
+            }
+
+            SDB_OSS_DEL qgm ;
+            qgm = NULL ;
          }
+      }
       else
-         cout << ast.stop << endl ;
+      {
+         cout << sql << endl ;
+         cout << string( ast.stop - sql, ' ' ) << '^' << endl ;
+      }
    }
 
 done:

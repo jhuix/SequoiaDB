@@ -46,126 +46,8 @@
 
 namespace fs = boost::filesystem ;
 
-#if defined (_WINDOWS)
-
-// append .exe if it doesn't have one
-// PD_TRACE_DECLARE_FUNCTION ( SDB_GETEXECNM, "getExecutableName" )
-static INT32 getExecutableName ( const CHAR * exeName ,
-                                 CHAR * buf ,
-                                 UINT32 bufSize )
-{
-   INT32 rc = SDB_OK ;
-   PD_TRACE_ENTRY ( SDB_GETEXECNM );
-
-   SDB_ASSERT ( exeName && buf && bufSize > 0 , "invalid argument" ) ;
-
-   try
-   {
-      string strName = exeName ;
-      string strEnd  = ".exe" ;
-      if ( strName.length() <= strEnd.length() ||
-           0 != strName.compare ( strName.length() - strEnd.length() ,
-                                  strEnd.length() , strEnd ) )
-      {
-         strName += strEnd ;
-      }
-
-      if ( strName.length() >= bufSize )
-      {
-         rc = SDB_INVALIDSIZE ;
-         goto error ;
-      }
-      ossStrcpy ( buf , strName.c_str() ) ;
-   }
-   catch ( std::bad_alloc & )
-   {
-      rc = SDB_OOM ;
-      goto error ;
-   }
-
-done :
-   PD_TRACE_EXITRC ( SDB_GETEXECNM, rc );
-   return rc ;
-error :
-   goto done ;
-}
-
-#endif
-
-// PD_TRACE_DECLARE_FUNCTION ( SDB_OSSLCEXEC, "ossLocateExecutable" )
-INT32 ossLocateExecutable ( const CHAR * refPath ,
-                            const CHAR * exeName ,
-                            CHAR * buf ,
-                            UINT32 bufSize )
-{
-   INT32          rc          = SDB_OK ;
-   PD_TRACE_ENTRY ( SDB_OSSLCEXEC );
-   INT32          dirLen      = 0 ;
-   UINT32         exeLen      = 0 ;
-   const CHAR *   separator   = NULL ;
-   CHAR newExeName[ OSS_MAX_PATHSIZE + 1 ] = {0} ;
-
-   ossMemset ( newExeName , 0 , sizeof ( newExeName ) ) ;
-
-   if ( ! ( refPath && exeName && buf && bufSize > 0 ) )
-   {
-      rc = SDB_INVALIDARG ;
-      goto error ;
-   }
-
-#ifdef _WINDOWS
-   rc = getExecutableName ( exeName , newExeName , sizeof ( newExeName ) ) ;
-   if ( rc != SDB_OK )
-   {
-      goto error ;
-   }
-#else
-   if ( ossStrlen ( exeName ) >= sizeof ( newExeName ) )
-   {
-      rc = SDB_INVALIDSIZE ;
-      goto error ;
-   }
-   ossStrncpy ( newExeName , exeName, sizeof ( newExeName ) ) ;
-#endif
-
-   exeLen = ossStrlen ( newExeName ) ;
-
-   separator = ossStrrchr ( refPath , OSS_PATH_SEP_CHAR ) ;
-   if ( ! separator )
-   {
-      // refPath is resolved using system's PATH variable.
-      // Addtionally, on Windows, it may be in the current working diretory.
-      // so we can just copy newExeName to buf.
-      if ( exeLen >= bufSize )
-      {
-         rc = SDB_INVALIDSIZE ;
-         goto error ;
-      }
-      ossStrcpy ( buf , newExeName ) ;
-      goto done ;
-   }
-
-   dirLen = separator - refPath ; // length without separator
-
-   if ( dirLen + exeLen + 1 >= bufSize )
-   {
-      rc = SDB_INVALIDSIZE ;
-      goto error ;
-   }
-
-   ossStrncpy ( buf , refPath , dirLen + 1 ) ; // 1 for separator
-   buf[dirLen + 1] = '\0' ;
-   ossStrncat ( buf , newExeName , exeLen ) ;
-
-done :
-   PD_TRACE_EXITRC ( SDB_OSSLCEXEC, rc );
-   return rc ;
-error :
-   goto done ;
-}
-
 static INT32 _ossEnumFiles( const string &dirPath,
-                            map<string, string> &mapFiles,
+                            multimap<string, string> &mapFiles,
                             const CHAR *filter, UINT32 filterLen,
                             OSS_MATCH_TYPE type, UINT32 deep )
 {
@@ -207,7 +89,8 @@ static INT32 _ossEnumFiles( const string &dirPath,
                          0 == ossStrcmp( fileName.c_str(), filter ) )
                      )
                   {
-                     mapFiles[ fileName ] = dir_iter->path().string() ;
+                     mapFiles.insert( pair<string, string>( fileName,
+                                      dir_iter->path().string() ) );
                   }
                }
                else if ( fs::is_directory( dir_iter->path() ) && deep > 1 )
@@ -221,7 +104,6 @@ static INT32 _ossEnumFiles( const string &dirPath,
                PD_LOG( PDWARNING, "File or dir[%s] occur exception: %s",
                        dir_iter->path().string().c_str(),
                        e.what() ) ;
-               /// skip the file or dir
             }
          }
       }
@@ -237,6 +119,11 @@ static INT32 _ossEnumFiles( const string &dirPath,
            e.code() == boost::system::errc::operation_not_permitted )
       {
          rc = SDB_PERM ;
+      }
+      else if( e.code() == boost::system::errc::too_many_files_open ||
+               e.code() == boost::system::errc::too_many_files_open_in_system )
+      {
+         rc = SDB_TOO_MANY_OPEN_FD ;
       }
       else
       {
@@ -260,7 +147,7 @@ error:
 }
 
 INT32 ossEnumFiles( const string &dirPath,
-                    map< string, string > &mapFiles,
+                    multimap< string, string > &mapFiles,
                     const CHAR *filter,
                     UINT32 deep )
 {
@@ -297,7 +184,7 @@ INT32 ossEnumFiles( const string &dirPath,
 }
 
 INT32 ossEnumFiles2( const string &dirPath,
-                     map<string, string> &mapFiles,
+                     multimap<string, string> &mapFiles,
                      const CHAR *filter,
                      OSS_MATCH_TYPE type,
                      UINT32 deep )
@@ -358,7 +245,6 @@ static INT32 _ossEnumSubDirs( const string &dirPath,
             {
                PD_LOG( PDWARNING, "File or dir[%s] occur exception: %s",
                        dir_iter->path().string().c_str(), e.what() ) ;
-               /// skip the file or dir
             }
          }
       }

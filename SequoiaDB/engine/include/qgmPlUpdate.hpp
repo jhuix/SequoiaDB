@@ -49,9 +49,9 @@ namespace engine
    {
    public:
       _qgmPlUpdate( const _qgmDbAttr &collection,
-                    const qgmDbAttrVec &columns,
-                    const qgmOPFieldVec &values,
-                    _qgmConditionNode *condition ) ;
+                    const BSONObj &modifer,
+                    _qgmConditionNode *condition,
+                    INT32 flag ) ;
 
       virtual ~_qgmPlUpdate() ;
 
@@ -62,8 +62,11 @@ namespace engine
          ss << "Type:" << qgmPlanType( _type ) << '\n';
          ss << "Updator:" << _updater.toString() << '\n';
          ss << "Condition:" << _condition.toString() << '\n';
+         ss << "Flag:" << _flag << '\n';
          return ss.str() ;
       }
+
+      virtual BOOLEAN needRollback() const ;
 
    private:
       virtual INT32 _execute( _pmdEDUCB *eduCB ) ;
@@ -74,9 +77,10 @@ namespace engine
       }
 
    private:
-      _qgmDbAttr _collection ;
-      BSONObj _updater ;
-      BSONObj _condition ;
+      _qgmDbAttr  _collection ;
+      BSONObj     _updater ;
+      BSONObj     _condition ;
+      INT32       _flag ;
    } ;
 
    typedef class _qgmPlUpdate qgmPlUpdate ;

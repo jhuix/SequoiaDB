@@ -75,20 +75,20 @@ namespace engine
    SDB_DB_STATUS utilGetDBStatusEnum( const CHAR *status ) ;
 
    /*
+      SDB_DATA_STATUS AND STRING TRANSFER
+   */
+   const CHAR* utilDataStatusStr( BOOLEAN dataIsOK, SDB_DB_STATUS dbStatus ) ;
+
+   /*
       SDB_DB_MODE AND STRING TRANSFER
    */
    string      utilDBModeStr( UINT32 dbMode ) ;
    UINT32      utilGetDBModeFlag( const string &mode ) ;
 
    /*
-      util Pref instance enum and string transfer
-   */
-   INT32 utilPrefReplStr2Enum( const CHAR *prefReplStr ) ;
-
-   INT32 utilPrefReplEnum2Str( INT32 enumPrefRepl,
-                               CHAR *prefReplStr,
-                               UINT32 len ) ;
-
+      instance ID
+    */
+   BOOLEAN     utilCheckInstanceID ( UINT32 instanceID, BOOLEAN includeUnknown ) ;
    /*
       util get error bson
    */

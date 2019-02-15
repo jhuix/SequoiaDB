@@ -33,7 +33,6 @@
 
 *******************************************************************************/
 
-// this file is only intened to be included by sdb.cpp and sdbbp.cpp
 #ifndef UTILPIPE_HPP__
 #define UTILPIPE_HPP__
 
@@ -51,6 +50,10 @@
       rc=ret;                       \
       SH_VERIFY_RC                 \
    }
+
+#define SDB_SHELL_WAIT_PIPE_PREFIX        "sdb-shell-wait-"
+#define SDB_SHELL_F2B_PIPE_PREFIX         "sdb-shell-f2b-"
+#define SDB_SHELL_B2F_PIPE_PREFIX         "sdb-shell-b2f-"
 
 INT32 getWaitPipeName ( const OSSPID & ppid , CHAR * buf , UINT32 bufSize ) ;
 INT32 getPipeNames( const OSSPID & ppid , CHAR * f2bName , UINT32 f2bSize ,

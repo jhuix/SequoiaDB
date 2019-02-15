@@ -18,7 +18,6 @@
 #define COMMENT_CHAR   '#'
 
 
-//srand(time(NULL)) ;
 /* display syntax error */
 void displaySyntax ( CHAR *pCommand )
 {
@@ -346,7 +345,6 @@ INT32 fetchRecords ( sdbCollectionHandle collection,
 INT32 initEnv( const CHAR* host, const CHAR* server,
                const CHAR* user, const CHAR* passwd )
 {
-   // initialize local variables
    sdbConnectionHandle connection    = 0 ;
    sdbCSHandle cs                    = 0 ;
    sdbCollectionHandle cl            = 0 ;
@@ -356,26 +354,21 @@ INT32 initEnv( const CHAR* host, const CHAR* server,
    bson conf ;
    bson obj ;
    bson objList [ NUM_RECORD ] ;
-   // connect to db
    rc = sdbConnect ( host, server, user, passwd, &connection ) ;
    if( SDB_OK != rc )
       return rc ;
-   // get(create) the specified cs than drop it
    rc = getCollectionSpace( connection, COLLECTION_SPACE_NAME, &cs ) ;
    if( SDB_OK != rc )
       return rc ;
    sdbReleaseCS( cs ) ;
    cs = 0 ;
-   // drop cs ( cs may not exist )
    rc = sdbDropCollectionSpace ( connection, COLLECTION_SPACE_NAME ) ;
    if( SDB_OK != rc )
       return rc ;
-   // create cs
    rc = sdbCreateCollectionSpace ( connection, COLLECTION_SPACE_NAME,
                                    SDB_PAGESIZE_4K, &cs );
    if( SDB_OK != rc )
       return rc ;
-   // create cl
    bson_init( &conf ) ;
    bson_append_int ( &conf, "ReplSize", 0 ) ;
    bson_finish ( &conf );
@@ -384,9 +377,7 @@ INT32 initEnv( const CHAR* host, const CHAR* server,
    if( SDB_OK != rc )
       return rc ;
 
-   // disconnect the connection
    sdbDisconnect ( connection ) ;
-   // release the local variables
    sdbReleaseCursor ( cursor ) ;
    sdbReleaseCollection ( cl ) ;
    sdbReleaseCS( cs ) ;
@@ -401,9 +392,7 @@ void insertRecords( sdbCollectionHandle cl, INT32 num )
    INT32 count              = 0;
    bson obj ;
    bson objList [ num ] ;
-   // create name list using objList
    createNameList ( &objList[0], num ) ;
-   // insert obj and free memory that allocated by createNameList
    for ( count = 0; count < num; count++ )
    {
       rc = sdbInsert ( cl, &objList[count] ) ;
@@ -422,7 +411,6 @@ void insertRecords1( sdbCollectionHandle cl, INT32 num )
    INT32 count              = 0;
    bson obj ;
    bson_init ( &obj );
-   // insert obj and free memory that allocated by createNameList
    for ( count = 0; count < num; count++ )
    {
       bson_append_int ( &obj, "Id", count ) ;
@@ -690,12 +678,12 @@ long getRecordNum ( sdbCursorHandle cursor )
 *@Modify List :
 *               2014-7-15   xiaojun Hu   Init
 *******************************************************************************/
-void getUniqueName( const CHAR *modName, CHAR getName[] )
+void getUniqueName( const CHAR *modName, CHAR *pBuffer )
 {
    const CHAR *uniqName = "sdbtest_" ;
    pid_t pid ;
    pid = getpid() ;
-   sprintf( getName, "%s%s_%d", uniqName, modName, (unsigned int)pid ) ;
+   sprintf( pBuffer, "%s%s_%d", uniqName, modName, (unsigned int)pid ) ;
 }
 
 BOOLEAN isCluster( sdbConnectionHandle db )
@@ -781,3 +769,21 @@ INT32 gettid()
    return (INT32)syscall(SYS_gettid) ;
 #endif
 }
+
+INT32 bson_compare(const CHAR *pStr, const bson *b)
+{
+   INT32 rc  = 0 ;
+   CHAR *p = NULL ;
+   INT32 bufferSize = bson_sprint_length ( b ) ;
+   INT32 strLen = strlen( pStr ) ;
+   if (strLen > bufferSize)
+      return 1;
+   p = (CHAR*)malloc(bufferSize) ;
+   if ( !p )
+      return -2;
+   bson_sprint ( p, bufferSize, b ) ;
+   rc = strncmp( pStr, p, bufferSize ) ;
+   free ( p ) ;
+   return rc == 0 ? 0 : ( rc > 0 ? 1 : -1 );
+}
+

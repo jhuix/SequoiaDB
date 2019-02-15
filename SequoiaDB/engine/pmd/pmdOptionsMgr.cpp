@@ -45,8 +45,10 @@
 #include "pmdTrace.hpp"
 #include "ossIO.hpp"
 #include "ossVer.hpp"
+#include "ossPath.hpp"
 #include "dpsLogWrapper.hpp"
 #include "omStrategyDef.hpp"
+#include "optCommon.hpp"
 
 #include "rtnSortDef.hpp"
 #include "clsUtil.hpp"
@@ -62,7 +64,8 @@ namespace engine
    #define JUDGE_RC( rc ) if ( SDB_OK != rc ) { goto error ; }
 
    #define PMD_OPTION_BRK_TIME_DEFAULT (7000)
-   #define PMD_OPTION_OPR_TIME_DEFAULT (30000)
+   #define PMD_OPTION_OPR_TIME_DEFAULT (300000)
+   #define PMD_OPTION_DFT_MAXPOOL      (50)
    #define PMD_MAX_PREF_POOL           (0) // modify 200 to 0
    #define PMD_MAX_SUB_QUERY           (10)
    #define PMD_MIN_SORTBUF_SZ          (RTN_SORT_MIN_BUFSIZE)
@@ -73,34 +76,59 @@ namespace engine
    #define PMD_DFT_REPL_BUCKET_SIZE    (32)
    #define PMD_DFT_INDEX_SCAN_STEP     (100)
    #define PMD_DFT_START_SHIFT_TIME    (600)
-   #define PMD_DFT_NUMPAGECLEAN        (0)
    #define PMD_MAX_NUMPAGECLEAN        (50)
-   #define PMD_DFT_PAGECLEANINTERVAL   (10000)
    #define PMD_MIN_PAGECLEANINTERVAL   (1000)
    #define PMD_DFT_TRANS_TIMEOUT       (60)  // 1 minute
    #define PMD_DFT_OVERFLOW_RETIO      (12)
    #define PMD_DFT_EXTEND_THRESHOLD    (32)
-
+   #define PMD_DFT_MAX_CACHE_JOB       (10)
+   #define PMD_DFT_MAX_SYNC_JOB        (10)
+   #define PMD_DFT_SYNC_INTERVAL       (10000)  // 10 seconds
+   #define PMD_DFT_SYNC_RECORDNUM      (0)
+   #define PMD_DFT_ARCHIVE_TIMEOUT     (600) // 10 minutes
+   #define PMD_DFT_ARCHIVE_EXPIRED     (240) // 10 days
+   #define PMD_DFT_ARCHIVE_QUOTA       (10)  // 10 GB
+   #define PMD_DFT_DMS_CHK_INTERVAL    (0)   // disable
+   #define PMD_DFT_CACHE_MERGE_SZ      (0)   // ms
+   #define PMD_DFT_PAGE_ALLOC_TIMEOUT  (0)
+   #define PMD_DFT_OPT_COST_THRESHOLD  (20)
+   #define PMD_DFT_ENABLE_MIX_CMP      (FALSE)
+   #define PMD_DFT_PREFINST            ( PREFER_INSTANCE_MASTER_STR )
+   #define PMD_DFT_PREFINST_MODE       ( PREFER_INSTANCE_RANDOM_STR )
+   #define PMD_DFT_INSTANCE_ID         ( NODE_INSTANCE_ID_UNKNOWN )
+   #define PMD_DFT_MAX_CONN            (0)   // unlimited
    /*
       _pmdCfgExchange implement
    */
-   _pmdCfgExchange::_pmdCfgExchange( const BSONObj &dataObj,
+   _pmdCfgExchange::_pmdCfgExchange( MAP_K2V *pMapField,
+                                     const BSONObj &dataObj,
                                      BOOLEAN load,
-                                     PMD_CFG_STEP step )
-   :_cfgStep( step ), _isLoad( load ), _dataObj( dataObj )
+                                     PMD_CFG_STEP step,
+                                     UINT32 mask )
+   :_pMapKeyField( pMapField ), _cfgStep( step ),
+    _isLoad( load ), _dataObj( dataObj ), _mask( mask )
    {
       _dataType   = PMD_CFG_DATA_BSON ;
       _pVMFile    = NULL ;
       _pVMCmd     = NULL ;
+      _isWhole    = FALSE ;
+
+      SDB_ASSERT( _pMapKeyField, "Map key field can't be NULL" ) ;
    }
 
-   _pmdCfgExchange::_pmdCfgExchange( po::variables_map *pVMCmd,
+   _pmdCfgExchange::_pmdCfgExchange( MAP_K2V *pMapField,
+                                     po::variables_map *pVMCmd,
                                      po::variables_map * pVMFile,
                                      BOOLEAN load,
-                                     PMD_CFG_STEP step )
-   :_cfgStep( step ), _isLoad( load ), _pVMFile( pVMFile ), _pVMCmd( pVMCmd )
+                                     PMD_CFG_STEP step,
+                                     UINT32 mask )
+   :_pMapKeyField( pMapField ), _cfgStep( step ), _isLoad( load ),
+    _pVMFile( pVMFile ), _pVMCmd( pVMCmd ), _mask( mask )
    {
       _dataType   = PMD_CFG_DATA_CMD ;
+      _isWhole    = FALSE ;
+
+      SDB_ASSERT( _pMapKeyField, "Map key field can't be NULL" ) ;
    }
 
    _pmdCfgExchange::~_pmdCfgExchange()
@@ -153,7 +181,7 @@ namespace engine
 
       if ( SDB_OK == rc )
       {
-         _mapKeyField[ pFieldName ] = pmdParamValue( value, TRUE ) ;
+         (*_pMapKeyField)[ pFieldName ] = pmdParamValue( value, TRUE, TRUE ) ;
       }
 
       return rc ;
@@ -167,7 +195,7 @@ namespace engine
       {
          value = defaultValue ;
          rc = SDB_OK ;
-         _mapKeyField[ pFieldName ] = pmdParamValue( value, TRUE ) ;
+         (*_pMapKeyField)[ pFieldName ] = pmdParamValue( value, TRUE, FALSE ) ;
       }
 
       return rc ;
@@ -226,7 +254,7 @@ namespace engine
 
       if ( SDB_OK == rc )
       {
-         _mapKeyField[ pFieldName ] = pmdParamValue( pValue, TRUE ) ;
+         (*_pMapKeyField)[ pFieldName ] = pmdParamValue( pValue, TRUE, TRUE ) ;
       }
 
       return rc ;
@@ -243,7 +271,7 @@ namespace engine
          pValue[ len - 1 ] = 0 ;
          rc = SDB_OK ;
 
-         _mapKeyField[ pFieldName ] = pmdParamValue( pValue, TRUE ) ;
+         (*_pMapKeyField)[ pFieldName ] = pmdParamValue( pValue, TRUE, FALSE ) ;
       }
       return rc ;
    }
@@ -264,6 +292,7 @@ namespace engine
       {
          rc = SDB_SYS ;
       }
+
       return rc ;
    }
 
@@ -284,6 +313,7 @@ namespace engine
       {
          rc = SDB_SYS ;
       }
+
       return rc ;
    }
 
@@ -349,16 +379,16 @@ namespace engine
       MAP_K2V::iterator itKV ;
       while ( it != pVM->end() )
       {
-         itKV = _mapKeyField.find( it->first ) ;
-         if ( itKV != _mapKeyField.end() && TRUE == itKV->second._hasMapped )
+         itKV = _pMapKeyField->find( it->first ) ;
+         if ( itKV != _pMapKeyField->end() && TRUE == itKV->second._hasMapped )
          {
             ++it ;
             continue ;
          }
          try
          {
-            _mapKeyField[ it->first ] = pmdParamValue( it->second.as<string>(),
-                                                       FALSE ) ;
+            (*_pMapKeyField)[ it->first ] = pmdParamValue( it->second.as<string>(),
+                                                           FALSE, TRUE ) ;
             ++it ;
             continue ;
          }
@@ -368,8 +398,8 @@ namespace engine
 
          try
          {
-            _mapKeyField[ it->first ] = pmdParamValue( it->second.as<int>(),
-                                                       FALSE ) ;
+            (*_pMapKeyField)[ it->first ] = pmdParamValue( it->second.as<int>(),
+                                                           FALSE, TRUE ) ;
             ++it ;
             continue ;
          }
@@ -381,7 +411,7 @@ namespace engine
       }
    }
 
-   MAP_K2V _pmdCfgExchange::getKVMap()
+   MAP_K2V* _pmdCfgExchange::getKVMap()
    {
       if ( PMD_CFG_DATA_CMD == _dataType )
       {
@@ -402,28 +432,27 @@ namespace engine
          {
             BSONElement e = it.next() ;
 
-            itKV = _mapKeyField.find( e.fieldName() ) ;
-            if ( itKV != _mapKeyField.end() &&
+            itKV = _pMapKeyField->find( e.fieldName() ) ;
+            if ( itKV != _pMapKeyField->end() &&
                  TRUE == itKV->second._hasMapped )
             {
-               ++it ;
                continue ;
             }
 
             if ( String == e.type() )
             {
-               _mapKeyField[ e.fieldName() ] = pmdParamValue( e.valuestrsafe(),
-                                                              FALSE ) ;
+               (*_pMapKeyField)[ e.fieldName() ] = pmdParamValue( e.valuestrsafe(),
+                                                                  FALSE, TRUE ) ;
             }
             else if ( e.isNumber() )
             {
-               _mapKeyField[ e.fieldName() ] = pmdParamValue( e.numberInt(),
-                                                              FALSE ) ;
+               (*_pMapKeyField)[ e.fieldName() ] = pmdParamValue( e.numberInt(),
+                                                                  FALSE, TRUE ) ;
             }
          }
       }
 
-      return _mapKeyField ;
+      return _pMapKeyField ;
    }
 
    /*
@@ -452,36 +481,36 @@ namespace engine
    INT32 _pmdCfgRecord::restore( const BSONObj & objData,
                                  po::variables_map *pVMCMD )
    {
-      MAP_K2V mapKeyValue ;
-      MAP_K2V::iterator it ;
-      pmdCfgExchange ex( objData, TRUE, PMD_CFG_STEP_INIT ) ;
-      INT32 rc = doDataExchange( &ex ) ;
+      INT32 rc = SDB_OK ;
+
+      pmdCfgExchange ex( &_mapKeyValue, objData, TRUE, PMD_CFG_STEP_INIT ) ;
+
+      ossScopedLock lock( &_mutex ) ;
+
+      _mapKeyValue.clear() ;
+
+      rc = doDataExchange( &ex ) ;
       if ( rc )
       {
          goto error ;
       }
-      else if ( pVMCMD )
+      ex.getKVMap() ;
+
+      if ( pVMCMD )
       {
-         pmdCfgExchange ex1( pVMCMD, NULL, TRUE, PMD_CFG_STEP_REINIT ) ;
+         pmdCfgExchange ex1( &_mapKeyValue, pVMCMD, NULL, TRUE,
+                             PMD_CFG_STEP_REINIT ) ;
          rc = doDataExchange( &ex1 ) ;
          if ( rc )
          {
             goto error ;
          }
-         mapKeyValue = ex1.getKVMap() ;
+         ex1.getKVMap() ;
       }
-      rc = postLoaded() ;
+      rc = postLoaded( PMD_CFG_STEP_REINIT ) ;
       if ( rc )
       {
          goto error ;
-      }
-
-      _mapKeyValue = ex.getKVMap() ;
-      it = mapKeyValue.begin() ;
-      while ( it != mapKeyValue.end() )
-      {
-         _mapKeyValue[ it->first ] = it->second ;
-         ++it ;
       }
 
       if ( getConfigHandler() )
@@ -499,49 +528,106 @@ namespace engine
       goto done ;
    }
 
-   INT32 _pmdCfgRecord::change( const BSONObj &objData )
+   INT32 _pmdCfgRecord::change( const BSONObj &objData,
+                                BOOLEAN isWhole )
    {
       INT32 rc = SDB_OK ;
       BSONObj oldCfg ;
       MAP_K2V mapKeyField ;
       MAP_K2V::iterator it ;
-      pmdCfgExchange ex( objData, TRUE, PMD_CFG_STEP_CHG ) ;
+      MAP_K2V::iterator itSelf ;
+      BOOLEAN locked = FALSE ;
+      pmdCfgExchange ex( &mapKeyField, objData, TRUE, PMD_CFG_STEP_CHG ) ;
+      ex.setWhole( isWhole ) ;
 
-      // save old cfg
-      rc = toBSON( oldCfg ) ;
+      rc = toBSON( oldCfg, PMD_CFG_MASK_SKIP_UNFIELD ) ;
       PD_RC_CHECK( rc, PDERROR, "Save old config failed, rc: %d", rc ) ;
-      // update new cfg
+
+      _mutex.get() ;
+      locked = TRUE ;
+
       rc = doDataExchange( &ex ) ;
       if ( rc )
       {
          goto restore ;
       }
-      rc = postLoaded() ;
+      rc = postLoaded( PMD_CFG_STEP_CHG ) ;
       if ( rc )
       {
          goto restore ;
       }
       ++_changeID ;
 
-      mapKeyField = ex.getKVMap() ;
+      ex.getKVMap() ;
       it = mapKeyField.begin() ;
       while ( it != mapKeyField.end() )
       {
-         _mapKeyValue[ it->first ] = it->second ;
+         if ( it->second._hasMapped )
+         {
+            _mapKeyValue[ it->first ] = it->second ;
+            ++it ;
+            continue ;
+         }
+
+         itSelf = _mapKeyValue.find( it->first ) ;
+         if ( itSelf != _mapKeyValue.end() )
+         {
+            if ( itSelf->second._hasMapped &&
+                 itSelf->second._value != it->second._value )
+            {
+               PD_LOG( PDWARNING, "Field[%s]'s value[%s] can't be modified "
+                       "to [%s] in running", it->first.c_str(),
+                       itSelf->second._value.c_str(),
+                       it->second._value.c_str() ) ;
+            }
+            else if ( !itSelf->second._hasMapped )
+            {
+               _mapKeyValue[ it->first ] = it->second ;
+            }
+         }
+         else
+         {
+            _mapKeyValue[ it->first ] = it->second ;
+         }
          ++it ;
       }
 
-      // change notify
+      if ( isWhole )
+      {
+         itSelf = _mapKeyValue.begin() ;
+         while( itSelf != _mapKeyValue.end() )
+         {
+            if ( !itSelf->second._hasMapped &&
+                 mapKeyField.find( itSelf->first ) == mapKeyField.end() )
+            {
+               _mapKeyValue.erase( itSelf++ ) ;
+            }
+            else
+            {
+               ++itSelf ;
+            }
+         }
+      }
+
       if ( getConfigHandler() )
       {
          getConfigHandler()->onConfigChange( getChangeID() ) ;
       }
 
    done:
+      if ( locked )
+      {
+         _mutex.release() ;
+      }
       return rc ;
    error:
       goto done ;
    restore:
+      if ( locked )
+      {
+         _mutex.release() ;
+         locked = FALSE ;
+      }
       restore( oldCfg, NULL ) ;
       goto done ;
    }
@@ -549,20 +635,25 @@ namespace engine
    INT32 _pmdCfgRecord::init( po::variables_map *pVMFile,
                               po::variables_map *pVMCMD )
    {
-      pmdCfgExchange ex( pVMCMD, pVMFile, TRUE, PMD_CFG_STEP_INIT ) ;
-      INT32 rc = doDataExchange( &ex ) ;
+      INT32 rc = SDB_OK ;
+      pmdCfgExchange ex( &_mapKeyValue, pVMCMD, pVMFile, TRUE,
+                         PMD_CFG_STEP_INIT ) ;
+
+      ossScopedLock lock( &_mutex ) ;
+
+      rc = doDataExchange( &ex ) ;
       if ( rc )
       {
          goto error ;
       }
-      rc = postLoaded() ;
+      rc = postLoaded( PMD_CFG_STEP_INIT ) ;
       if ( rc )
       {
          goto error ;
       }
       ++_changeID ;
 
-      _mapKeyValue = ex.getKVMap() ;
+      ex.getKVMap() ;
 
       if ( getConfigHandler() )
       {
@@ -579,12 +670,17 @@ namespace engine
       goto done ;
    }
 
-   INT32 _pmdCfgRecord::toBSON( BSONObj & objData )
+   INT32 _pmdCfgRecord::toBSON( BSONObj &objData, UINT32 mask )
    {
-      INT32 rc = preSaving() ;
+      INT32 rc = SDB_OK ;
+
+      ossScopedLock lock( &_mutex ) ;
+
+      rc = preSaving() ;
       if ( SDB_OK == rc )
       {
-         pmdCfgExchange ex( BSONObj(), FALSE, PMD_CFG_STEP_INIT ) ;
+         pmdCfgExchange ex( &_mapKeyValue, BSONObj(), FALSE,
+                            PMD_CFG_STEP_INIT, mask ) ;
          rc = doDataExchange( &ex ) ;
          if ( SDB_OK == rc )
          {
@@ -604,12 +700,17 @@ namespace engine
       return rc ;
    }
 
-   INT32 _pmdCfgRecord::toString( string & str )
+   INT32 _pmdCfgRecord::toString( string &str, UINT32 mask )
    {
-      INT32 rc = preSaving() ;
+      INT32 rc = SDB_OK ;
+
+      ossScopedLock lock( &_mutex ) ;
+
+      rc = preSaving() ;
       if ( SDB_OK == rc )
       {
-         pmdCfgExchange ex( NULL, NULL, FALSE, PMD_CFG_STEP_INIT ) ;
+         pmdCfgExchange ex( &_mapKeyValue, NULL, NULL, FALSE,
+                            PMD_CFG_STEP_INIT, mask ) ;
          INT32 rc = doDataExchange( &ex ) ;
          if ( SDB_OK == rc )
          {
@@ -620,7 +721,7 @@ namespace engine
       return rc ;
    }
 
-   INT32 _pmdCfgRecord::postLoaded()
+   INT32 _pmdCfgRecord::postLoaded( PMD_CFG_STEP step )
    {
       return SDB_OK ;
    }
@@ -716,6 +817,24 @@ namespace engine
          }
       }
       return ss.str() ;
+   }
+
+   INT32 _pmdCfgRecord::_addToFieldMap( const string &key,
+                                        const string &value,
+                                        BOOLEAN hasMapped,
+                                        BOOLEAN hasField )
+   {
+       _mapKeyValue[ key ] = pmdParamValue( value, hasMapped, hasField ) ;
+       return SDB_OK ;
+   }
+
+   INT32 _pmdCfgRecord::_addToFieldMap( const string &key,
+                                        INT32 value,
+                                        BOOLEAN hasMapped,
+                                        BOOLEAN hasField )
+   {
+      _mapKeyValue[ key ] = pmdParamValue( value, hasMapped, hasField ) ;
+      return SDB_OK ;
    }
 
    BOOLEAN _pmdCfgRecord::hasField( const CHAR * pFieldName )
@@ -831,16 +950,9 @@ namespace engine
          {
             if ( FALSE == allowRunChg )
             {
-               if ( pEX->hasField( pFieldName ) )
-               {
-                  _result = SDB_PERM ;
-                  PD_LOG ( PDWARNING, "Field[%s] do not support changing in "
-                           "runtime", pFieldName ) ;
-                  goto error ;
-               }
                goto done ;
             }
-            if ( !pEX->hasField( pFieldName ) )
+            if ( !pEX->isWhole() && !pEX->hasField( pFieldName ) )
             {
                goto done ;
             }
@@ -866,10 +978,27 @@ namespace engine
       }
       else
       {
-         if ( hideParam && 0 == ossStrcmp( pValue, pDefaultValue ) )
+         if ( 0 == ossStrcmp( pValue, pDefaultValue ) )
          {
-            goto done ;
+            if ( hideParam && pEX->isSkipHideDefault() )
+            {
+               goto done ;
+            }
+            else if ( !hideParam && pEX->isSkipNormalDefault() )
+            {
+               goto done ;
+            }
          }
+
+         if ( pEX->isSkipUnField() )
+         {
+            MAP_K2V::iterator it = _mapKeyValue.find( pFieldName ) ;
+            if ( it == _mapKeyValue.end() || !it->second._hasField )
+            {
+               goto done ;
+            }
+         }
+
          _result = pEX->writeString( pFieldName, pValue ) ;
          if ( _result )
          {
@@ -884,11 +1013,12 @@ namespace engine
       goto done ;
    }
 
-   INT32 _pmdCfgRecord::rdxPath( pmdCfgExchange *pEX, const CHAR *pFieldName,
-                                 CHAR *pValue, UINT32 len, BOOLEAN required,
-                                 BOOLEAN allowRunChg,
-                                 const CHAR *pDefaultValue,
-                                 BOOLEAN hideParam )
+   INT32 _pmdCfgRecord::_rdxPath( pmdCfgExchange *pEX, const CHAR *pFieldName,
+                                  CHAR *pValue, UINT32 len, BOOLEAN required,
+                                  BOOLEAN allowRunChg,
+                                  const CHAR *pDefaultValue,
+                                  BOOLEAN hideParam,
+                                  BOOLEAN addSep )
    {
       _result = rdxString( pEX, pFieldName, pValue, len, required, allowRunChg,
                            pDefaultValue, hideParam ) ;
@@ -904,10 +1034,41 @@ namespace engine
          else
          {
             pValue[ len - 1 ] = 0 ;
-            utilCatPath( pValue, len, "" ) ;
+
+            if ( addSep )
+            {
+               utilCatPath( pValue, len, "" ) ;
+            }
+         }
+         MAP_K2V::iterator it = _mapKeyValue.find( pFieldName ) ;
+         if ( it != _mapKeyValue.end() )
+         {
+            it->second._value = pValue ;
          }
       }
       return _result ;
+   }
+
+   INT32 _pmdCfgRecord::rdxPath( pmdCfgExchange *pEX, const CHAR *pFieldName,
+                                 CHAR *pValue, UINT32 len, BOOLEAN required,
+                                 BOOLEAN allowRunChg,
+                                 const CHAR *pDefaultValue,
+                                 BOOLEAN hideParam )
+   {
+      return _rdxPath( pEX, pFieldName, pValue, len,
+                       required, allowRunChg, pDefaultValue,
+                       hideParam, TRUE ) ;
+   }
+
+   INT32 _pmdCfgRecord::rdxPathRaw( pmdCfgExchange *pEX, const CHAR *pFieldName,
+                                    CHAR *pValue, UINT32 len, BOOLEAN required,
+                                    BOOLEAN allowRunChg,
+                                    const CHAR *pDefaultValue,
+                                    BOOLEAN hideParam )
+   {
+      return _rdxPath( pEX, pFieldName, pValue, len,
+                       required, allowRunChg, pDefaultValue,
+                       hideParam, FALSE ) ;
    }
 
    INT32 _pmdCfgRecord::rdxBooleanS( pmdCfgExchange *pEX,
@@ -925,7 +1086,16 @@ namespace engine
                            hideParam ) ;
       if ( SDB_OK == _result && pEX->isLoad() )
       {
-         ossStrToBoolean( szTmp, &value ) ;
+         if ( SDB_INVALIDARG == ossStrToBoolean( szTmp, &value ) )
+         {
+            value = defaultValue ;
+         }
+
+         MAP_K2V::iterator it = _mapKeyValue.find( pFieldName ) ;
+         if ( it != _mapKeyValue.end() )
+         {
+            it->second._value = value ? "TRUE" : "FALSE" ;
+         }
       }
       return _result ;
    }
@@ -952,16 +1122,9 @@ namespace engine
          {
             if ( FALSE == allowRunChg )
             {
-               if ( pEX->hasField( pFieldName ) )
-               {
-                  _result = SDB_PERM ;
-                  PD_LOG ( PDWARNING, "Field[%s] do not support changing in "
-                           "runtime", pFieldName ) ;
-                  goto error ;
-               }
                goto done ;
             }
-            if ( !pEX->hasField( pFieldName ) )
+            if ( !pEX->isWhole() && !pEX->hasField( pFieldName ) )
             {
                goto done ;
             }
@@ -987,10 +1150,27 @@ namespace engine
       }
       else
       {
-         if ( hideParam && value == defaultValue )
+         if ( value == defaultValue )
          {
-            goto done ;
+            if ( hideParam && pEX->isSkipHideDefault() )
+            {
+               goto done ;
+            }
+            else if ( !hideParam && pEX->isSkipNormalDefault() )
+            {
+               goto done ;
+            }
          }
+
+         if ( pEX->isSkipUnField() )
+         {
+            MAP_K2V::iterator it = _mapKeyValue.find( pFieldName ) ;
+            if ( it == _mapKeyValue.end() || !it->second._hasField )
+            {
+               goto done ;
+            }
+         }
+
          _result = pEX->writeInt( pFieldName, value ) ;
          if ( _result )
          {
@@ -1262,7 +1442,6 @@ namespace engine
    */
    _pmdOptionsMgr::_pmdOptionsMgr()
    {
-      // rdx members
       ossMemset( _krcbDbPath, 0, OSS_MAX_PATHSIZE + 1 ) ;
       ossMemset( _krcbIndexPath, 0, OSS_MAX_PATHSIZE + 1 ) ;
       ossMemset( _krcbDiagLogPath, 0, OSS_MAX_PATHSIZE + 1 ) ;
@@ -1278,10 +1457,12 @@ namespace engine
       ossMemset( _omServiceName, 0, OSS_MAX_SERVICENAME + 1 ) ;
       ossMemset( _krcbRole, 0, PMD_MAX_ENUM_STR_LEN + 1) ;
       ossMemset( _syncStrategyStr, 0, PMD_MAX_ENUM_STR_LEN + 1) ;
-      ossMemset( _prefReplStr, 0, PMD_MAX_ENUM_STR_LEN + 1 ) ;
+      ossMemset( _prefInstStr, 0, PMD_MAX_LONG_STR_LEN + 1 ) ;
+      ossMemset( _prefInstModeStr, 0, PMD_MAX_SHORT_STR_LEN + 1 ) ;
       ossMemset( _catAddrLine, 0, OSS_MAX_PATHSIZE + 1 ) ;
       ossMemset( _dmsTmpBlkPath, 0, OSS_MAX_PATHSIZE + 1 ) ;
       ossMemset( _krcbLobPath, 0, OSS_MAX_PATHSIZE + 1 ) ;
+      ossMemset( _krcbLobMetaPath, 0, OSS_MAX_PATHSIZE + 1 ) ;
       ossMemset( _auditMaskStr, 0, sizeof( _auditMaskStr ) ) ;
 
       _krcbMaxPool         = 0 ;
@@ -1293,7 +1474,7 @@ namespace engine
       _maxSubQuery         = PMD_MAX_SUB_QUERY ;
       _maxReplSync         = PMD_DEFAULT_MAX_REPLSYNC ;
       _syncStrategy        = CLS_SYNC_NONE ;
-      _preferReplica       = PREFER_REPL_ANYONE ;
+      _dataErrorOp         = PMD_OPT_VALUE_FULLSYNC ;
       _replBucketSize      = PMD_DFT_REPL_BUCKET_SIZE ;
       _memDebugEnabled     = FALSE ;
       _memDebugSize        = 0 ;
@@ -1308,8 +1489,6 @@ namespace engine
       _logBuffSize         = DPS_DFT_LOG_BUF_SZ ;
       _sortBufSz           = PMD_DEFAULT_SORTBUF_SZ ;
       _hjBufSz             = PMD_DEFAULT_HJ_SZ ;
-      _pagecleanNum        = PMD_DFT_NUMPAGECLEAN ;
-      _pagecleanInterval   = PMD_DFT_PAGECLEANINTERVAL ;
       _dialogFileNum       = 0 ;
       _auditFileNum        = 0 ;
       _auditMask           = 0 ;
@@ -1317,20 +1496,35 @@ namespace engine
       _sparseFile          = FALSE ;
       _weight              = 0 ;
       _auth                = TRUE ;
-      _planBucketNum       = 500 ;
+      _planBucketNum       = OPT_PLAN_DEF_CACHE_BUCKETS ;
       _oprtimeout          = PMD_OPTION_OPR_TIME_DEFAULT ;
       _overflowRatio       = PMD_DFT_OVERFLOW_RETIO ;
       _extendThreshold     = PMD_DFT_EXTEND_THRESHOLD ;
       _signalInterval      = 0 ;
+      _maxCacheSize        = 0 ;
+      _maxCacheJob         = 0 ;
+      _maxSyncJob          = PMD_DFT_MAX_SYNC_JOB ;
+      _syncInterval        = PMD_DFT_SYNC_INTERVAL ;
+      _syncRecordNum       = PMD_DFT_SYNC_RECORDNUM ;
+      _syncDeep            = FALSE ;
 
-#ifdef SDB_ENTERPRISE
+      _archiveOn = FALSE ;
+      _archiveCompressOn = TRUE ;
+      ossMemset( _archivePath, 0, OSS_MAX_PATHSIZE + 1 ) ;
+      _archiveTimeout = PMD_DFT_ARCHIVE_TIMEOUT ;
+      _archiveExpired = PMD_DFT_ARCHIVE_EXPIRED ;
+      _archiveQuota = PMD_DFT_ARCHIVE_QUOTA ;
 
-#ifdef SDB_SSL
-      _useSSL              = FALSE ;
-#endif
+      _dmsChkInterval = PMD_DFT_DMS_CHK_INTERVAL ;
+      _cacheMergeSize = PMD_DFT_CACHE_MERGE_SZ ;
+      _pageAllocTimeout = PMD_DFT_PAGE_ALLOC_TIMEOUT ;
+      _perfStat = FALSE ;
+      _optCostThreshold = PMD_DFT_OPT_COST_THRESHOLD ;
+      _enableMixCmp = PMD_DFT_ENABLE_MIX_CMP ;
+      _planCacheLevel = OPT_PLAN_PARAMETERIZED ;
+      _instanceID = PMD_DFT_INSTANCE_ID ;
+      _maxconn = PMD_DFT_MAX_CONN;
 
-#endif /* SDB_ENTERPRISE */
-      // other configs
       ossMemset( _krcbConfPath, 0, sizeof( _krcbConfPath ) ) ;
       ossMemset( _krcbConfFile, 0, sizeof( _krcbConfFile ) ) ;
       ossMemset( _krcbCatFile, 0, sizeof( _krcbCatFile ) ) ;
@@ -1345,183 +1539,140 @@ namespace engine
    {
       resetResult () ;
 
-      // map configs begin
-      // --confpath
       rdxPath( pEX, PMD_OPTION_CONFPATH , _krcbConfPath, sizeof(_krcbConfPath),
                FALSE, FALSE, PMD_CURRENT_PATH ) ;
-      // --dbpath
       rdxPath( pEX, PMD_OPTION_DBPATH, _krcbDbPath, sizeof(_krcbDbPath),
                FALSE, FALSE, PMD_CURRENT_PATH ) ;
       rdvNotEmpty( pEX, _krcbDbPath ) ;
-      // --indexpath
       rdxPath( pEX, PMD_OPTION_IDXPATH, _krcbIndexPath, sizeof(_krcbIndexPath),
                FALSE, FALSE, "" ) ;
-      // --diagpath
       rdxPath( pEX, PMD_OPTION_DIAGLOGPATH, _krcbDiagLogPath,
                sizeof(_krcbDiagLogPath), FALSE, FALSE, "" ) ;
-      // --auditpath
       rdxPath( pEX, PMD_OPTION_AUDITLOGPATH, _krcbAuditLogPath,
                sizeof(_krcbAuditLogPath), FALSE, FALSE, "" ) ;
-      // --logpath
       rdxPath( pEX, PMD_OPTION_LOGPATH, _krcbLogPath, sizeof(_krcbLogPath),
                FALSE, FALSE, "" ) ;
-      // --bkuppath
       rdxPath( pEX, PMD_OPTION_BKUPPATH, _krcbBkupPath, sizeof(_krcbBkupPath),
                FALSE, FALSE, "" ) ;
-      // --wwwpath
       rdxPath( pEX, PMD_OPTION_WWWPATH, _krcbWWWPath, sizeof(_krcbWWWPath),
                FALSE, FALSE, "", TRUE ) ;
 
-      // --lobpath
       rdxPath( pEX, PMD_OPTION_LOBPATH, _krcbLobPath, sizeof(_krcbLobPath),
                FALSE, FALSE, "" ) ;
+      rdxPath( pEX, PMD_OPTION_LOBMETAPATH, _krcbLobMetaPath, sizeof(_krcbLobMetaPath),
+               FALSE, FALSE, "" ) ;
 
-      // --maxpool
-      rdxUInt( pEX, PMD_OPTION_MAXPOOL, _krcbMaxPool, FALSE, TRUE, 0 ) ;
+      rdxUInt( pEX, PMD_OPTION_MAXPOOL, _krcbMaxPool, FALSE, TRUE,
+               PMD_OPTION_DFT_MAXPOOL ) ;
       rdvMinMax( pEX, _krcbMaxPool, 0, 10000, TRUE ) ;
 
-      // --diagnum
       rdxInt( pEX, PMD_OPTION_DIAGLOG_NUM, _dialogFileNum, FALSE, TRUE,
               PD_DFT_FILE_NUM ) ;
-      // --auditnum
       rdxInt( pEX, PMD_OPTION_AUDIT_NUM, _auditFileNum, FALSE, TRUE,
               PD_DFT_FILE_NUM ) ;
-      // --auditmask
       rdxString( pEX, PMD_OPTION_AUDIT_MASK, _auditMaskStr, sizeof(_auditMaskStr),
-                 FALSE, FALSE, AUDIT_MASK_DFT_STR ) ;
-      // --svcname
+                 FALSE, TRUE, AUDIT_MASK_DFT_STR ) ;
       rdxString( pEX, PMD_OPTION_SVCNAME, _krcbSvcName, sizeof(_krcbSvcName),
                  FALSE, FALSE,
                  boost::lexical_cast<string>(OSS_DFT_SVCPORT).c_str() ) ;
       rdvNotEmpty( pEX, _krcbSvcName ) ;
-      // --replname
       rdxString( pEX, PMD_OPTION_REPLNAME, _replServiceName,
                  sizeof(_replServiceName), FALSE, FALSE, "" ) ;
-      // --catalogname
       rdxString( pEX, PMD_OPTION_CATANAME, _catServiceName,
                  sizeof(_catServiceName), FALSE, FALSE, "" ) ;
-      // --shardname
       rdxString( pEX, PMD_OPTION_SHARDNAME, _shardServiceName,
                  sizeof(_shardServiceName), FALSE, FALSE, "" ) ;
-      // --restname
       rdxString( pEX, PMD_OPTION_RESTNAME, _restServiceName,
                  sizeof(_restServiceName), FALSE, FALSE, "" ) ;
-      // --omname
       rdxString( pEX, PMD_OPTION_OMNAME, _omServiceName,
                  sizeof(_omServiceName), FALSE, FALSE, "", TRUE ) ;
-      // --diaglevel
       rdxUShort( pEX, PMD_OPTION_DIAGLEVEL, _krcbDiagLvl, FALSE, TRUE,
                  (UINT16)PDWARNING ) ;
       rdvMinMax( pEX, _krcbDiagLvl, PDSEVERE, PDDEBUG, TRUE ) ;
-      // --role
       rdxString( pEX, PMD_OPTION_ROLE, _krcbRole, sizeof(_krcbRole),
                  FALSE, FALSE, SDB_ROLE_STANDALONE_STR ) ;
       rdvNotEmpty( pEX, _krcbRole ) ;
-      // --logfilesz
       rdxUInt( pEX, PMD_OPTION_LOGFILESZ, _logFileSz, FALSE, FALSE,
                PMD_DFT_LOG_FILE_SZ ) ;
       rdvMinMax( pEX, _logFileSz, PMD_MIN_LOG_FILE_SZ, PMD_MAX_LOG_FILE_SZ,
                  TRUE ) ;
-      // --logfilenum
       rdxUInt( pEX, PMD_OPTION_LOGFILENUM, _logFileNum, FALSE, FALSE,
                PMD_DFT_LOG_FILE_NUM ) ;
       rdvMinMax( pEX, _logFileNum, 1, 60000, TRUE ) ;
-      // --logbuffsize
-      rdxUInt( pEX, PMD_OPTION_LOGBUFFSIZE, _logBuffSize, FALSE, TRUE,
+      rdxUInt( pEX, PMD_OPTION_LOGBUFFSIZE, _logBuffSize, FALSE, FALSE,
                DPS_DFT_LOG_BUF_SZ ) ;
       rdvMinMax( pEX, _logBuffSize, 512, 1024000, TRUE ) ;
-      // --numpreload
       rdxUInt( pEX, PMD_OPTION_NUMPRELOAD, _numPreLoaders, FALSE, TRUE, 0 ) ;
       rdvMinMax( pEX, _numPreLoaders, 0, 100, TRUE ) ;
-      // --maxprefpool
       rdxUInt( pEX, PMD_OPTION_MAX_PREF_POOL, _maxPrefPool, FALSE, TRUE,
                PMD_MAX_PREF_POOL ) ;
       rdvMinMax( pEX, _maxPrefPool, 0, 1000, TRUE ) ;
-      // --maxsubquery
       rdxUInt( pEX, PMD_OPTION_MAX_SUB_QUERY, _maxSubQuery, FALSE, TRUE,
                PMD_MAX_SUB_QUERY <= _maxPrefPool ?
                PMD_MAX_SUB_QUERY : _maxPrefPool ) ;
       rdvMinMax( pEX, _maxSubQuery, 0, _maxPrefPool, TRUE ) ;
-      // --maxreplsync
       rdxUInt( pEX, PMD_OPTION_MAX_REPL_SYNC, _maxReplSync, FALSE, TRUE,
                PMD_DEFAULT_MAX_REPLSYNC ) ;
       rdvMinMax( pEX, _maxReplSync, 0, 200, TRUE ) ;
-      // --replbucketsize
       rdxUInt( pEX, PMD_OPTION_REPL_BUCKET_SIZE, _replBucketSize, FALSE, FALSE,
                PMD_DFT_REPL_BUCKET_SIZE, TRUE ) ;
       rdvMinMax( pEX, _replBucketSize, 1, 4096, TRUE ) ;
-      // --syncstrategy
       rdxString( pEX, PMD_OPTION_SYNC_STRATEGY, _syncStrategyStr,
                  sizeof( _syncStrategyStr ), FALSE, TRUE, "", FALSE ) ;
-      // --preferedreplica
-      rdxString( pEX, PMD_OPTION_PREFINST, _prefReplStr, sizeof(_prefReplStr),
-                 FALSE, TRUE, "A" ) ;
-      // --memdebug
-      rdxBooleanS( pEX, PMD_OPTION_MEMDEBUG, _memDebugEnabled, FALSE, TRUE,
+      rdxString( pEX, PMD_OPTION_PREFINST, _prefInstStr,
+                 sizeof( _prefInstStr ), FALSE, TRUE, PMD_DFT_PREFINST ) ;
+      rdxString( pEX, PMD_OPTION_PREFINST_MODE, _prefInstModeStr,
+                 sizeof( _prefInstModeStr ), FALSE, TRUE,
+                 PMD_DFT_PREFINST_MODE ) ;
+      rdxUInt( pEX, PMD_OPTION_INSTANCE_ID, _instanceID, FALSE, FALSE,
+               PMD_DFT_INSTANCE_ID, FALSE ) ;
+      rdvMinMax( pEX, _instanceID, NODE_INSTANCE_ID_UNKNOWN,
+                 NODE_INSTANCE_ID_MAX - 1, TRUE ) ;
+      rdxUInt( pEX, PMD_OPTION_DATAERROR_OP, _dataErrorOp,
+               FALSE, TRUE, PMD_OPT_VALUE_FULLSYNC, FALSE ) ;
+      rdvMinMax( pEX, _dataErrorOp, PMD_OPT_VALUE_NONE,
+                 PMD_OPT_VALUE_SHUTDOWN, TRUE ) ;
+      rdxBooleanS( pEX, PMD_OPTION_MEMDEBUG, _memDebugEnabled, FALSE, FALSE,
                    FALSE, TRUE ) ;
-      // --memdebugsize
-      rdxUInt( pEX, PMD_OPTION_MEMDEBUGSIZE, _memDebugSize, FALSE, TRUE, 0,
+      rdxUInt( pEX, PMD_OPTION_MEMDEBUGSIZE, _memDebugSize, FALSE, FALSE, 0,
                TRUE ) ;
-      // --indexscanstep
       rdxUInt( pEX, PMD_OPTION_INDEX_SCAN_STEP, _indexScanStep, FALSE, TRUE,
                PMD_DFT_INDEX_SCAN_STEP, TRUE ) ;
       rdvMinMax( pEX, _indexScanStep, 1, 10000, TRUE ) ;
-      // --dpslocal
       rdxBooleanS( pEX, PMD_OPTION_DPSLOCAL, _dpslocal, FALSE, TRUE, FALSE,
                    TRUE ) ;
-      // --traceOn
-      rdxBooleanS( pEX, PMD_OPTION_TRACEON, _traceOn, FALSE, TRUE, FALSE,
+      rdxBooleanS( pEX, PMD_OPTION_TRACEON, _traceOn, FALSE, FALSE, FALSE,
                    TRUE ) ;
-      // --traceBufSz
-      rdxUInt( pEX, PMD_OPTION_TRACEBUFSZ, _traceBufSz, FALSE, TRUE,
+      rdxUInt( pEX, PMD_OPTION_TRACEBUFSZ, _traceBufSz, FALSE, FALSE,
                TRACE_DFT_BUFFER_SIZE, TRUE ) ;
       rdvMinMax( pEX, _traceBufSz, TRACE_MIN_BUFFER_SIZE,
                  TRACE_MAX_BUFFER_SIZE, TRUE ) ;
-      // --transactionOn
       rdxBooleanS( pEX, PMD_OPTION_TRANSACTIONON, _transactionOn, FALSE,
-                   TRUE, FALSE ) ;
-      // --transactionTimeout
+                   FALSE, FALSE ) ;
       rdxUInt( pEX, PMD_OPTION_TRANSTIMEOUT, _transTimeout, FALSE, TRUE,
                PMD_DFT_TRANS_TIMEOUT, TRUE ) ;
       rdvMinMax( pEX, _transTimeout, 0, 3600, TRUE ) ;
-      // --sharingBreak
       rdxUInt( pEX, PMD_OPTION_SHARINGBRK, _sharingBreakTime, FALSE, TRUE,
                PMD_OPTION_BRK_TIME_DEFAULT, TRUE ) ;
       rdvMinMax( pEX, _sharingBreakTime, 5000, 300000, TRUE ) ;
-      // --startshifttime
       rdxUInt( pEX, PMD_OPTION_START_SHIFT_TIME, _startShiftTime, FALSE, TRUE,
                PMD_DFT_START_SHIFT_TIME, TRUE ) ;
       rdvMinMax( pEX, _startShiftTime, 0, 7200, TRUE ) ;
-      // --catalogaddr
       rdxString( pEX, PMD_OPTION_CATALOG_ADDR, _catAddrLine,
-                 sizeof(_catAddrLine), FALSE, TRUE, "" ) ;
+                 sizeof(_catAddrLine), FALSE, FALSE, "" ) ;
 
-      // --dmsTmpBlkPath
       rdxPath( pEX, PMD_OPTION_DMS_TMPBLKPATH, _dmsTmpBlkPath,
                sizeof(_dmsTmpBlkPath), FALSE, FALSE, "" ) ;
 
-      // --sortBufSz
       rdxUInt( pEX, PMD_OPTION_SORTBUF_SIZE, _sortBufSz,
                FALSE, TRUE, PMD_DEFAULT_SORTBUF_SZ ) ;
       rdvMinMax( pEX, _sortBufSz, PMD_MIN_SORTBUF_SZ,
                  -1, TRUE ) ;
 
-      // --hjBufSz
       rdxUInt( pEX, PMD_OPTION_HJ_BUFSZ, _hjBufSz,
                FALSE, TRUE, PMD_DEFAULT_HJ_SZ ) ;
       rdvMinMax( pEX, _hjBufSz, PMD_MIN_HJ_SZ,
                  -1, TRUE ) ;
-
-      // --numpagecleaners
-      rdxUInt( pEX, PMD_OPTION_NUMPAGECLEANERS, _pagecleanNum,
-               FALSE, FALSE, PMD_DFT_NUMPAGECLEAN ) ;
-      rdvMinMax( pEX, _pagecleanNum, 0, PMD_MAX_NUMPAGECLEAN, TRUE ) ;
-
-      // --pagecleaninterval
-      rdxUInt( pEX, PMD_OPTION_PAGECLEANINTERVAL, _pagecleanInterval,
-               FALSE, TRUE, PMD_DFT_PAGECLEANINTERVAL ) ;
-      rdvMinMax ( pEX, _pagecleanInterval, PMD_MIN_PAGECLEANINTERVAL,
-                  -1, TRUE ) ;
 
       rdxBooleanS( pEX, PMD_OPTION_DIRECT_IO_IN_LOB, _directIOInLob,
                    FALSE, TRUE, FALSE, FALSE ) ;
@@ -1529,64 +1680,109 @@ namespace engine
       rdxBooleanS( pEX, PMD_OPTION_SPARSE_FILE, _sparseFile,
                    FALSE, TRUE, FALSE, FALSE ) ;
 
-      // --weight
       rdxUInt( pEX, PMD_OPTION_WEIGHT, _weight,
-               FALSE, TRUE, 10, FALSE ) ; 
+               FALSE, TRUE, 10, FALSE ) ;
       rdvMinMax( pEX, _weight, 1, 100, TRUE ) ;
 
-#ifdef SDB_ENTERPRISE
-
-#ifdef SDB_SSL
-      // --usessl
-      rdxBooleanS( pEX, PMD_OPTION_USESSL, _useSSL,
-                   FALSE, TRUE, FALSE, FALSE ) ;
-#endif
-
-#endif /* SDB_ENTERPRISE */
-      // --auth
       rdxBooleanS( pEX, PMD_OPTION_AUTH, _auth,
-                   FALSE, FALSE, TRUE, FALSE ) ;
-      // --planbuckets
+                   FALSE, TRUE, TRUE, FALSE ) ;
       rdxUInt( pEX, PMD_OPTION_PLAN_BUCKETS, _planBucketNum,
-               FALSE, TRUE, 500, FALSE ) ;
-      // --operatortimeout
+               FALSE, TRUE, OPT_PLAN_DEF_CACHE_BUCKETS, FALSE ) ;
+      rdvMinMax( pEX, _planBucketNum, OPT_PLAN_MIN_CACHE_BUCKETS,
+                 OPT_PLAN_MAX_CACHE_BUCKETS, TRUE ) ;
       rdxUInt( pEX, PMD_OPTION_OPERATOR_TIMEOUT, _oprtimeout, FALSE, TRUE,
                PMD_OPTION_OPR_TIME_DEFAULT, FALSE ) ;
-      // --overflowratio
       rdxUInt( pEX, PMD_OPTION_OVER_FLOW_RATIO, _overflowRatio, FALSE, TRUE,
                PMD_DFT_OVERFLOW_RETIO, FALSE ) ;
       rdvMinMax( pEX, _overflowRatio, 0, 10000, TRUE ) ;
-      // --extendthreshold
       rdxUInt( pEX, PMD_OPTION_EXTEND_THRESHOLD, _extendThreshold, FALSE, TRUE,
                PMD_DFT_EXTEND_THRESHOLD, TRUE ) ;
       rdvMinMax( pEX, _extendThreshold, 0, 128, TRUE ) ;
-      // --signalinterval
       rdxInt( pEX, PMD_OPTION_SIGNAL_INTERVAL, _signalInterval, FALSE, TRUE,
               0, TRUE ) ;
+      rdxUInt( pEX, PMD_OPTION_MAX_CACHE_SIZE, _maxCacheSize, FALSE, TRUE,
+               0, FALSE ) ;
+      rdxUInt( pEX, PMD_OPTION_MAX_CACHE_JOB, _maxCacheJob, FALSE, TRUE,
+               PMD_DFT_MAX_CACHE_JOB, FALSE ) ;
+      rdvMinMax( pEX, _maxCacheJob, 2, 200, TRUE ) ;
+      rdxUInt( pEX, PMD_OPTION_MAX_SYNC_JOB, _maxSyncJob, FALSE, TRUE,
+               PMD_DFT_MAX_SYNC_JOB, FALSE ) ;
+      rdvMinMax( pEX, _maxSyncJob, 2, 200, TRUE ) ;
+      rdxUInt( pEX, PMD_OPTION_SYNC_INTERVAL, _syncInterval, FALSE, TRUE,
+               PMD_DFT_SYNC_INTERVAL, FALSE ) ;
+      rdxUInt( pEX, PMD_OPTION_SYNC_RECORDNUM, _syncRecordNum, FALSE, TRUE,
+               PMD_DFT_SYNC_RECORDNUM, FALSE ) ;
+      rdxBooleanS( pEX, PMD_OPTION_SYNC_DEEP, _syncDeep, FALSE, TRUE,
+                   FALSE, FALSE ) ;
 
-      // --omaddr
+      rdxBooleanS( pEX, PMD_OPTION_ARCHIVE_ON, _archiveOn,
+                   FALSE, FALSE, FALSE, FALSE ) ;
+
+      rdxBooleanS( pEX, PMD_OPTION_ARCHIVE_COMPRESS_ON, _archiveCompressOn,
+                   FALSE, TRUE, TRUE, FALSE ) ;
+
+      rdxPath( pEX, PMD_OPTION_ARCHIVE_PATH, _archivePath, sizeof(_archivePath),
+               FALSE, FALSE, "" ) ;
+
+      rdxUInt( pEX, PMD_OPTION_ARCHIVE_TIMEOUT, _archiveTimeout, FALSE, TRUE,
+               PMD_DFT_ARCHIVE_TIMEOUT, FALSE ) ;
+
+      rdxUInt( pEX, PMD_OPTION_ARCHIVE_EXPIRED, _archiveExpired, FALSE, TRUE,
+               PMD_DFT_ARCHIVE_EXPIRED, FALSE ) ;
+
+      rdxUInt( pEX, PMD_OPTION_ARCHIVE_QUOTA, _archiveQuota, FALSE, TRUE,
+               PMD_DFT_ARCHIVE_QUOTA, FALSE ) ;
+
       rdxString( pEX, PMD_OPTION_OM_ADDR, _omAddrLine,
                  sizeof(_omAddrLine), FALSE, FALSE, "" ) ;
 
-      // end map
+      rdxUInt( pEX, PMD_OPTION_DMS_CHK_INTERVAL, _dmsChkInterval,
+               FALSE, TRUE, PMD_DFT_DMS_CHK_INTERVAL, TRUE ) ;
+      rdvMinMax( pEX, _dmsChkInterval, 0, 240, TRUE ) ;
+
+      rdxUInt( pEX, PMD_OPTION_CACHE_MERGE_SIZE, _cacheMergeSize,
+               FALSE, TRUE, PMD_DFT_CACHE_MERGE_SZ, TRUE ) ;
+      rdvMinMax( pEX, _cacheMergeSize, 0, 64, TRUE ) ;
+
+      rdxUInt( pEX, PMD_OPTION_PAGE_ALLOC_TIMEOUT, _pageAllocTimeout,
+               FALSE, TRUE, PMD_DFT_PAGE_ALLOC_TIMEOUT, TRUE ) ;
+      rdvMinMax( pEX, _pageAllocTimeout, 0, 3600000, TRUE ) ;
+
+      rdxBooleanS( pEX, PMD_OPTION_PERF_STAT, _perfStat, FALSE,
+                   TRUE, FALSE, TRUE ) ;
+
+      rdxInt( pEX, PMD_OPTION_OPT_COST_THRESHOLD, _optCostThreshold, FALSE,
+              TRUE, PMD_DFT_OPT_COST_THRESHOLD, TRUE ) ;
+      rdvMinMax( pEX, _optCostThreshold, -1, INT_MAX, TRUE ) ;
+
+      rdxBooleanS( pEX, PMD_OPTION_ENABLE_MIX_CMP, _enableMixCmp, FALSE,
+                   TRUE, PMD_DFT_ENABLE_MIX_CMP, TRUE ) ;
+
+      rdxUInt( pEX, PMD_OPTION_PLAN_CACHE_LEVEL, _planCacheLevel, FALSE,
+               TRUE, OPT_PLAN_PARAMETERIZED, FALSE ) ;
+      rdvMinMax( pEX, _planCacheLevel, OPT_PLAN_NOCACHE, OPT_PLAN_FUZZYOPTR,
+                 TRUE ) ;
+
+      rdxUInt( pEX, PMD_OPTION_MAX_CONN,_maxconn, FALSE,
+               TRUE, PMD_DFT_MAX_CONN, FALSE ) ;
+      rdvMinMax( pEX, _maxconn, 0, 30000, TRUE ) ;
 
       return getResult () ;
    }
 
-   INT32 _pmdOptionsMgr::postLoaded ()
+   INT32 _pmdOptionsMgr::postLoaded ( PMD_CFG_STEP step )
    {
       INT32 rc = SDB_OK ;
       SDB_ROLE dbRole = SDB_ROLE_STANDALONE ;
 
-      ossGetPort( _krcbSvcName, _krcbSvcPort ) ;
-      if ( 0 == _krcbSvcPort )
+      rc = ossGetPort( _krcbSvcName, _krcbSvcPort ) ;
+      if ( SDB_OK != rc )
       {
          std::cerr << "Invalid svcname: " << _krcbSvcName << endl ;
          rc = SDB_INVALIDARG ;
          goto error ;
       }
 
-      // logbuffsize check
       if ( _logBuffSize > _logFileNum * _logFileSz *
            ( 1048576 / DPS_DEFAULT_PAGE_SIZE ) )
       {
@@ -1596,7 +1792,6 @@ namespace engine
                         ( 1048576 / DPS_DEFAULT_PAGE_SIZE ) ;
       }
 
-      // dbrole check
       if ( SDB_ROLE_MAX == ( dbRole = utilGetRoleEnum( _krcbRole ) ) )
       {
          std::cerr << "db role: " << _krcbRole << " error" << std::endl ;
@@ -1604,19 +1799,16 @@ namespace engine
          goto error ;
       }
 
-      // replbucketsize check
       if ( !ossIsPowerOf2( _replBucketSize ) )
       {
          _replBucketSize = PMD_DFT_REPL_BUCKET_SIZE ;
       }
 
-      // extendthreshold check
       if ( 0 != _extendThreshold && !ossIsPowerOf2( _extendThreshold ) )
       {
          _extendThreshold = PMD_DFT_EXTEND_THRESHOLD ;
       }
 
-      // syncstrategy check
       if ( SDB_OK != clsString2Strategy( _syncStrategyStr, _syncStrategy ) )
       {
          std::cerr << PMD_OPTION_SYNC_STRATEGY << " value error, use default"
@@ -1625,16 +1817,13 @@ namespace engine
       }
       _syncStrategyStr[0] = 0 ;
 
-      // audit mask check
+      _auditMask = 0 ;
       if ( SDB_OK != pdString2AuditMask( _auditMaskStr, _auditMask ) )
       {
          std::cerr << PMD_OPTION_AUDIT_MASK << " value error, use default"
                    << endl ;
          _auditMask = AUDIT_MASK_DEFAULT ;
       }
-
-      // preferreplica check
-      _preferReplica = utilPrefReplStr2Enum( _prefReplStr ) ;
 
       if ( 0 == ossStrlen( _replServiceName ) )
       {
@@ -1739,7 +1928,6 @@ namespace engine
             goto error ;
          }
 
-         // get real path
          if ( NULL == ossGetRealPath( wwwPath, _krcbWWWPath,
                                       OSS_MAX_PATHSIZE ) )
          {
@@ -1751,9 +1939,25 @@ namespace engine
          utilCatPath( _krcbWWWPath, OSS_MAX_PATHSIZE, "" ) ;
       }
 
+      if ( 0 == _archivePath[0] )
+      {
+         if ( SDB_OK != utilBuildFullPath( _krcbDbPath, PMD_OPTION_ARCHIVE_LOG_PATH,
+                                           OSS_MAX_PATHSIZE, _archivePath ) ||
+              SDB_OK != utilCatPath( _archivePath, OSS_MAX_PATHSIZE, "" ) )
+         {
+            std::cerr << "archivelog path is too long!" << endl ;
+            rc = SDB_INVALIDPATH ;
+            goto error ;
+         }
+      }
+
       if ( 0 == _krcbLobPath[0] )
       {
          ossStrcpy( _krcbLobPath, _krcbDbPath ) ;
+      }
+      if ( 0 == _krcbLobMetaPath[0] )
+      {
+         ossStrcpy( _krcbLobMetaPath, _krcbLobPath ) ;
       }
 
       if ( 0 == _dmsTmpBlkPath[0] )
@@ -1767,71 +1971,105 @@ namespace engine
             goto error ;
          }
       }
-      else
+
+      if ( 0 == ossStrncmp( _krcbDbPath, _dmsTmpBlkPath,
+                            ossStrlen( _dmsTmpBlkPath ) ) )
       {
-         if ( 0 == ossStrcmp( _krcbDbPath, _dmsTmpBlkPath))
-         {
-            std::cerr << "tmp path and data path should not be the same"
-                      << endl ;
-            rc = SDB_INVALIDPATH ;
-            goto error ;
-         }
-         if ( 0 == ossStrcmp( _krcbIndexPath, _dmsTmpBlkPath))
-         {
-            std::cerr << "tmp path and index path should not be the same"
-                      << endl ;
-            rc = SDB_INVALIDPATH ;
-            goto error ;
-         }
-         if ( 0 == ossStrcmp( _krcbLogPath, _dmsTmpBlkPath))
-         {
-            std::cerr << "tmp path and log path should not be the same"
-                      << endl ;
-            rc = SDB_INVALIDPATH ;
-            goto error ;
-         }
-         if ( 0 == ossStrcmp( _krcbBkupPath, _dmsTmpBlkPath))
-         {
-            std::cerr << "tmp path and bkup path should not be the same"
-                      << endl ;
-            rc = SDB_INVALIDPATH ;
-            goto error ;
-         }
-         if ( 0 == ossStrcmp( _krcbDiagLogPath, _dmsTmpBlkPath))
-         {
-            std::cerr << "tmp path and diaglog path should not be the same"
-                      << endl ;
-            rc = SDB_INVALIDPATH ;
-            goto error ;
-         }
-         if ( 0 == ossStrcmp( _krcbAuditLogPath, _dmsTmpBlkPath ) )
-         {
-            std::cerr << "tmp path and auditlog path should not be the same"
-                      << endl ;
-            rc = SDB_INVALIDPATH ;
-            goto error ;
-         }
-         if ( 0 == ossStrcmp( _krcbWWWPath, _dmsTmpBlkPath ) )
-         {
-            std::cerr << "tmp path and www path should not be the same"
-                      << endl ;
-            rc = SDB_INVALIDPATH ;
-            goto error ;
-         }
-         if ( 0 == ossStrcmp( _krcbLobPath, _dmsTmpBlkPath ) )
-         {
-            std::cerr << "tmp path and lob path should not be the same"
-                      << endl ;
-            rc = SDB_INVALIDPATH ;
-            goto error ;
-         }
+         std::cerr << "tmp path and data path should not be the same"
+                   << endl ;
+         rc = SDB_INVALIDPATH ;
+         goto error ;
+      }
+      if ( 0 == ossStrncmp( _krcbIndexPath, _dmsTmpBlkPath,
+                            ossStrlen( _dmsTmpBlkPath ) ) )
+      {
+         std::cerr << "tmp path and index path should not be the same"
+                   << endl ;
+         rc = SDB_INVALIDPATH ;
+         goto error ;
+      }
+      if ( 0 == ossStrncmp( _krcbLogPath, _dmsTmpBlkPath,
+                            ossStrlen( _dmsTmpBlkPath ) ) )
+      {
+         std::cerr << "tmp path and log path should not be the same"
+                   << endl ;
+         rc = SDB_INVALIDPATH ;
+         goto error ;
+      }
+      if ( 0 == ossStrncmp( _krcbBkupPath, _dmsTmpBlkPath,
+                            ossStrlen( _dmsTmpBlkPath ) ) )
+      {
+         std::cerr << "tmp path and bkup path should not be the same"
+                   << endl ;
+         rc = SDB_INVALIDPATH ;
+         goto error ;
+      }
+      if ( 0 == ossStrncmp( _krcbDiagLogPath, _dmsTmpBlkPath,
+                            ossStrlen( _dmsTmpBlkPath ) ) )
+      {
+         std::cerr << "tmp path and diaglog path should not be the same"
+                   << endl ;
+         rc = SDB_INVALIDPATH ;
+         goto error ;
+      }
+      if ( 0 == ossStrncmp( _krcbAuditLogPath, _dmsTmpBlkPath,
+                            ossStrlen( _dmsTmpBlkPath ) ) )
+      {
+         std::cerr << "tmp path and auditlog path should not be the same"
+                   << endl ;
+         rc = SDB_INVALIDPATH ;
+         goto error ;
+      }
+      if ( 0 == ossStrncmp( _krcbWWWPath, _dmsTmpBlkPath,
+                            ossStrlen( _dmsTmpBlkPath ) ) )
+      {
+         std::cerr << "tmp path and www path should not be the same"
+                   << endl ;
+         rc = SDB_INVALIDPATH ;
+         goto error ;
+      }
+      if ( 0 == ossStrncmp( _krcbLobPath, _dmsTmpBlkPath,
+                            ossStrlen( _dmsTmpBlkPath ) ) )
+      {
+         std::cerr << "tmp path and lob path should not be the same"
+                   << endl ;
+         rc = SDB_INVALIDPATH ;
+         goto error ;
+      }
+      if ( 0 == ossStrncmp( _krcbLobMetaPath, _dmsTmpBlkPath,
+                            ossStrlen( _dmsTmpBlkPath ) ) )
+      {
+         std::cerr << "tmp path and lob meta path should not be the same"
+                   << endl ;
+         rc = SDB_INVALIDPATH ;
+         goto error ;
+      }
+      if ( 0 == ossStrncmp( _archivePath, _dmsTmpBlkPath,
+                            ossStrlen( _dmsTmpBlkPath ) ) )
+      {
+         std::cerr << "tmp path and archive path should not be the same"
+                   << endl ;
+         rc = SDB_INVALIDPATH ;
+         goto error ;
+      }
+
+      if ( _archiveOn )
+      {
+         PD_CHECK( _logFileNum > 1, SDB_INVALIDARG, error, PDERROR,
+                   "The value of parameter \"logfilenum\" must be greater than 1 "
+                   "when configure archiveon" ) ;
+      }
+
+      if ( SDB_ROLE_CATALOG == dbRole || SDB_ROLE_OM == dbRole )
+      {
+         _transactionOn = TRUE ;
       }
 
       if ( _transactionOn )
       {
          PD_CHECK( _logFileNum >= 5, SDB_INVALIDARG, error, PDERROR,
                    "The value of parameter \"logfilenum\" must be greater than 5 "
-                   "when  configure transaction" ) ;
+                   "when configure transaction" ) ;
       }
 
       if ( _memDebugSize != 0 )
@@ -1840,35 +2078,48 @@ namespace engine
          _memDebugSize = OSS_MAX ( _memDebugSize, SDB_MEMDEBUG_MINGUARDSIZE ) ;
       }
 
-      rc = parseAddressLine( _catAddrLine, _vecCat ) ;
-      if ( rc )
+      if ( 0 == _vecCat.size() )
       {
-         goto error ;
+         rc = parseAddressLine( _catAddrLine, _vecCat ) ;
+         if ( rc )
+         {
+            goto error ;
+         }
       }
 
-      // if start is stanalone, must enable dps local
-      if ( SDB_ROLE_STANDALONE == dbRole && _transactionOn )
+      if ( SDB_ROLE_STANDALONE == dbRole &&
+           ( _transactionOn || _archiveOn ) )
       {
          _dpslocal = TRUE ;
       }
 
-      // om and catalog, prefetch and preload and multi-replsync not enable
-      // and syncstrategy is none
       if ( SDB_ROLE_CATALOG == dbRole || SDB_ROLE_OM == dbRole )
       {
          _numPreLoaders    = 0 ;
          _maxPrefPool      = 0 ;
          _maxSubQuery      = 0 ;
          _maxReplSync      = 0 ;
-         _pagecleanNum     = 1 ;
-         _pagecleanInterval= PMD_DFT_PAGECLEANINTERVAL ;
          _syncStrategy     = CLS_SYNC_NONE ;
+
+         if ( 0 == _syncInterval || _syncInterval > 60000 )
+         {
+            _syncInterval = PMD_DFT_SYNC_INTERVAL ;
+         }
+         if ( 0 == _syncRecordNum || _syncRecordNum > 1000 )
+         {
+            _syncRecordNum = 10 ;
+         }
+
+         _enableMixCmp = FALSE ;
       }
 
-      rc = parseAddressLine( _omAddrLine, _vecOm ) ;
-      if ( rc )
+      if ( 0 == _vecOm.size() )
       {
-         goto error ;
+         rc = parseAddressLine( _omAddrLine, _vecOm ) ;
+         if ( rc )
+         {
+            goto error ;
+         }
       }
 
    done:
@@ -1889,19 +2140,26 @@ namespace engine
 
    INT32 _pmdOptionsMgr::preSaving ()
    {
+      MAP_K2V::iterator it ;
+
       string addr = makeAddressLine( _vecCat ) ;
       ossStrncpy( _catAddrLine, addr.c_str(), OSS_MAX_PATHSIZE ) ;
       _catAddrLine[ OSS_MAX_PATHSIZE ] = 0 ;
+      if ( 0 != _catAddrLine[ 0 ] )
+      {
+         _addToFieldMap( PMD_OPTION_CATALOG_ADDR, _catAddrLine, TRUE, TRUE ) ;
+      }
 
       addr = makeAddressLine( _vecOm ) ;
       ossStrncpy( _omAddrLine, addr.c_str(), OSS_MAX_PATHSIZE ) ;
       _omAddrLine[ OSS_MAX_PATHSIZE ] = 0 ;
+      if ( 0 != _omAddrLine[ 0 ] )
+      {
+         _addToFieldMap( PMD_OPTION_OM_ADDR, _omAddrLine, TRUE, TRUE ) ;
+      }
 
       clsStrategy2String( _syncStrategy, _syncStrategyStr,
                           sizeof( _syncStrategyStr ) ) ;
-
-      utilPrefReplEnum2Str( _preferReplica, _prefReplStr,
-                            sizeof(_prefReplStr) ) ;
 
       return SDB_OK ;
    }
@@ -1916,6 +2174,7 @@ namespace engine
       PMD_ADD_PARAM_OPTIONS_BEGIN( desc )
          PMD_COMMANDS_OPTIONS
          PMD_HIDDEN_COMMANDS_OPTIONS
+         ( "*", po::value<string>(), "" )
       PMD_ADD_PARAM_OPTIONS_END
 
       rc = utilReadConfigureFile( pConfigFile, desc, vm ) ;
@@ -1947,6 +2206,7 @@ namespace engine
       {
          ossStrcpy( _krcbConfPath, PMD_CURRENT_PATH ) ;
       }
+      _addToFieldMap( PMD_OPTION_CONFPATH, _krcbConfPath, TRUE, FALSE ) ;
 
    done:
       return rc ;
@@ -1983,7 +2243,6 @@ namespace engine
       rc = utilReadCommandLine( argc, argv, all, vm );
       JUDGE_RC( rc )
 
-      /// read cmd first
       if ( vm.count( PMD_OPTION_HELP ) )
       {
          std::cout << display << std::endl ;
@@ -2003,7 +2262,6 @@ namespace engine
          goto done ;
       }
 
-      // --confpath
       if ( vm.count( PMD_OPTION_CONFPATH ) )
       {
          CHAR *p = ossGetRealPath( vm[PMD_OPTION_CONFPATH].as<string>().c_str(),
@@ -2046,17 +2304,12 @@ namespace engine
       rc = utilReadConfigureFile( _krcbConfFile, all, vm2 ) ;
       if ( SDB_OK != rc )
       {
-         //if user set  configure file,  but cann't read the configure file.
-         //then we should exit.
          if ( vm.count( PMD_OPTION_CONFPATH ) )
          {
             std::cerr << "Read config file: " << _krcbConfFile
                       << " failed, rc: " << rc << std::endl ;
             goto error ;
          }
-         // we should avoid exit when config file is not found or I/O error
-         // we should continue run but use other arguments that uses input
-         // from command line
          else if ( SDB_FNE != rc )
          {
             std::cerr << "Read default config file: " << _krcbConfFile
@@ -2078,6 +2331,7 @@ namespace engine
       else
       {
          ossStrcpy( _krcbConfPath, cfgTempPath ) ;
+         _addToFieldMap( PMD_OPTION_CONFPATH, _krcbConfPath, TRUE, FALSE ) ;
       }
 
    done:
@@ -2087,65 +2341,65 @@ namespace engine
       goto done ;
    }
 
+   #define PMD_RMDIR_WITH_IGNORE_PARENTDIR_PERM( path )\
+   {\
+      if ( 0 != path[0] && 0 == ossAccess( path ) )\
+      {\
+         rc = ossDelete( path ) ;\
+         if ( SDB_PERM == rc )\
+         {\
+            multimap<string, string> mapFiles ;\
+            vector<string> dirs;\
+            string tmpPath = path ;\
+            rc = ossEnumFiles( tmpPath, mapFiles, NULL, 1 ) ;\
+            if( rc || !mapFiles.empty() )\
+            {\
+               rc = SDB_PERM ;\
+               PD_LOG( PDERROR, "Remove dir[%s] failed, rc: %d",\
+                       path, SDB_PERM ) ;\
+               goto error ;\
+            }\
+            rc = ossEnumSubDirs( tmpPath, dirs, 1 ) ;\
+            if( rc || !dirs.empty() )\
+            {\
+               rc = SDB_PERM ;\
+               PD_LOG( PDERROR, "Remove dir[%s] failed, rc: %d",\
+                       path, SDB_PERM ) ;\
+               goto error ;\
+            }\
+         }\
+         else if ( rc )\
+         {\
+            PD_LOG( PDERROR, "Remove dir[%s] failed, rc: %d",\
+                    path, rc ) ;\
+            goto error ;\
+         }\
+      }\
+   }
+
    INT32 _pmdOptionsMgr::removeAllDir()
    {
       INT32 rc = SDB_OK ;
 
-      if ( _dmsTmpBlkPath[ 0 ] != 0 && 0 == ossAccess( _dmsTmpBlkPath ) )
-      {
-         rc = ossDelete( _dmsTmpBlkPath ) ;
-         PD_RC_CHECK( rc, PDERROR, "Remove dir[%s] failed, rc: %d",
-                      _dmsTmpBlkPath, rc ) ;
-      }
+      PMD_RMDIR_WITH_IGNORE_PARENTDIR_PERM( _archivePath ) ;
 
-      if ( _krcbBkupPath[ 0 ] != 0 && 0 == ossAccess( _krcbBkupPath ) )
-      {
-         rc = ossDelete( _krcbBkupPath ) ;
-         PD_RC_CHECK( rc, PDERROR, "Remove dir[%s] failed, rc: %d",
-                      _krcbBkupPath, rc ) ;
-           }
+      PMD_RMDIR_WITH_IGNORE_PARENTDIR_PERM( _dmsTmpBlkPath ) ;
 
-      if ( _krcbLogPath[ 0 ] != 0 && 0 == ossAccess( _krcbLogPath ) )
-      {
-         rc = ossDelete( _krcbLogPath ) ;
-         PD_RC_CHECK( rc, PDERROR, "Remove dir[%s] failed, rc: %d",
-                      _krcbLogPath, rc ) ;
-           }
+      PMD_RMDIR_WITH_IGNORE_PARENTDIR_PERM( _krcbBkupPath ) ;
 
-      if ( _krcbDiagLogPath[ 0 ] != 0 && 0 == ossAccess( _krcbDiagLogPath ) )
-      {
-         rc = ossDelete( _krcbDiagLogPath ) ;
-         PD_RC_CHECK( rc, PDERROR, "Remove dir[%s] failed, rc: %d",
-                      _krcbDiagLogPath, rc ) ;
-           }
+      PMD_RMDIR_WITH_IGNORE_PARENTDIR_PERM( _krcbLogPath ) ;
 
-      if ( _krcbAuditLogPath[ 0 ] != 0 && 0 == ossAccess( _krcbAuditLogPath ) )
-      {
-         rc = ossDelete( _krcbAuditLogPath ) ;
-         PD_RC_CHECK( rc, PDERROR, "Remove dir[%s] failed, rc: %d",
-                      _krcbAuditLogPath, rc ) ;
-           }
+      PMD_RMDIR_WITH_IGNORE_PARENTDIR_PERM( _krcbDiagLogPath ) ;
 
-      if ( _krcbLobPath[ 0 ] != 0 && 0 == ossAccess( _krcbLobPath ) )
-      {
-         rc = ossDelete( _krcbLobPath ) ;
-         PD_RC_CHECK( rc, PDERROR, "Remove dir[%s] failed, rc: %d",
-                      _krcbLobPath, rc ) ;
-     }
+      PMD_RMDIR_WITH_IGNORE_PARENTDIR_PERM( _krcbAuditLogPath ) ;
 
-      if ( _krcbIndexPath[ 0 ] != 0 && 0 == ossAccess( _krcbIndexPath ) )
-      {
-         rc = ossDelete( _krcbIndexPath ) ;
-         PD_RC_CHECK( rc, PDERROR, "Remove dir[%s] failed, rc: %d",
-                      _krcbIndexPath, rc ) ;
-     }
+      PMD_RMDIR_WITH_IGNORE_PARENTDIR_PERM( _krcbLobPath ) ;
 
-      if ( _krcbDbPath[ 0 ] != 0 && 0 == ossAccess( _krcbDbPath ) )
-      {
-         rc = ossDelete( _krcbDbPath ) ;
-         PD_RC_CHECK( rc, PDERROR, "Remove dir[%s] failed, rc: %d",
-                      _krcbDbPath, rc ) ;
-     }
+      PMD_RMDIR_WITH_IGNORE_PARENTDIR_PERM( _krcbLobMetaPath ) ;
+
+      PMD_RMDIR_WITH_IGNORE_PARENTDIR_PERM( _krcbIndexPath ) ;
+
+      PMD_RMDIR_WITH_IGNORE_PARENTDIR_PERM( _krcbDbPath ) ;
 
    done:
       return rc ;
@@ -2211,10 +2465,26 @@ namespace engine
          goto error ;
       }
 
+      rc = ossMkdir( _archivePath ) ;
+      if ( rc && SDB_FE != rc )
+      {
+         std::cerr << "Failed to create archivelog dir: " << _archivePath <<
+                      ", rc = " << rc << std::endl ;
+         goto error ;
+      }
+
       rc = ossMkdir( _krcbLobPath ) ;
       if ( rc && SDB_FE != rc )
       {
          std::cerr << "Failed to create lob dir: " << _krcbLobPath <<
+                      ", rc = " << rc << std::endl ;
+         goto error ;
+      }
+
+      rc = ossMkdir( _krcbLobMetaPath ) ;
+      if ( rc && SDB_FE != rc )
+      {
+         std::cerr << "Failed to create lob meta dir: " << _krcbLobMetaPath <<
                       ", rc = " << rc << std::endl ;
          goto error ;
       }
@@ -2228,14 +2498,14 @@ namespace engine
    }
 
    // PD_TRACE_DECLARE_FUNCTION ( SDB__PMDOPTMGR_REFLUSH2FILE, "_pmdOptionsMgr::reflush2file" )
-   INT32 _pmdOptionsMgr::reflush2File()
+   INT32 _pmdOptionsMgr::reflush2File( UINT32 mask )
    {
       INT32 rc = SDB_OK ;
       PD_TRACE_ENTRY (SDB__PMDOPTMGR_REFLUSH2FILE ) ;
       std::string line ;
       CHAR conf[ OSS_MAX_PATHSIZE + 1 ] = {0} ;
 
-      rc = pmdCfgRecord::toString( line ) ;
+      rc = pmdCfgRecord::toString( line, mask ) ;
       if ( SDB_OK != rc )
       {
          PD_LOG( PDERROR, "Failed to get the line str:%d", rc ) ;
@@ -2251,14 +2521,17 @@ namespace engine
          goto error;
       }
 
-      rc = utilWriteConfigFile( conf, line.c_str(), FALSE ) ;
-      PD_RC_CHECK( rc, PDERROR, "Failed to write config[%s], rc: %d",
-                   conf, rc ) ;
-
-      // save notify
-      if ( getConfigHandler() )
       {
-         getConfigHandler()->onConfigSave() ;
+         ossScopedLock lock( &_mutex ) ;
+
+         rc = utilWriteConfigFile( conf, line.c_str(), FALSE ) ;
+         PD_RC_CHECK( rc, PDERROR, "Failed to write config[%s], rc: %d",
+                      conf, rc ) ;
+
+         if ( getConfigHandler() )
+         {
+            getConfigHandler()->onConfigSave() ;
+         }
       }
 
    done:

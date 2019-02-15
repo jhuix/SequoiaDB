@@ -1,97 +1,105 @@
-// This header file is to define the compressor type and interfaces.
+/*******************************************************************************
 
+
+   Copyright (C) 2011-2016 SequoiaDB Ltd.
+
+   This program is free software: you can redistribute it and/or modify
+   it under the term of the GNU Affero General Public License, version 3,
+   as published by the Free Software Foundation.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warrenty of
+   MARCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+   GNU Affero General Public License for more details.
+
+   You should have received a copy of the GNU Affero General Public License
+   along with this program. If not, see <http://www.gnu.org/license/>.
+
+   Source File Name = utilCompressor.hpp
+
+   Descriptive Name = Compressor for data compression and decompression.
+
+   When/how to use: this program may be used to compress/decompress data. This
+   file contains the interfaces provided by compressors.
+
+   Dependencies: N/A
+
+   Restrictions: N/A
+
+   Change Activity:
+   defect Date        Who Description
+   ====== =========== === ==============================================
+          07/12/2015  YSD Initial Draft
+
+   Last Changed =
+
+*******************************************************************************/
 #ifndef UTIL_COMPRESSOR__
 #define UTIL_COMPRESSOR__
 
 #include "core.hpp"
 #include "oss.hpp"
-#include "ossUtil.hpp"
+#include "utilCompression.hpp"
+#include "utilDictionary.hpp"
 
 namespace engine
 {
-   typedef void * utilCompressorContext ;
-   #define UTIL_INVALID_COMP_CTX    NULL
 
-    // compressor type definition. Currently only support for LZW is provided.
-   enum UTIL_COMPRESSOR_TYPE
+   #define UTIL_INVALID_DICT                 NULL
+
+   typedef void * utilDictHandle ;
+
+   #define UTIL_COMPRESSOR_DFT_MIN_RATIO     80
+   #define UTIL_COMPRESSOR_DFT_LEVEL         UTIL_COMP_BEST_COMPRESSION
+
+   struct _utilCompressStrategy
    {
-      UTIL_COMPRESSOR_INVALID = -1,
-      UTIL_COMPRESSOR_SNAPPY = 0,
-      UTIL_COMPRESSOR_LZW = 1,
-      UTIL_COMPRESSOR_LZ4 = 2,
-      UTIL_COMPRESSOR_ZLIB = 3,
+      UINT8 _minRatio ;
+      UTIL_COMPRESSION_LEVEL _level ;
    } ;
-
-   const CHAR *utilCompressType2String( UINT8 type ) ;
+   typedef _utilCompressStrategy utilCompressStrategy ;
 
    /* This class provides compressor interfaces. */
    class _utilCompressor : public SDBObject
    {
-      public:
-         _utilCompressor(UTIL_COMPRESSOR_TYPE type)
-            : _type(type), _dictCopy( FALSE ),
-              _dictionary( NULL ), _dictSize( 0 ),
-              _prepared( FALSE )
-         {
-         }
-         virtual ~_utilCompressor() {};
-      public:
-         /*
-          * Set the dictionary used by the compressor and decompressor.
-          * They should use exactly the same dictionary.
-          * If the compressor is expected to maintain the dictionary by itself,
-          * pass 'copy' as TRUE.
-          */
-         virtual INT32 setDictionary( const CHAR *dict, UINT32 dictLen ) = 0 ;
+   public:
+      _utilCompressor( UTIL_COMPRESSOR_TYPE type )
+      : _type( type )
+      {
+      }
 
-         /*
-         * Get the possible compressed size in the worst case. srcLen is the
-         * source data size.
-         */
-         virtual size_t compressBound( size_t srcLen ) = 0 ;
+      virtual ~_utilCompressor() {}
 
-         virtual INT32 prepare( utilCompressorContext &context ) = 0 ;
-         virtual BOOLEAN canRePrepare() { return _prepared ; }
+      virtual INT32 compressBound( UINT32 srcLen, UINT32 &maxCompressedLen,
+                                   const utilDictHandle dictionary = NULL ) = 0 ;
 
-         /*
-          * Only called after prepare and before done. It will reuse the context
-          * to start another work.
-          */
-         virtual INT32 rePrepare( utilCompressorContext &context ) = 0 ;
+      virtual INT32 compress( const CHAR *source, UINT32 sourceLen,
+                              CHAR *dest, UINT32 &destLen,
+                              const utilDictHandle dictionary = NULL,
+                              const utilCompressStrategy *strategy = NULL ) = 0 ;
 
-         /*
-         * Compress the source data, and write the compressed data into dest.
-         * On success, destSize will be the actual dest data size.
-         * RETURN:
-         *     SDB_OK
-         *        Compress successfully. dest and destSize contain the
-         *        compressed data and size seperately.
-         *     SDB_UTIL_BUF_FULL
-         *        Compression failed due to too small dest buf.
-         *     SDB_UTIL_PREPARE_COMPRESSOR_FAIL
-         *        Compression failed due to some error during preparing
-         *        compression.
-         *     SDB_UTIL_COMPRESS_FAIL
-         *        Compression failed due to some error during the actual
-         *        compressing phase.
-         */
-         virtual INT32 compress( utilCompressorContext ctx,
-                                 const CHAR* source, UINT32 sourceLen,
-                                 CHAR* dest, UINT32 &destLen ) = 0 ;
-         virtual INT32 decompress( utilCompressorContext ctx,
-                                   const CHAR* source, UINT32 sourceLen,
-                                   CHAR* dest, UINT32 &destLen ) = 0 ;
-         virtual INT32 done( utilCompressorContext &ctx ) = 0;
-         UTIL_COMPRESSOR_TYPE getType(void) { return _type; }
+      virtual INT32 getUncompressedLen( const CHAR *source, UINT32 sourceLen,
+                                        UINT32 &length) = 0 ;
 
-      protected:
-         UTIL_COMPRESSOR_TYPE _type ;
-         BOOLEAN _dictCopy ;
-         CHAR *_dictionary ;
-         UINT32 _dictSize ;
-         BOOLEAN _prepared ;
-   };
-   typedef _utilCompressor utilCompressor;
+      virtual INT32 decompress( const CHAR *source, UINT32 sourceLen,
+                                CHAR *dest, UINT32 &destLen,
+                                const utilDictHandle dictionary = NULL ) = 0 ;
+   private:
+      UTIL_COMPRESSOR_TYPE _type ;
+   } ;
+   typedef _utilCompressor utilCompressor ;
+
+   /*
+    * Get the global compressor pointer. When that is done, you can use the
+    * compressor to compress/decompress data.
+    */
+   utilCompressor* getCompressorByType( UTIL_COMPRESSOR_TYPE type ) ;
+
+   /* Get the name of the compressor in string format. */
+   const CHAR *utilCompressType2String( UINT8 type ) ;
+
+   UTIL_COMPRESSOR_TYPE utilString2CompressType( const CHAR *pStr ) ;
+
 }
 
 #endif /* UTIL_COMPRESSOR__ */

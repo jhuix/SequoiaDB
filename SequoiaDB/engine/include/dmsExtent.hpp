@@ -101,7 +101,7 @@ namespace engine
          _lastRecordOffset    = DMS_INVALID_OFFSET ;
          _freeSpace           = (INT32)( totalSize - sizeof(_dmsExtent) ) ;
       }
-      BOOLEAN validate( UINT16 mbID = DMS_INVALID_MBID )
+      BOOLEAN validate( UINT16 mbID = DMS_INVALID_MBID ) const
       {
          if ( DMS_EXTENT_EYECATCHER0 != _eyeCatcher[0] ||
               DMS_EXTENT_EYECATCHER1 != _eyeCatcher[1] ||
@@ -118,7 +118,6 @@ namespace engine
    } ;
    typedef struct _dmsExtent           dmsExtent ;
    #define DMS_EXTENT_METADATA_SZ      sizeof(dmsExtent)
-
 
    /*
       Eyecatcher define
@@ -206,7 +205,6 @@ namespace engine
       CHAR        _version ;
       UINT32      _dictLen ;     /* Actual length of the dictionary. */
 
-      //void init( UINT16 numPages, UINT16 mbID, UINT32 segNum )
       void init( UINT16 numPages, UINT16 mbID )
       {
          _eyeCatcher[0]       = DMS_DICT_EXTENT_EYECATCHER0 ;
@@ -220,13 +218,11 @@ namespace engine
 
       void setDict( const CHAR *dict, UINT32 dictLen )
       {
-         SDB_ASSERT( dict && ( dictLen > 0 && dictLen <= DMS_DICT_MAX_SIZE),
-                     "Invalid argument value" ) ;
          ossMemcpy((CHAR *)this + sizeof(_dmsDictExtent), dict, dictLen ) ;
          _dictLen = dictLen ;
       }
 
-      BOOLEAN validate( UINT16 mbID = DMS_INVALID_MBID )
+      BOOLEAN validate( UINT16 mbID = DMS_INVALID_MBID ) const
       {
          if ( DMS_DICT_EXTENT_EYECATCHER0 != _eyeCatcher[0] ||
               DMS_DICT_EXTENT_EYECATCHER1 != _eyeCatcher[1] ||
@@ -244,6 +240,74 @@ namespace engine
    typedef _dmsDictExtent dmsDictExtent ;
    #define DMS_DICTEXTENT_HEADER_SZ    sizeof(dmsDictExtent)
 
+   #define DMS_OPT_EXTENT_EYECATCHER0     'O'
+   #define DMS_OPT_EXTENT_EYECATCHER1     'E'
+   #define DMS_OPT_EXTENT_CURRENT_V       1
+   struct _dmsOptExtent : public SDBObject
+   {
+      CHAR        _eyeCatcher[2] ;
+      UINT16      _blockSize ;
+      UINT16      _mbID ;
+      CHAR        _flag ;
+      CHAR        _version ;
+      UINT32      _optSize ;
+
+      void init( UINT16 numPages, UINT16 mbID )
+      {
+         _eyeCatcher[0]    = DMS_OPT_EXTENT_EYECATCHER0 ;
+         _eyeCatcher[1]    = DMS_OPT_EXTENT_EYECATCHER1 ;
+         _blockSize        = numPages ;
+         _mbID             = mbID ;
+         _flag             = DMS_EXTENT_FLAG_INUSE ;
+         _version          = DMS_OPT_EXTENT_CURRENT_V ;
+         _optSize          = 0 ;
+      }
+
+      BOOLEAN validate( UINT16 mbID = DMS_INVALID_MBID ) const
+      {
+         if ( DMS_OPT_EXTENT_EYECATCHER0 != _eyeCatcher[0] ||
+              DMS_OPT_EXTENT_EYECATCHER1 != _eyeCatcher[1] ||
+              DMS_EXTENT_FLAG_INUSE != _flag )
+         {
+            return FALSE ;
+         }
+         else if ( DMS_INVALID_MBID != mbID && _mbID != mbID )
+         {
+            return FALSE ;
+         }
+         return TRUE ;
+      }
+
+      void setOption( const CHAR *optAddr, UINT32 optSize )
+      {
+         SDB_ASSERT( optAddr, "Option address is NULL" ) ;
+         ossMemcpy( (CHAR *)this + sizeof(_dmsOptExtent), optAddr, optSize ) ;
+         _optSize = optSize ;
+      }
+
+      INT32 getOption( CHAR **optAddr, UINT32 *optSize = NULL ) const
+      {
+         INT32 rc = SDB_OK ;
+         SDB_ASSERT( optAddr, "Option buffer is NULL" ) ;
+
+         if ( 0 == _optSize )
+         {
+            rc = SDB_SYS ;
+            goto error ;
+         }
+         *optAddr = (CHAR *)this + sizeof(_dmsOptExtent) ;
+         if ( optSize )
+         {
+            *optSize = _optSize ;
+         }
+      done:
+         return rc ;
+      error:
+         goto done ;
+      }
+   } ;
+   typedef _dmsOptExtent dmsOptExtent ;
+   #define DMS_OPTEXTENT_HEADER_SZ  sizeof(dmsOptExtent)
 }
 
 #endif //DMSEXTENT_HPP_

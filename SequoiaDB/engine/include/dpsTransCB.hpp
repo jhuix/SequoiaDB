@@ -46,6 +46,7 @@
 #include "ossLatch.hpp"
 #include "dms.hpp"
 #include "dpsTransLock.hpp"
+#include "dpsTransLockBucket.hpp"
 #include "dpsLogRecord.hpp"
 #include "sdbInterface.hpp"
 #include "ossEvent.hpp"
@@ -74,6 +75,8 @@ namespace engine
       DPS_TRANS_ID         _transID ;
       DPS_LSN_OFFSET       _curTransLsn ;
       UINT64               _eduID ;
+      UINT64               _relatedNID ;
+      UINT32               _relatedTID ;
       UINT32               _locksNum ;
       dpsTransLockId       _waitLock ;
       DpsTransCBLockList   _lockList ;
@@ -87,6 +90,7 @@ namespace engine
    */
    class dpsTransCB : public _IControlBlock, public _IEventHander
    {
+      friend class _dmsExtScannerBase ;
       friend class _dmsExtScanner ;
       friend class _dmsIXSecScanner ;
    public:
@@ -100,8 +104,8 @@ namespace engine
       virtual INT32  active () ;
       virtual INT32  deactive () ;
       virtual INT32  fini () ;
+      virtual void   onConfigChange() ;
 
-      virtual UINT32 getMask() const ;
       virtual void   onRegistered( const MsgRouteID &nodeID ) ;
       virtual void   onPrimaryChange( BOOLEAN primary,
                                       SDB_EVENT_OCCUR_TYPE occurType ) ;
@@ -150,28 +154,20 @@ namespace engine
 
       INT32 syncTransInfoFromLocal( DPS_LSN_OFFSET beginLsn );
 
-      // get record-X-lock: also get the space-S-lock and collection-IX-lock
-      // get collection-X-lock: also get the space-S-lock
       INT32 transLockGetX( _pmdEDUCB *eduCB, UINT32 logicCSID,
                            UINT16 collectionID = DMS_INVALID_MBID,
                            const dmsRecordID *recordID = NULL );
 
-      // get record-S-lock: also get the space-S-lock and collection-IS-lock
-      // get collection-S-lock: also get the space-S-lock
       INT32 transLockGetS( _pmdEDUCB *eduCB, UINT32 logicCSID,
                            UINT16 collectionID = DMS_INVALID_MBID,
                            const dmsRecordID *recordID = NULL );
 
-      // also get the space-S-lock
       INT32 transLockGetIX( _pmdEDUCB *eduCB, UINT32 logicCSID,
                             UINT16 collectionID = DMS_INVALID_MBID );
 
-      // also get the space-S-lock
       INT32 transLockGetIS( _pmdEDUCB *eduCB, UINT32 logicCSID,
                             UINT16 collectionID = DMS_INVALID_MBID );
 
-      // release record-lock: also release the space-lock and collection-lock
-      // release collection-lock: also release the space-lock
       void transLockRelease( _pmdEDUCB *eduCB, UINT32 logicCSID,
                              UINT16 collectionID = DMS_INVALID_MBID,
                              const dmsRecordID *recordID = NULL );
@@ -180,30 +176,18 @@ namespace engine
 
       BOOLEAN isTransOn() ;
 
-      // not get the lock only test if the lock can be got.
-      // test record-S-lock: also test the space-S-lock and collection-IS-lock
-      // test collection-S-lock: also test the space-S-lock
       INT32 transLockTestS( _pmdEDUCB *eduCB, UINT32 logicCSID,
                             UINT16 collectionID = DMS_INVALID_MBID,
                             const dmsRecordID *recordID = NULL );
 
-      // not get the lock only test if the lock can be got.
-      // test record-S-lock: also test the space-S-lock and collection-IS-lock
-      // test collection-S-lock: also test the space-S-lock
       INT32 transLockTestX( _pmdEDUCB *eduCB, UINT32 logicCSID,
                             UINT16 collectionID = DMS_INVALID_MBID,
                             const dmsRecordID *recordID = NULL );
 
-      // try to get record-X-lock: also try to get the space-S-lock and 
-      // collection-IX-lock
-      // try to get collection-X-lock: also try to get the space-S-lock
       INT32 transLockTryX( _pmdEDUCB *eduCB, UINT32 logicCSID,
                            UINT16 collectionID = DMS_INVALID_MBID,
                            const dmsRecordID *recordID = NULL );
 
-      // try to get record-S-lock: also try to get the space-S-lock and 
-      // collection-IS-lock
-      // try to get collection-S-lock: also try to get the space-S-lock
       INT32 transLockTryS( _pmdEDUCB *eduCB, UINT32 logicCSID,
                            UINT16 collectionID = DMS_INVALID_MBID,
                            const dmsRecordID *recordID = NULL );
@@ -220,15 +204,9 @@ namespace engine
       UINT64 usedLogSpace();
 
    protected:
-      // try to get record-X-lock: also try to get the space-S-lock and 
-      // collection-IX-lock,
-      // if failed then append to the wait-queue but not wait, caller must 
-      // call waitLock()
-      // for waitting the lock
       INT32 tryOrAppendX( _pmdEDUCB *eduCB, UINT32 logicCSID,
                           UINT16 collectionID, const dmsRecordID *recordID );
 
-      // waitting for the lock
       INT32 waitLock( _pmdEDUCB *eduCB, UINT32 logicCSID,
                       UINT16 collectionID, const dmsRecordID *recordID ) ;
    private:

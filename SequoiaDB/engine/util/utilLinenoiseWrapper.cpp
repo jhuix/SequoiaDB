@@ -33,15 +33,18 @@
 #include "utilLinenoiseWrapper.hpp"
 #include <boost/algorithm/string/trim.hpp>
 #include "utilTrace.h"
+#include "ossUtil.hpp"
+#include "pd.hpp"
 #include "pdTrace.hpp"
+#include <sstream>
 
 using namespace std ;
-
 #define LINENOISE_MAX_LINE          (65535)
 #define LINENOISE_MAX_INPUT_LEN     (16781312)
 
 extern INT32 history_len ;
 string historyFile ;
+boost::function< BOOLEAN( const CHAR* ) > userdefCanContinueFuncObj ;
 
 // PD_TRACE_DECLARE_FUNCTION ( SDB__LINENOISECMDBLD__RELSNODE, "_linenoiseCmdBuilder::_releaseNode" )
 void _linenoiseCmdBuilder::_releaseNode( _linenoiseCmd * node )
@@ -154,7 +157,6 @@ INT32 _linenoiseCmdBuilder::delCmd( const CHAR * cmd )
 
    if ( !node || sameNum != node->nameSize || !node->leaf )
    {
-      // not found
       rc = SDB_OK ;
       goto done ;
    }
@@ -258,7 +260,6 @@ INT32 _linenoiseCmdBuilder::_insert( _linenoiseCmd * node, const CHAR * cmd )
    }
    else
    {
-      //split next node first
       newNode = SDB_OSS_NEW _linenoiseCmd ;
       newNode->cmdName = node->cmdName.substr( sameNum ) ;
       newNode->nameSize = node->nameSize - sameNum ;
@@ -273,7 +274,6 @@ INT32 _linenoiseCmdBuilder::_insert( _linenoiseCmd * node, const CHAR * cmd )
       node->next = newNode ;
       newNode->parent = node ;
 
-      //change cur node
       node->cmdName = node->cmdName.substr ( 0, sameNum ) ;
       node->nameSize = sameNum ;
 
@@ -325,7 +325,6 @@ UINT32 _linenoiseCmdBuilder::getCompletions( const CHAR * cmd,
       UINT32 prefixLen = ossStrlen( cmd ) - sameNum ;
       std::string prefix = std::string(cmd).substr( 0, prefixLen ) ;
 
-      // the cmd is not full the same the node name
       if ( *cmd && sameNum != node->nameSize )
       {
          std::string fillStr = prefix + node->cmdName ;
@@ -471,7 +470,6 @@ done :
    return count ;
 }
 
-/// Tool functions
 
 linenoiseCmdBuilder* getLinenoiseCmdBuilder()
 {
@@ -490,9 +488,11 @@ void lineComplete( const char *buf, linenoiseCompletions *lc )
    PD_TRACE_EXIT ( SDB_LINECOMPLETE );
 }
 
+
 // PD_TRACE_DECLARE_FUNCTION ( SDB_CANCONTINUENXTLINE, "canContinueNextLine" )
 BOOLEAN canContinueNextLine ( const CHAR * str )
 {
+
    BOOLEAN  ret         = FALSE ;
    UINT32 strlen        = 0 ;
    CHAR ch              = '\0' ;
@@ -502,125 +502,125 @@ BOOLEAN canContinueNextLine ( const CHAR * str )
 
    SDB_ASSERT ( str , "invalid argument" ) ;
    PD_TRACE_ENTRY ( SDB_CANCONTINUENXTLINE );
-
-   try
+   if( !userdefCanContinueFuncObj.empty() )
    {
-      vector< CHAR > parens ;
-      while ( ( ch = *str ) != '\0' )
+      ret = userdefCanContinueFuncObj( str ) ;
+   }
+   else
+   {
+      try
       {
-         ++strlen ;
-         // we won't check the "()\[]\{}" in '' or ""
-         if ( ( ch == '\"' ) && flag2 == FALSE )
+         vector< CHAR > parens ;
+         while ( ( ch = *str ) != '\0' )
          {
-             // skip "\"", because "\"" can use as content
-             if ( str != mark )
-             {
-                 const CHAR *temp_mark = str ;
-                 BOOLEAN flag = TRUE ; // need to set flag1 to be !flag1 or not
-                 while( (--str) != mark )
-                 {
-                     if ( *str == '\\' )
-                     {
-                         flag = !flag ;
-                     }
-                     else
-                     {
-                         break ;
-                     }
-                 }
-                 if ( TRUE == flag )
-                 {
-                     flag1 = !flag1 ; 
-                 }
-                 str = temp_mark ;
-             }
-             else
-             {
-                   // the first time we meed "
-                   flag1 = TRUE ;
-             }
+         	++strlen ;
+            if ( ( ch == '\"' ) && flag2 == FALSE )
+            {
+                if ( str != mark )
+                {
+                    const CHAR *temp_mark = str ;
+                    BOOLEAN flag = TRUE ; // need to set flag1 to be !flag1 or not
+                    while( (--str) != mark )
+                    {
+                        if ( *str == '\\' )
+                        {
+                            flag = !flag ;
+                        }
+                        else
+                        {
+                            break ;
+                        }
+                    }
+                    if ( TRUE == flag )
+                    {
+                        flag1 = !flag1 ;
+                    }
+                    str = temp_mark ;
+                }
+                else
+                {
+                      flag1 = TRUE ;
+                }
+            }
+            if ( ( ch == '\'' ) && flag1 == FALSE )
+            {
+                if ( str != mark )
+                {
+                    const CHAR *temp_mark = str ;
+                    BOOLEAN flag = TRUE ; // need to set flag2 to be !flag2 or not
+                    while( (--str) != mark )
+                    {
+                        if ( *str == '\\' )
+                        {
+                            flag = !flag ;
+                        }
+                        else
+                        {
+                            break ;
+                        }
+                    }
+                    if ( TRUE == flag )
+                    {
+                        flag2 = !flag2 ;
+                    }
+                    str = temp_mark ;
+                }
+                else
+                {
+                    flag2 = TRUE ;
+                }
+            }
+            str++ ;
+            if ( flag1 == TRUE || flag2 == TRUE )
+            {
+               continue ;
+            }
+
+            switch ( ch )
+            {
+            case '{' :
+            case '[' :
+            case '(' :
+               parens.push_back ( ch ) ;
+               break ;
+
+            case '}' :
+               if ( ! parens.empty() && '{' == parens.back() )
+                  parens.pop_back() ;
+               else
+                  goto error ;
+               break ;
+
+            case ']':
+               if ( ! parens.empty() && '[' == parens.back() )
+                  parens.pop_back() ;
+               else
+                  goto error ;
+               break ;
+
+            case ')' :
+               if ( ! parens.empty() && '(' == parens.back() )
+                  parens.pop_back() ;
+               else
+                  goto error ;
+               break ;
+            }
          }
-         if ( ( ch == '\'' ) && flag1 == FALSE )
+
+         if ( strlen > LINENOISE_MAX_INPUT_LEN )
          {
-             // skip "\'", because "\'" can use as content
-             if ( str != mark )
-             {
-                 const CHAR *temp_mark = str ;
-                 BOOLEAN flag = TRUE ; // need to set flag2 to be !flag2 or not
-                 while( (--str) != mark )
-                 {
-                     if ( *str == '\\' )
-                     {
-                         flag = !flag ;
-                     }
-                     else
-                     {
-                         break ;
-                     }
-                 }
-                 if ( TRUE == flag )
-                 {
-                     flag2 = !flag2 ; 
-                 }
-                 str = temp_mark ;
-             }
-             else
-             {
-                 // the first time we meed '
-                 flag2 = TRUE ;
-             }
+            ret = FALSE ;
          }
-         str++ ;
-         if ( flag1 == TRUE || flag2 == TRUE )
+         else if ( flag1 == TRUE || flag2 == TRUE || !parens.empty() )
          {
-            continue ;
-         }
-
-         switch ( ch )
-         {
-         case '{' :
-         case '[' :
-         case '(' :
-            parens.push_back ( ch ) ;
-            break ;
-
-         case '}' :
-            if ( ! parens.empty() && '{' == parens.back() )
-               parens.pop_back() ;
-            else
-               goto error ;
-            break ;
-
-         case ']':
-            if ( ! parens.empty() && '[' == parens.back() )
-               parens.pop_back() ;
-            else
-               goto error ;
-            break ;
-
-         case ')' :
-            if ( ! parens.empty() && '(' == parens.back() )
-               parens.pop_back() ;
-            else
-               goto error ;
-            break ;
+            ret = TRUE ;
          }
       }
-
-      if ( strlen > LINENOISE_MAX_INPUT_LEN )
+      catch ( bad_alloc & )
       {
          ret = FALSE ;
       }
-      else if ( flag1 == TRUE || flag2 == TRUE || !parens.empty() )
-      {
-         ret = TRUE ;
-      }
    }
-   catch ( bad_alloc & )
-   {
-      ret = FALSE ;
-   }
-
 done :
    PD_TRACE_EXITRC ( SDB_CANCONTINUENXTLINE, ret );
    return ret ;
@@ -635,7 +635,6 @@ BOOLEAN historyClear ( void )
    INT32 i = 0 ;
    const CHAR *firstHistory = NULL ;
    PD_TRACE_ENTRY ( SDB_HISTORYCLEAR );
-   // clear the history used for completions
    for ( i=0; i<history_len; i++ )
    {
          firstHistory = linenoiseHistoryGet( i ) ;
@@ -644,19 +643,12 @@ BOOLEAN historyClear ( void )
                g_lnBuilder.delCmd( firstHistory ) ;
          }
    }
-   // clear the history in linenoise
    linenoiseHistoryClear() ;
    ret = TRUE ;
    PD_TRACE_EXITRC ( SDB_HISTORYCLEAR, ret );
    return ret ;
 }
 
-// Return false if the use presses Ctrl+c when typing first line, that means
-// "has NO next command". *cmd is guaranteed to be NULL.
-//
-// Otherwise return true regardless of error occuring.
-// You should test whether *cmd is null or an empty string on this case.
-// And free *cmd if not null.
 // PD_TRACE_DECLARE_FUNCTION ( SDB_GETNXTCMD, "getNextCommand" )
 BOOLEAN getNextCommand ( const CHAR *prompt, CHAR ** cmd,
                          BOOLEAN continueEnable )
@@ -677,18 +669,14 @@ BOOLEAN getNextCommand ( const CHAR *prompt, CHAR ** cmd,
       string input = "" ;
       while ( TRUE )
       {
-         // line is guarenteed by linenoise library that it doesn't contain
-         // trailing \n or \r. It is freed after added to input or at end of
-         // this function.
          line = linenoise ( firstline ? prompt : "... " ) ;
          if ( line )
          {
             firstline = FALSE ;
             input += line ;
-            // line is allocated by linenoise, so we have to free using C
-            // function
             free ( line ) ;
             line = NULL ;
+
             if ( continueEnable && canContinueNextLine ( input.c_str() ) )
             {
                continue ;
@@ -739,8 +727,6 @@ BOOLEAN getNextCommand ( const CHAR *prompt, CHAR ** cmd,
       *cmd = NULL ;
    }
 
-   // line is allocated by linenoise, so we have to free using C
-   // function
    if ( line )
    {
       free ( line ) ;
@@ -750,11 +736,13 @@ BOOLEAN getNextCommand ( const CHAR *prompt, CHAR ** cmd,
    return ret ;
 }
 
-// initialize the history
 // PD_TRACE_DECLARE_FUNCTION ( SDB_HISTORYINIT, "historyInit" )
 BOOLEAN historyInit ( void )
 {
    BOOLEAN  ret   = FALSE ;
+
+   PD_TRACE_ENTRY( SDB_HISTORYINIT ) ;
+
    stringstream sstream ;
    const CHAR *pName = ".sequoiadb_shell_history" ;
    const char *pPath = NULL ;
@@ -772,7 +760,23 @@ BOOLEAN historyInit ( void )
 done :
    PD_TRACE_EXITRC ( SDB_HISTORYINIT, ret );
    return ret ;
+
 error :
    goto done ;
+}
+
+void clearInputBuffer( void )
+{
+   linenoiseClearInputBuffer() ;
+}
+
+BOOLEAN isStdinEmpty( void )
+{
+   return linenoiseIsStdinEmpty() ;
+}
+
+void setCanContinueNextLineCallback( boost::function< BOOLEAN( const CHAR* ) >  funcObj )
+{
+   userdefCanContinueFuncObj = funcObj ;
 }
 

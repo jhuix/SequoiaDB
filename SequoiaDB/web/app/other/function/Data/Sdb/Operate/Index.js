@@ -1,4 +1,5 @@
-﻿// --------------------- Data.Operate.Index ---------------------
+﻿//@ sourceURL=other/Index.js
+// --------------------- Data.Operate.Index ---------------------
 var _DataOperateIndex = {} ;
 
 //初始化
@@ -162,7 +163,7 @@ _DataOperateIndex.gotoRecord = function( $scope, $location, SdbFunction, listInd
    SdbFunction.LocalData( 'SdbCsName', csName ) ;
    SdbFunction.LocalData( 'SdbClName', clName ) ;
    SdbFunction.LocalData( 'SdbClType', clType ) ;
-   $location.path( 'Data/SDB-Operate/Record' ) ;
+   $location.path( 'Data/SDB-Operate/Record' ).search( { 'r': new Date().getTime() } ) ;
 }
 
 //lob页面跳转
@@ -178,7 +179,7 @@ _DataOperateIndex.gotoLob = function( $scope, $location, SdbFunction, listIndex 
    SdbFunction.LocalData( 'SdbCsName', csName ) ;
    SdbFunction.LocalData( 'SdbClName', clName ) ;
    SdbFunction.LocalData( 'SdbClType', clType ) ;
-   $location.path( 'Data/SDB-Operate/Lobs' ) ;
+   $location.path( 'Data/SDB-Operate/Lobs' ).search( { 'r': new Date().getTime() } ) ;
 }
 
 //上一页
@@ -318,45 +319,35 @@ _DataOperateIndex.getCLList = function( $scope, $compile, SdbRest, moduleName, m
    }
 
    //获取集合列表
-   SdbRest.Exec( sql, function( clList ){
-      if( moduleMode == 'standalone' )
-      {
-         success( clList ) ;
-      }
-      else
-      {
-         sql = 'select * from $SNAPSHOT_CATA where IsMainCL=true or MainCLName>"" or ShardingType>""' ;
-         SdbRest.Exec( sql, function( cataList ){
-            var newList = mergedData( clList, cataList ) ;
-            success( newList ) ;
-         }, function( errorInfo ){
-            $scope.Components.Confirm.isShow = true ;
-            $scope.Components.Confirm.type = 1 ;
-            $scope.Components.Confirm.title = $scope.autoLanguage( '获取数据失败' ) ;
-            $scope.Components.Confirm.okText = $scope.autoLanguage( '重试' ) ;
-            $scope.Components.Confirm.closeText = $scope.autoLanguage( '取消' ) ;
-            $scope.Components.Confirm.context = sprintf( $scope.autoLanguage( '错误码: ?, ?。需要重试吗?' ), errorInfo['errno'], errorInfo['description'] ) ;
-            $scope.Components.Confirm.ok = function(){
-               $scope.Components.Confirm.isShow = false ;
-               _DataDatabaseIndex.getCLInfo( $scope, SdbRest ) ;
-            }
-         }, function(){
-            _IndexPublic.createErrorModel( $scope, $scope.autoLanguage( '网络连接错误，请尝试按F5刷新浏览器。' ) ) ;
+   SdbRest.Exec( sql, {
+      'success': function( clList ){
+         if( moduleMode == 'standalone' )
+         {
+            success( clList ) ;
+         }
+         else
+         {
+            sql = 'select * from $SNAPSHOT_CATA where IsMainCL=true or MainCLName>"" or ShardingType>""' ;
+            SdbRest.Exec( sql, {
+               'success': function( cataList ){
+                  var newList = mergedData( clList, cataList ) ;
+                  success( newList ) ;
+               },
+               'failed': function( errorInfo ){
+                  _IndexPublic.createRetryModel( $scope, errorInfo, function(){
+                     _DataDatabaseIndex.getCLInfo( $scope, SdbRest ) ;
+                     return true ;
+                  } ) ;
+               }
+            } ) ;
+         }
+      },
+      'failed': function( errorInfo ){
+         _DataOperateIndex.showPage( $scope, $compile, 1 ) ;
+         _IndexPublic.createRetryModel( $scope, errorInfo, function(){
+            _DataOperateIndex.getCLList( $scope, $compile, SdbRest, moduleName, moduleMode ) ;
+            return true ;
          } ) ;
       }
-   }, function( errorInfo ){
-      _DataOperateIndex.showPage( $scope, $compile, 1 ) ;
-      $scope.Components.Confirm.isShow = true ;
-      $scope.Components.Confirm.type = 1 ;
-      $scope.Components.Confirm.title = $scope.autoLanguage( '获取数据失败' ) ;
-      $scope.Components.Confirm.okText = $scope.autoLanguage( '重试' ) ;
-      $scope.Components.Confirm.closeText = $scope.autoLanguage( '取消' ) ;
-      $scope.Components.Confirm.context = sprintf( $scope.autoLanguage( '错误码: ?, ?。需要重试吗?' ), errorInfo['errno'], errorInfo['description'] ) ;
-      $scope.Components.Confirm.ok = function(){
-         $scope.Components.Confirm.isShow = false ;
-         _DataOperateIndex.getCLList( $scope, $compile, SdbRest, moduleName, moduleMode ) ;
-      }
-   }, function(){
-      _IndexPublic.createErrorModel( $scope, $scope.autoLanguage( '网络连接错误，请尝试按F5刷新浏览器。' ) ) ;
    } ) ;
 }

@@ -39,6 +39,8 @@
 #define QGMOPTIUPDATE_HPP_
 
 #include "qgmOptiTree.hpp"
+#include "qgmHintDef.hpp"
+#include "qgmUtil.hpp"
 
 namespace engine
 {
@@ -69,11 +71,38 @@ namespace engine
          return "update" ;
       }
 
+      INT32 getHint( INT32 &flag ) const
+      {
+         INT32 rc = SDB_OK ;
+         INT32 tmpFlag = 0 ;
+         flag = 0 ;
+
+         QGM_HINS::const_iterator itr = _hints.begin() ;
+         for( ; itr != _hints.end(); ++itr )
+         {
+            if ( QGM_HINT_USEFLAG_SIZE == itr->value.size() &&
+                 0 == ossStrncmp( itr->value.begin(), QGM_HINT_USEFLAG,
+                                  itr->value.size() ) )
+            {
+               rc = qgmUseHintToFlag( *itr, tmpFlag ) ;
+               if( rc )
+               {
+                  goto error ;
+               }
+               flag |= tmpFlag ;
+            }
+         }
+
+      done :
+         return rc ;
+      error :
+         goto done ;
+      }
+
    public:
-      _qgmDbAttr _collection ;
-      qgmDbAttrVec _columns ;
-      qgmOPFieldVec _values ;
-      _qgmConditionNode *_condition ;
+      _qgmDbAttr           _collection ;
+      BSONObj              _modifer ;
+      _qgmConditionNode    *_condition ;
    } ;
    typedef class _qgmOptiUpdate qgmOptiUpdate ;
 }
